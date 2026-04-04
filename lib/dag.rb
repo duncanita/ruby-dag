@@ -1,0 +1,8 @@
+# frozen_string_literal: true
+
+require_relative "dag/result"
+require_relative "dag/node"
+require_relative "dag/graph"
+require_relative "dag/steps"
+require_relative "dag/runner"
+require_relative "dag/loader"

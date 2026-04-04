@@ -1,0 +1,46 @@
+name: self-improving-nightly
+description: "Nightly self-improvement pipeline: analyze → update → integrate → cleanup"
+
+nodes:
+  read_lcm:
+    type: exec
+    command: "sqlite3 /home/openclaw/.openclaw/lcm.db \"SELECT role, content FROM messages WHERE created_at > datetime('now', '-24 hours') LIMIT 200\""
+    timeout: 15
+
+  read_heartbeat_log:
+    type: file_read
+    path: /home/openclaw/.openclaw/workspace/HEARTBEAT_LOG.md
+
+  analyze:
+    type: exec
+    command: "ruby steps/analyze.rb"
+    depends_on:
+      - read_lcm
+      - read_heartbeat_log
+    timeout: 30
+
+  update_corrections:
+    type: exec
+    command: "ruby steps/update_corrections.rb"
+    depends_on:
+      - analyze
+
+  promote_patterns:
+    type: exec
+    command: "ruby steps/promote_patterns.rb"
+    depends_on:
+      - update_corrections
+
+  integrate:
+    type: exec
+    command: "ruby steps/integrate_patterns.rb"
+    depends_on:
+      - promote_patterns
+    timeout: 60
+
+  cleanup_log:
+    type: exec
+    command: "ruby steps/cleanup_heartbeat_log.rb"
+    depends_on:
+      - read_heartbeat_log
+    timeout: 30

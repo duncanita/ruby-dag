@@ -1,0 +1,50 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require_relative "../lib/dag"
+
+if ARGV.empty?
+  puts "Usage: dag <workflow.yml> [--dry-run] [--no-parallel] [--verbose]"
+  exit 1
+end
+
+file = ARGV[0]
+dry_run = ARGV.include?("--dry-run")
+parallel = !ARGV.include?("--no-parallel")
+verbose = ARGV.include?("--verbose")
+
+begin
+  graph = DAG::Loader.from_file(file)
+rescue => e
+  $stderr.puts "Error loading #{file}: #{e.message}"
+  exit 1
+end
+
+if dry_run
+  puts "Workflow: #{file}"
+  puts "Nodes: #{graph.size}"
+  puts "Execution order:"
+  graph.execution_order.each_with_index do |layer, i|
+    parallel_note = layer.size > 1 ? " (parallel)" : ""
+    puts "  Layer #{i}: #{layer.join(', ')}#{parallel_note}"
+  end
+  exit 0
+end
+
+on_start = ->(name, _node) { puts "▶ #{name}" if verbose }
+on_finish = ->(name, result) {
+  status = result.success? ? "✓" : "✗"
+  detail = result.success? ? "" : " — #{result.error}"
+  puts "  #{status} #{name}#{detail}"
+}
+
+runner = DAG::Runner.new(graph, parallel: parallel, on_node_start: on_start, on_node_finish: on_finish)
+run = runner.call
+
+if run.success?
+  puts "\n✓ Workflow completed (#{graph.size} nodes)"
+else
+  failure = run.error
+  $stderr.puts "\n✗ Workflow failed at node '#{failure[:failed_node]}': #{failure[:error]}"
+  exit 1
+end
