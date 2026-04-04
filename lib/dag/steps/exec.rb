@@ -16,10 +16,16 @@ module DAG
       private
 
       def run_command(command, timeout)
-        Timeout.timeout(timeout) { Open3.capture3(command) }
-          .then { |stdout, stderr, status| build_result(stdout, stderr, status) }
+        stdin, stdout, stderr, wait_thread = Open3.popen3(command)
+        stdin.close
+
+        Timeout.timeout(timeout) { wait_thread.value }
+          .then { |status| build_result(stdout.read, stderr.read, status) }
       rescue Timeout::Error
+        kill_process(wait_thread)
         Failure.new(error: "Command timed out after #{timeout}s")
+      ensure
+        close_streams(stdout, stderr)
       end
 
       def build_result(stdout, stderr, status)
@@ -28,6 +34,17 @@ module DAG
         else
           Failure.new(error: "Exit #{status.exitstatus}: #{stderr.strip}")
         end
+      end
+
+      def kill_process(wait_thread)
+        Process.kill("TERM", wait_thread.pid)
+        wait_thread.value
+      rescue
+        # Process already exited
+      end
+
+      def close_streams(*streams)
+        streams.compact.each { |io| io.close unless io.closed? }
       end
     end
   end
