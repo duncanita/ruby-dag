@@ -13,10 +13,15 @@ module DAG
         run_command(command, node.config.fetch(:timeout, 30))
       end
 
+      # Used by LLM step for safe command execution with env vars
+      def run_with_env(command, env, timeout)
+        run_command(command, timeout, env: env)
+      end
+
       private
 
-      def run_command(command, timeout)
-        stdin, stdout, stderr, wait_thread = Open3.popen3(command)
+      def run_command(command, timeout, env: {})
+        stdin, stdout, stderr, wait_thread = Open3.popen3(env, command)
         stdin.close
 
         Timeout.timeout(timeout) { wait_thread.value }
@@ -38,9 +43,12 @@ module DAG
 
       def kill_process(wait_thread)
         Process.kill("TERM", wait_thread.pid)
-        wait_thread.value
-      rescue
-        # Process already exited
+        Timeout.timeout(3) { wait_thread.value }
+      rescue Errno::ESRCH, Errno::EPERM
+        nil
+      rescue Timeout::Error
+        Process.kill("KILL", wait_thread.pid) rescue nil # rubocop:disable Style/RescueModifier
+        wait_thread.value rescue nil # rubocop:disable Style/RescueModifier
       end
 
       def close_streams(*streams)
