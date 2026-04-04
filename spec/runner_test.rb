@@ -1,13 +1,12 @@
 # frozen_string_literal: true
 
-require "minitest/autorun"
-require_relative "../lib/dag"
+require_relative "test_helper"
 
 class RunnerTest < Minitest::Test
   # --- Basic execution ---
 
   def test_runs_single_node
-    result = run_graph({ hello: { command: "echo hello" } })
+    result = run_graph({hello: {command: "echo hello"}})
     assert result.success?
     assert_equal "hello", result.value[:hello].value
   end
@@ -16,7 +15,7 @@ class RunnerTest < Minitest::Test
     graph = DAG::Graph.new
       .add_node(name: :produce, type: :exec, command: "echo 42")
       .add_node(name: :consume, type: :ruby, depends_on: [:produce],
-                callable: ->(input) { DAG::Success("got: #{input}") })
+        callable: ->(input) { DAG::Success("got: #{input}") })
 
     result = DAG::Runner.new(graph, parallel: false).call
     assert_equal "got: 42", result.value[:consume].value
@@ -27,7 +26,7 @@ class RunnerTest < Minitest::Test
       .add_node(name: :x, type: :exec, command: "echo X")
       .add_node(name: :y, type: :exec, command: "echo Y")
       .add_node(name: :merge, type: :ruby, depends_on: [:x, :y],
-                callable: ->(input) { DAG::Success(input.values.sort.join("+")) })
+        callable: ->(input) { DAG::Success(input.values.sort.join("+")) })
 
     result = DAG::Runner.new(graph, parallel: false).call
     assert_equal "X+Y", result.value[:merge].value
@@ -47,7 +46,7 @@ class RunnerTest < Minitest::Test
   end
 
   def test_failure_includes_error_detail
-    result = run_graph({ bad: { command: "echo fail >&2; exit 42" } })
+    result = run_graph({bad: {command: "echo fail >&2; exit 42"}})
     assert result.failure?
     assert_match(/Exit 42/, result.error[:error])
   end
@@ -56,7 +55,7 @@ class RunnerTest < Minitest::Test
 
   def test_parallel_independent_nodes
     result = run_graph(
-      { a: { command: "echo a" }, b: { command: "echo b" } },
+      {a: {command: "echo a"}, b: {command: "echo b"}},
       parallel: true
     )
 
@@ -67,7 +66,7 @@ class RunnerTest < Minitest::Test
 
   def test_sequential_independent_nodes
     result = run_graph(
-      { a: { command: "echo a" }, b: { command: "echo b" } },
+      {a: {command: "echo a"}, b: {command: "echo b"}},
       parallel: false
     )
 
@@ -86,7 +85,7 @@ class RunnerTest < Minitest::Test
     graph = DAG::Graph.new
       .add_node(name: :read, type: :file_read, path: input_path)
       .add_node(name: :transform, type: :ruby, depends_on: [:read],
-                callable: ->(input) { DAG::Success(input.upcase) })
+        callable: ->(input) { DAG::Success(input.upcase) })
       .add_node(name: :write, type: :file_write, path: output_path, depends_on: [:transform])
 
     result = DAG::Runner.new(graph, parallel: false).call
@@ -109,8 +108,7 @@ class RunnerTest < Minitest::Test
 
     DAG::Runner.new(graph, parallel: false,
       on_node_start: ->(name, _node) { started << name },
-      on_node_finish: ->(name, _result) { finished << name }
-    ).call
+      on_node_finish: ->(name, _result) { finished << name }).call
 
     assert_equal [:a, :b], started
     assert_equal [:a, :b], finished
@@ -124,8 +122,7 @@ class RunnerTest < Minitest::Test
       .add_node(name: :b, type: :exec, command: "echo b")
 
     DAG::Runner.new(graph, parallel: true,
-      on_node_finish: ->(name, _result) { finished << name }
-    ).call
+      on_node_finish: ->(name, _result) { finished << name }).call
 
     assert_includes finished, :a
     assert_includes finished, :b

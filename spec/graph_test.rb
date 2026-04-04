@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
-require "minitest/autorun"
-require_relative "../lib/dag"
+require_relative "test_helper"
 
 class GraphTest < Minitest::Test
   # --- Execution order ---
@@ -9,8 +8,8 @@ class GraphTest < Minitest::Test
   def test_linear_chain_executes_in_order
     graph = build_graph(
       a: {},
-      b: { depends_on: [:a] },
-      c: { depends_on: [:b] }
+      b: {depends_on: [:a]},
+      c: {depends_on: [:b]}
     )
 
     assert_equal [[:a], [:b], [:c]], graph.execution_order
@@ -20,7 +19,7 @@ class GraphTest < Minitest::Test
     graph = build_graph(
       a: {},
       b: {},
-      c: { depends_on: [:a, :b] }
+      c: {depends_on: [:a, :b]}
     )
 
     order = graph.execution_order
@@ -31,9 +30,9 @@ class GraphTest < Minitest::Test
   def test_diamond_dependency
     graph = build_graph(
       a: {},
-      b: { depends_on: [:a] },
-      c: { depends_on: [:a] },
-      d: { depends_on: [:b, :c] }
+      b: {depends_on: [:a]},
+      c: {depends_on: [:a]},
+      d: {depends_on: [:b, :c]}
     )
 
     order = graph.execution_order
@@ -49,8 +48,8 @@ class GraphTest < Minitest::Test
 
   def test_large_fan_out
     deps = (1..5).map { |i| :"leaf_#{i}" }
-    nodes = deps.each_with_object({ root: {} }) do |name, h|
-      h[name] = { depends_on: [:root] }
+    nodes = deps.each_with_object({root: {}}) do |name, h|
+      h[name] = {depends_on: [:root]}
     end
 
     graph = build_graph(**nodes)
@@ -65,8 +64,8 @@ class GraphTest < Minitest::Test
   def test_detects_cycle
     assert_raises(DAG::CycleError) do
       build_graph(
-        a: { depends_on: [:b] },
-        b: { depends_on: [:a] }
+        a: {depends_on: [:b]},
+        b: {depends_on: [:a]}
       )
     end
   end
@@ -74,22 +73,22 @@ class GraphTest < Minitest::Test
   def test_detects_three_node_cycle
     assert_raises(DAG::CycleError) do
       build_graph(
-        a: { depends_on: [:c] },
-        b: { depends_on: [:a] },
-        c: { depends_on: [:b] }
+        a: {depends_on: [:c]},
+        b: {depends_on: [:a]},
+        c: {depends_on: [:b]}
       )
     end
   end
 
   def test_detects_self_reference
     assert_raises(DAG::CycleError) do
-      build_graph(a: { depends_on: [:a] })
+      build_graph(a: {depends_on: [:a]})
     end
   end
 
   def test_detects_missing_dependency
     assert_raises(ArgumentError) do
-      build_graph(a: { depends_on: [:missing] })
+      build_graph(a: {depends_on: [:missing]})
     end
   end
 

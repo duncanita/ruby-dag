@@ -24,7 +24,7 @@ module DAG
       end
 
       def execute(node, rendered, command)
-        env = { "DAG_LLM_PROMPT" => rendered }
+        env = {"DAG_LLM_PROMPT" => rendered}
         timeout = node.config.fetch(:timeout, 120)
 
         Timeout.timeout(timeout) { Open3.capture3(env, command) }

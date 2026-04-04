@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
-require "minitest/autorun"
-require_relative "../lib/dag"
+require_relative "test_helper"
 
 class ResultTest < Minitest::Test
   # --- Success behavior ---
@@ -45,7 +44,7 @@ class ResultTest < Minitest::Test
   end
 
   def test_success_to_h
-    assert_equal({ status: :success, value: 42 }, DAG::Success(42).to_h)
+    assert_equal({status: :success, value: 42}, DAG::Success(42).to_h)
   end
 
   def test_success_inspect
@@ -95,7 +94,7 @@ class ResultTest < Minitest::Test
   end
 
   def test_failure_to_h
-    assert_equal({ status: :failure, error: "boom" }, DAG::Failure("boom").to_h)
+    assert_equal({status: :failure, error: "boom"}, DAG::Failure("boom").to_h)
   end
 
   def test_failure_inspect

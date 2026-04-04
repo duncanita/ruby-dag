@@ -48,7 +48,7 @@ module DAG
     def self.validate_type!(name, type)
       return if VALID_TYPES.include?(type)
 
-      raise ArgumentError, "Node '#{name}' has invalid type '#{type}'. Valid: #{VALID_TYPES.join(', ')}"
+      raise ArgumentError, "Node '#{name}' has invalid type '#{type}'. Valid: #{VALID_TYPES.join(", ")}"
     end
 
     private_class_method :validate_structure, :build_graph, :add_node_from_yaml, :validate_type!
