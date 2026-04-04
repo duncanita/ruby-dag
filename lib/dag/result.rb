@@ -2,90 +2,47 @@
 
 module DAG
   # Minimal Result monad — Success or Failure.
-  # No dependencies, no magic. Just a value wrapper with railway semantics.
+  # Immutable via Data.define. Railway semantics via .then chains.
   #
-  #   result = Success(42)
-  #   result.success?  #=> true
-  #   result.value     #=> 42
+  #   Success(42)
+  #     .and_then { |v| Success(v * 2) }
+  #     .and_then { |v| v > 100 ? Failure("too big") : Success(v) }
   #
-  #   result = Failure("boom")
-  #   result.failure?  #=> true
-  #   result.error     #=> "boom"
-  #
-  #   # Railway: chain operations, stop at first failure
-  #   result.and_then { |v| Success(v * 2) }
-  #          .and_then { |v| Failure("too big") if v > 100 }
+  #   # Or with .then for complex pipelines:
+  #   validate(input)
+  #     .then { |r| r.and_then { |v| transform(v) } }
+  #     .then { |r| r.and_then { |v| persist(v) } }
 
-  class Result
-    attr_reader :value, :error
+  Success = Data.define(:value) do
+    def success? = true
+    def failure? = false
+    def error = nil
 
-    def initialize(value: nil, error: nil, success:)
-      @value = value
-      @error = error
-      @success = success
-      freeze
-    end
-
-    def success? = @success
-    def failure? = !@success
-
-    # Chain on success, short-circuit on failure.
-    # Block receives the value, must return a Result.
-    def and_then
-      return self if failure?
-
-      yield(@value)
-    end
-
-    # Transform the value inside a Success, pass through Failure.
-    def map
-      return self if failure?
-
-      Result.success(yield(@value))
-    end
-
-    # Transform the error inside a Failure, pass through Success.
-    def map_error
-      return self if success?
-
-      Result.failure(yield(@error))
-    end
-
-    # Unwrap value or raise
-    def unwrap!
-      raise "Unwrap called on Failure: #{@error}" if failure?
-
-      @value
-    end
-
-    # Unwrap value or return default
-    def value_or(default)
-      success? ? @value : default
-    end
-
-    def to_h
-      if success?
-        { status: :success, value: @value }
-      else
-        { status: :failure, error: @error }
-      end
-    end
-
-    def inspect
-      if success?
-        "Success(#{@value.inspect})"
-      else
-        "Failure(#{@error.inspect})"
-      end
-    end
+    def and_then = yield(value)
+    def map = Success.new(value: yield(value))
+    def map_error = self
+    def unwrap! = value
+    def value_or(_default) = value
+    def to_h = { status: :success, value: value }
+    def inspect = "Success(#{value.inspect})"
     alias_method :to_s, :inspect
-
-    # Factory methods
-    def self.success(value = nil) = new(value: value, success: true)
-    def self.failure(error = nil) = new(error: error, success: false)
   end
 
-  # Top-level convenience constructors
-  def self.Success(value = nil) = Result.success(value)
-  def self.Failure(error = nil) = Result.failure(error)
+  Failure = Data.define(:error) do
+    def success? = false
+    def failure? = true
+    def value = nil
+
+    def and_then = self
+    def map = self
+    def map_error = Failure.new(error: yield(error))
+    def unwrap! = raise("Unwrap called on Failure: #{error}")
+    def value_or(default) = default
+    def to_h = { status: :failure, error: error }
+    def inspect = "Failure(#{error.inspect})"
+    alias_method :to_s, :inspect
+  end
+
+  def self.Success(value = nil) = Success.new(value: value)
+  def self.Failure(error = nil) = Failure.new(error: error)
 end

@@ -1,24 +1,28 @@
 # frozen_string_literal: true
 
+require "set"
+
 module DAG
-  # The DAG itself. Holds nodes, validates acyclicity, computes execution order.
+  class CycleError < StandardError; end
+
+  # The DAG. Holds nodes, validates acyclicity, computes execution layers.
   #
   #   graph = DAG::Graph.new
-  #   graph.add_node(name: :fetch, type: :exec, command: "curl ...")
-  #   graph.add_node(name: :parse, type: :ruby, depends_on: [:fetch])
-  #   graph.validate!     # raises if cyclic or missing deps
-  #   graph.execution_order  # => [[:fetch], [:parse]]  (groups of parallelizable nodes)
+  #     .add_node(name: :fetch, type: :exec, command: "curl ...")
+  #     .add_node(name: :parse, type: :ruby, depends_on: [:fetch])
+  #
+  #   graph.execution_order  # => [[:fetch], [:parse]]
 
   class Graph
     def initialize
       @nodes = {}
     end
 
-    def add_node(node = nil, **kwargs)
-      node = Node.new(**kwargs) if node.nil?
-      raise ArgumentError, "Duplicate node: #{node.name}" if @nodes.key?(node.name)
+    def add_node(**kwargs)
+      Node.new(**kwargs)
+        .then { |node| validate_unique!(node) }
+        .then { |node| store(node) }
 
-      @nodes[node.name] = node
       self
     end
 
@@ -27,57 +31,63 @@ module DAG
     def size = @nodes.size
     def empty? = @nodes.empty?
 
-    # Validate the graph: no cycles, no missing dependencies.
-    # Returns self for chaining, raises on error.
     def validate!
+      validate_dependencies!
+      detect_cycle!
+      self
+    end
+
+    # Execution layers: nodes in each layer can run in parallel.
+    # [[:a, :b], [:c], [:d]]
+    def execution_order
+      validate!
+      build_layers
+    end
+
+    private
+
+    def validate_unique!(node)
+      raise ArgumentError, "Duplicate node: #{node.name}" if @nodes.key?(node.name)
+
+      node
+    end
+
+    def store(node)
+      @nodes[node.name] = node
+    end
+
+    def validate_dependencies!
       @nodes.each_value do |n|
         n.depends_on.each do |dep|
           raise ArgumentError, "Node #{n.name} depends on unknown node #{dep}" unless @nodes.key?(dep)
         end
       end
-
-      detect_cycle!
-      self
     end
 
-    # Returns execution layers: each layer is an array of node names
-    # that can run in parallel (all dependencies satisfied).
-    #
-    #   [[:a, :b], [:c], [:d]]
-    #   Layer 0: a, b run in parallel
-    #   Layer 1: c (depends on a or b)
-    #   Layer 2: d (depends on c)
-    def execution_order
-      validate!
-
+    def build_layers
       remaining = @nodes.keys.to_set
       completed = Set.new
       layers = []
 
       until remaining.empty?
-        # Find nodes whose dependencies are all completed
-        ready = remaining.select do |name|
-          @nodes[name].depends_on.all? { |dep| completed.include?(dep) }
-        end
-
+        ready = remaining.select { |name| deps_satisfied?(name, completed) }
         raise "Deadlock: cannot resolve #{remaining.to_a}" if ready.empty?
 
-        layers << ready.sort # sort for deterministic order
-        ready.each do |name|
-          remaining.delete(name)
-          completed.add(name)
-        end
+        layers << ready.sort
+        ready.each { |name| remaining.delete(name); completed.add(name) }
       end
 
       layers
     end
 
-    private
+    def deps_satisfied?(name, completed)
+      @nodes[name].depends_on.all? { |dep| completed.include?(dep) }
+    end
 
-    # Kahn's algorithm for cycle detection
+    # Kahn's algorithm
     def detect_cycle!
       in_degree = Hash.new(0)
-      @nodes.each_value { |n| n.depends_on.each { |dep| in_degree[n.name] += 1 } }
+      @nodes.each_value { |n| n.depends_on.each { in_degree[n.name] += 1 } }
 
       queue = @nodes.keys.select { |name| in_degree[name] == 0 }
       visited = 0
@@ -94,11 +104,7 @@ module DAG
         end
       end
 
-      return if visited == @nodes.size
-
-      raise CycleError, "Graph contains a cycle"
+      raise CycleError, "Graph contains a cycle" unless visited == @nodes.size
     end
   end
-
-  class CycleError < StandardError; end
 end

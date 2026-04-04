@@ -13,20 +13,15 @@ dry_run = ARGV.include?("--dry-run")
 parallel = !ARGV.include?("--no-parallel")
 verbose = ARGV.include?("--verbose")
 
-begin
-  graph = DAG::Loader.from_file(file)
-rescue => e
-  $stderr.puts "Error loading #{file}: #{e.message}"
-  exit 1
-end
+graph = DAG::Loader.from_file(file)
 
 if dry_run
   puts "Workflow: #{file}"
   puts "Nodes: #{graph.size}"
   puts "Execution order:"
   graph.execution_order.each_with_index do |layer, i|
-    parallel_note = layer.size > 1 ? " (parallel)" : ""
-    puts "  Layer #{i}: #{layer.join(', ')}#{parallel_note}"
+    note = layer.size > 1 ? " (parallel)" : ""
+    puts "  Layer #{i}: #{layer.join(', ')}#{note}"
   end
   exit 0
 end
@@ -34,17 +29,15 @@ end
 on_start = ->(name, _node) { puts "▶ #{name}" if verbose }
 on_finish = ->(name, result) {
   status = result.success? ? "✓" : "✗"
-  detail = result.success? ? "" : " — #{result.error}"
+  detail = result.failure? ? " — #{result.error}" : ""
   puts "  #{status} #{name}#{detail}"
 }
 
-runner = DAG::Runner.new(graph, parallel: parallel, on_node_start: on_start, on_node_finish: on_finish)
-run = runner.call
+result = DAG::Runner.new(graph, parallel: parallel, on_node_start: on_start, on_node_finish: on_finish).call
 
-if run.success?
+if result.success?
   puts "\n✓ Workflow completed (#{graph.size} nodes)"
 else
-  failure = run.error
-  $stderr.puts "\n✗ Workflow failed at node '#{failure[:failed_node]}': #{failure[:error]}"
+  $stderr.puts "\n✗ Failed at '#{result.error[:failed_node]}': #{result.error[:error]}"
   exit 1
 end

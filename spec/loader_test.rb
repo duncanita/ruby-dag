@@ -1,11 +1,12 @@
 # frozen_string_literal: true
 
 require "minitest/autorun"
+require "tempfile"
 require_relative "../lib/dag"
 
 class LoaderTest < Minitest::Test
-  def test_loads_simple_yaml
-    yaml = <<~YAML
+  def test_loads_simple_workflow
+    graph = load_yaml(<<~YAML)
       name: test
       nodes:
         greet:
@@ -13,13 +14,12 @@ class LoaderTest < Minitest::Test
           command: "echo hello"
     YAML
 
-    graph = DAG::Loader.from_yaml(yaml)
     assert_equal 1, graph.size
     assert_equal :exec, graph.node(:greet).type
   end
 
   def test_loads_dependencies
-    yaml = <<~YAML
+    graph = load_yaml(<<~YAML)
       name: test
       nodes:
         first:
@@ -32,63 +32,116 @@ class LoaderTest < Minitest::Test
             - first
     YAML
 
-    graph = DAG::Loader.from_yaml(yaml)
     assert_equal [[:first], [:second]], graph.execution_order
   end
 
-  def test_rejects_missing_type
-    yaml = <<~YAML
-      name: test
-      nodes:
-        bad:
-          command: "echo oops"
-    YAML
-
-    assert_raises(ArgumentError) { DAG::Loader.from_yaml(yaml) }
-  end
-
-  def test_rejects_invalid_type
-    yaml = <<~YAML
-      name: test
-      nodes:
-        bad:
-          type: banana
-          command: "echo oops"
-    YAML
-
-    assert_raises(ArgumentError) { DAG::Loader.from_yaml(yaml) }
-  end
-
-  def test_detects_cycle_in_yaml
-    yaml = <<~YAML
+  def test_loads_all_node_types
+    graph = load_yaml(<<~YAML)
       name: test
       nodes:
         a:
           type: exec
           command: "echo a"
-          depends_on: [b]
         b:
-          type: exec
-          command: "echo b"
+          type: file_read
+          path: "/tmp/test.txt"
+        c:
+          type: file_write
+          path: "/tmp/out.txt"
+          depends_on: [b]
+        d:
+          type: llm
+          prompt: "test"
+          command: "echo test"
           depends_on: [a]
     YAML
 
-    assert_raises(DAG::CycleError) { DAG::Loader.from_yaml(yaml) }
+    assert_equal 4, graph.size
+  end
+
+  def test_passes_extra_config_through
+    graph = load_yaml(<<~YAML)
+      name: test
+      nodes:
+        task:
+          type: exec
+          command: "echo x"
+          timeout: 60
+          custom_key: "custom_value"
+    YAML
+
+    assert_equal 60, graph.node(:task).config[:timeout]
+    assert_equal "custom_value", graph.node(:task).config[:custom_key]
   end
 
   def test_loads_from_file
-    tmpfile = "/tmp/dag_test_workflow_#{$$}.yml"
-    File.write(tmpfile, <<~YAML)
+    file = Tempfile.new(["workflow", ".yml"])
+    file.write(<<~YAML)
       name: file-test
       nodes:
         only:
           type: exec
           command: "echo from-file"
     YAML
+    file.close
 
-    graph = DAG::Loader.from_file(tmpfile)
+    graph = DAG::Loader.from_file(file.path)
     assert_equal 1, graph.size
   ensure
-    File.delete(tmpfile) if File.exist?(tmpfile)
+    file&.unlink
   end
+
+  # --- Error handling ---
+
+  def test_rejects_missing_nodes_key
+    assert_raises(ArgumentError) { load_yaml("name: test") }
+  end
+
+  def test_rejects_missing_type
+    assert_raises(ArgumentError) do
+      load_yaml(<<~YAML)
+        name: test
+        nodes:
+          bad:
+            command: "echo oops"
+      YAML
+    end
+  end
+
+  def test_rejects_invalid_type
+    assert_raises(ArgumentError) do
+      load_yaml(<<~YAML)
+        name: test
+        nodes:
+          bad:
+            type: banana
+            command: "echo oops"
+      YAML
+    end
+  end
+
+  def test_detects_cycle_in_yaml
+    assert_raises(DAG::CycleError) do
+      load_yaml(<<~YAML)
+        name: test
+        nodes:
+          a:
+            type: exec
+            command: "echo a"
+            depends_on: [b]
+          b:
+            type: exec
+            command: "echo b"
+            depends_on: [a]
+      YAML
+    end
+  end
+
+  def test_rejects_missing_file
+    assert_raises(ArgumentError) { DAG::Loader.from_file("/nonexistent.yml") }
+  end
+
+  private
+
+  def load_yaml(yaml) = DAG::Loader.from_yaml(yaml)
 end
