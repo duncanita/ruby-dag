@@ -4,15 +4,8 @@ module DAG
   # Executes a validated Graph layer by layer.
   # Nodes in the same layer run in parallel via threads.
   #
-  #   runner = DAG::Runner.new(graph)
-  #   result = runner.call
+  #   result = DAG::Runner.new(graph).call
   #   result.value[:parse].value  #=> "parsed output"
-
-  RunCallbacks = Data.define(:on_node_start, :on_node_finish) do
-    def initialize(on_node_start: nil, on_node_finish: nil) = super
-    def start(name, node) = on_node_start&.call(name, node)
-    def finish(name, result) = on_node_finish&.call(name, result)
-  end
 
   class Runner
     def initialize(graph, parallel: true, **callback_opts)
@@ -62,9 +55,7 @@ module DAG
     end
 
     def spawn_thread(name, previous_outputs)
-      Thread.new do
-        [name, execute_node(name, previous_outputs)]
-      end
+      Thread.new { [name, execute_node(name, previous_outputs)] }
     end
 
     def execute_node(name, previous_outputs)
