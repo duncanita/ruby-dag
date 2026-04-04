@@ -12,15 +12,6 @@ module DAG
   #   graph.topological_sort  # => [[:fetch], [:parse]]
   #   graph.descendants(:fetch) # => Set[:parse]
 
-  Edge = Data.define(:from, :to) do
-    def initialize(from:, to:)
-      super(from: from.to_sym, to: to.to_sym)
-    end
-
-    def inspect = "Edge(#{from} → #{to})"
-    alias_method :to_s, :inspect
-  end
-
   class Graph
     attr_reader :nodes, :edges
 
