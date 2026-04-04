@@ -128,10 +128,12 @@ module DAG
     end
 
     def deep_freeze(obj)
+      return obj if obj.frozen?
+
       case obj
       when Hash then obj.transform_keys(&:to_sym).transform_values { |v| deep_freeze(v) }.freeze
       when Array then obj.map { |v| deep_freeze(v) }.freeze
-      when String then obj.frozen? ? obj : obj.dup.freeze
+      when String then obj.dup.freeze
       else obj
       end
     end
