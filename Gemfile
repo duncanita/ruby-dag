@@ -4,3 +4,5 @@ source "https://rubygems.org"
 
 gem "rake", "~> 13.0"
 gem "minitest", "~> 5.0"
+gem "standard", "~> 1.0"
+gem "simplecov", "~> 0.22", require: false
