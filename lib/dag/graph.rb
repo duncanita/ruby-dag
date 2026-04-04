@@ -3,6 +3,7 @@
 module DAG
   # Pure directed acyclic graph. Nodes are symbols, edges are first-class.
   # Enforces acyclicity on every add_edge call.
+  # Supports freeze for immutability after construction.
   #
   #   graph = DAG::Graph.new
   #     .add_node(:fetch)
@@ -10,6 +11,7 @@ module DAG
   #     .add_edge(:fetch, :parse)
   #
   #   graph.topological_sort  # => [[:fetch], [:parse]]
+  #   graph.topological_order # => [:fetch, :parse]
   #   graph.descendants(:fetch) # => Set[:parse]
 
   class Graph
@@ -25,6 +27,7 @@ module DAG
     # --- Mutation ---
 
     def add_node(name)
+      check_frozen!
       sym = name.to_sym
       raise ArgumentError, "Duplicate node: #{sym}" if @nodes.include?(sym)
 
@@ -33,6 +36,7 @@ module DAG
     end
 
     def add_edge(from, to)
+      check_frozen!
       from_sym = from.to_sym
       to_sym = to.to_sym
 
@@ -50,18 +54,37 @@ module DAG
       self
     end
 
-    # --- Queries ---
+    # --- Freezing ---
+
+    def freeze
+      @nodes.freeze
+      @edges.freeze
+      @adjacency.each_value(&:freeze)
+      @adjacency.freeze
+      @reverse.each_value(&:freeze)
+      @reverse.freeze
+      super
+    end
+
+    # --- Scalar queries ---
 
     def size = @nodes.size
     def empty? = @nodes.empty?
     def node?(name) = @nodes.include?(name.to_sym)
     def edge?(from, to) = @edges.include?(Edge.new(from: from, to: to))
 
-    def successors(name) = @adjacency[name.to_sym].dup
-    def predecessors(name) = @reverse[name.to_sym].dup
+    def indegree(name) = fetch_set(@reverse, name.to_sym).size
+    def outdegree(name) = fetch_set(@adjacency, name.to_sym).size
 
-    def roots = @nodes.select { |n| @reverse[n].empty? }
-    def leaves = @nodes.select { |n| @adjacency[n].empty? }
+    # --- Neighbor queries ---
+
+    def successors(name) = fetch_set(@adjacency, name.to_sym).dup
+    def predecessors(name) = fetch_set(@reverse, name.to_sym).dup
+
+    def roots = @nodes.select { |n| fetch_set(@reverse, n).empty? }
+    def leaves = @nodes.select { |n| fetch_set(@adjacency, n).empty? }
+
+    # --- Transitive queries ---
 
     def ancestors(name)
       walk(:predecessors, name.to_sym)
@@ -71,10 +94,33 @@ module DAG
       walk(:successors, name.to_sym)
     end
 
+    # Is there a directed path from `from` to `to`?
+    def path?(from, to)
+      from_sym = from.to_sym
+      to_sym = to.to_sym
+      return true if from_sym == to_sym
+
+      visited = Set.new
+      stack = fetch_set(@adjacency, from_sym).to_a
+
+      until stack.empty?
+        current = stack.pop
+        next if visited.include?(current)
+        return true if current == to_sym
+
+        visited << current
+        stack.concat(fetch_set(@adjacency, current).to_a)
+      end
+
+      false
+    end
+
+    # --- Topological algorithms ---
+
     # Kahn's algorithm: topological sort into parallel layers.
     # Returns array of arrays — nodes in each layer can run concurrently.
     def topological_sort
-      in_degree = @nodes.to_h { |n| [n, @reverse[n].size] }
+      in_degree = @nodes.to_h { |n| [n, fetch_set(@reverse, n).size] }
       remaining = @nodes.dup
       layers = []
 
@@ -91,6 +137,25 @@ module DAG
 
       layers
     end
+
+    # Flat deterministic topological ordering.
+    def topological_order
+      topological_sort.flatten
+    end
+
+    # --- Iteration ---
+
+    def each_node(&block)
+      return enum_for(:each_node) unless block
+      @nodes.each(&block)
+    end
+
+    def each_edge(&block)
+      return enum_for(:each_edge) unless block
+      @edges.each(&block)
+    end
+
+    # --- Subgraph ---
 
     # Returns a new Graph containing only the specified nodes and edges between them.
     def subgraph(node_names)
@@ -113,6 +178,15 @@ module DAG
     alias_method :to_s, :inspect
 
     private
+
+    def check_frozen!
+      raise FrozenError, "can't modify frozen #{self.class}" if frozen?
+    end
+
+    # Safe hash lookup that doesn't trigger the default block on frozen hashes.
+    def fetch_set(hash, key)
+      hash.fetch(key) { Set.new }
+    end
 
     def walk(direction, start)
       visited = Set.new

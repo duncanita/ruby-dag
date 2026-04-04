@@ -184,6 +184,131 @@ class GraphTest < Minitest::Test
     assert_raises(ArgumentError) { graph.subgraph([:a, :missing]) }
   end
 
+  # --- Flat topological order ---
+
+  def test_topological_order_linear
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+    assert_equal [:a, :b, :c], graph.topological_order
+  end
+
+  def test_topological_order_diamond
+    graph = build_graph([:a, :b, :c, :d], [[:a, :b], [:a, :c], [:b, :d], [:c, :d]])
+    order = graph.topological_order
+    assert_equal :a, order.first
+    assert_equal :d, order.last
+    assert order.index(:b) < order.index(:d)
+    assert order.index(:c) < order.index(:d)
+  end
+
+  def test_topological_order_independent_is_sorted
+    graph = build_graph([:c, :b, :a], [])
+    assert_equal [:a, :b, :c], graph.topological_order
+  end
+
+  def test_topological_order_empty_graph
+    assert_equal [], DAG::Graph.new.topological_order
+  end
+
+  # --- path? ---
+
+  def test_path_exists_direct
+    graph = build_graph([:a, :b], [[:a, :b]])
+    assert graph.path?(:a, :b)
+  end
+
+  def test_path_exists_transitive
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+    assert graph.path?(:a, :c)
+  end
+
+  def test_path_does_not_exist
+    graph = build_graph([:a, :b, :c, :d], [[:a, :b], [:c, :d]])
+    refute graph.path?(:a, :d)
+  end
+
+  def test_path_reverse_does_not_exist
+    graph = build_graph([:a, :b], [[:a, :b]])
+    refute graph.path?(:b, :a)
+  end
+
+  def test_path_reflexive
+    graph = build_graph([:a], [])
+    assert graph.path?(:a, :a)
+  end
+
+  # --- indegree / outdegree ---
+
+  def test_indegree
+    graph = build_graph([:a, :b, :c], [[:a, :c], [:b, :c]])
+    assert_equal 0, graph.indegree(:a)
+    assert_equal 2, graph.indegree(:c)
+  end
+
+  def test_outdegree
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:a, :c]])
+    assert_equal 2, graph.outdegree(:a)
+    assert_equal 0, graph.outdegree(:b)
+  end
+
+  # --- each_node / each_edge ---
+
+  def test_each_node
+    graph = build_graph([:a, :b, :c], [[:a, :b]])
+    collected = []
+    graph.each_node { |n| collected << n }
+    assert_equal [:a, :b, :c], collected.sort
+  end
+
+  def test_each_node_returns_enumerator
+    graph = build_graph([:a], [])
+    assert_instance_of Enumerator, graph.each_node
+  end
+
+  def test_each_edge
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:a, :c]])
+    collected = []
+    graph.each_edge { |e| collected << e }
+    assert_equal 2, collected.size
+    assert collected.all? { |e| e.is_a?(DAG::Edge) }
+  end
+
+  def test_each_edge_returns_enumerator
+    graph = DAG::Graph.new
+    assert_instance_of Enumerator, graph.each_edge
+  end
+
+  # --- Immutability after freeze ---
+
+  def test_frozen_graph_rejects_add_node
+    graph = build_graph([:a], [])
+    graph.freeze
+    assert_raises(FrozenError) { graph.add_node(:b) }
+  end
+
+  def test_frozen_graph_rejects_add_edge
+    graph = build_graph([:a, :b], [])
+    graph.freeze
+    assert_raises(FrozenError) { graph.add_edge(:a, :b) }
+  end
+
+  def test_frozen_graph_queries_still_work
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+    graph.freeze
+
+    assert_equal 3, graph.size
+    assert graph.node?(:a)
+    assert graph.edge?(:a, :b)
+    assert_equal [[:a], [:b], [:c]], graph.topological_sort
+    assert_equal [:a, :b, :c], graph.topological_order
+    assert graph.path?(:a, :c)
+  end
+
+  def test_frozen_graph_nodes_not_externally_mutable
+    graph = build_graph([:a], [])
+    graph.freeze
+    assert_raises(FrozenError) { graph.nodes << :hack }
+  end
+
   # --- Edge data type ---
 
   def test_edge_is_frozen
