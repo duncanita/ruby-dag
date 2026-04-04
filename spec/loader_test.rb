@@ -4,7 +4,7 @@ require_relative "test_helper"
 
 class LoaderTest < Minitest::Test
   def test_loads_simple_workflow
-    graph = load_yaml(<<~YAML)
+    defn = load_yaml(<<~YAML)
       name: test
       nodes:
         greet:
@@ -12,12 +12,12 @@ class LoaderTest < Minitest::Test
           command: "echo hello"
     YAML
 
-    assert_equal 1, graph.size
-    assert_equal :exec, graph.node(:greet).type
+    assert_equal 1, defn.size
+    assert_equal :exec, defn.step(:greet).type
   end
 
   def test_loads_dependencies
-    graph = load_yaml(<<~YAML)
+    defn = load_yaml(<<~YAML)
       name: test
       nodes:
         first:
@@ -30,11 +30,11 @@ class LoaderTest < Minitest::Test
             - first
     YAML
 
-    assert_equal [[:first], [:second]], graph.execution_order
+    assert_equal [[:first], [:second]], defn.execution_order
   end
 
   def test_loads_all_node_types
-    graph = load_yaml(<<~YAML)
+    defn = load_yaml(<<~YAML)
       name: test
       nodes:
         a:
@@ -54,11 +54,11 @@ class LoaderTest < Minitest::Test
           depends_on: [a]
     YAML
 
-    assert_equal 4, graph.size
+    assert_equal 4, defn.size
   end
 
   def test_passes_extra_config_through
-    graph = load_yaml(<<~YAML)
+    defn = load_yaml(<<~YAML)
       name: test
       nodes:
         task:
@@ -68,8 +68,8 @@ class LoaderTest < Minitest::Test
           custom_key: "custom_value"
     YAML
 
-    assert_equal 60, graph.node(:task).config[:timeout]
-    assert_equal "custom_value", graph.node(:task).config[:custom_key]
+    assert_equal 60, defn.step(:task).config[:timeout]
+    assert_equal "custom_value", defn.step(:task).config[:custom_key]
   end
 
   def test_loads_from_file
@@ -83,8 +83,8 @@ class LoaderTest < Minitest::Test
     YAML
     file.close
 
-    graph = DAG::Loader.from_file(file.path)
-    assert_equal 1, graph.size
+    defn = DAG::Loader.from_file(file.path)
+    assert_equal 1, defn.size
   ensure
     file&.unlink
   end
@@ -137,6 +137,19 @@ class LoaderTest < Minitest::Test
 
   def test_rejects_missing_file
     assert_raises(ArgumentError) { DAG::Loader.from_file("/nonexistent.yml") }
+  end
+
+  def test_rejects_unknown_dependency
+    assert_raises(ArgumentError) do
+      load_yaml(<<~YAML)
+        name: test
+        nodes:
+          a:
+            type: exec
+            command: "echo a"
+            depends_on: [missing]
+      YAML
+    end
   end
 
   private

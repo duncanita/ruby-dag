@@ -3,10 +3,11 @@
 require "yaml"
 
 module DAG
-  # Loads a DAG from YAML.
+  # Loads a workflow from YAML, producing a Graph + Registry.
   #
-  #   graph = DAG::Loader.from_file("workflow.yml")
-  #   graph = DAG::Loader.from_yaml(yaml_string)
+  #   definition = DAG::Loader.from_file("workflow.yml")
+  #   definition.graph     # => DAG::Graph
+  #   definition.registry  # => DAG::Workflow::Registry
 
   class Loader
     VALID_TYPES = %w[exec script file_read file_write ruby llm].freeze
@@ -21,7 +22,7 @@ module DAG
     def self.from_yaml(yaml_string)
       YAML.safe_load(yaml_string, permitted_classes: [Symbol])
         .then { |data| validate_structure(data) }
-        .then { |data| build_graph(data) }
+        .then { |data| build_workflow(data) }
     end
 
     def self.validate_structure(data)
@@ -30,19 +31,32 @@ module DAG
       data
     end
 
-    def self.build_graph(data)
-      data["nodes"]
-        .each_with_object(Graph.new) { |(name, config), graph| add_node_from_yaml(graph, name, config.dup) }
-        .validate!
-    end
+    def self.build_workflow(data)
+      graph = Graph.new
+      registry = Workflow::Registry.new
+      deferred_edges = []
 
-    def self.add_node_from_yaml(graph, name, config)
-      type = config.delete("type") || raise(ArgumentError, "Node '#{name}' missing 'type'")
-      validate_type!(name, type)
+      # First pass: add all nodes and steps
+      data["nodes"].each do |name, config|
+        config = config.dup
+        type = config.delete("type") || raise(ArgumentError, "Node '#{name}' missing 'type'")
+        validate_type!(name, type)
 
-      depends_on = Array(config.delete("depends_on"))
+        depends_on = Array(config.delete("depends_on"))
 
-      graph.add_node(name: name, type: type, depends_on: depends_on, **config.transform_keys(&:to_sym))
+        graph.add_node(name)
+        registry.register(Workflow::Step.new(name: name, type: type, **config.transform_keys(&:to_sym)))
+
+        depends_on.each { |dep| deferred_edges << [dep.to_sym, name.to_sym] }
+      end
+
+      # Second pass: add edges (validates nodes exist, checks cycles)
+      deferred_edges.each do |from, to|
+        raise ArgumentError, "Node #{to} depends on unknown node #{from}" unless graph.node?(from)
+        graph.add_edge(from, to)
+      end
+
+      Workflow::Definition.new(graph: graph, registry: registry)
     end
 
     def self.validate_type!(name, type)
@@ -51,6 +65,6 @@ module DAG
       raise ArgumentError, "Node '#{name}' has invalid type '#{type}'. Valid: #{VALID_TYPES.join(", ")}"
     end
 
-    private_class_method :validate_structure, :build_graph, :add_node_from_yaml, :validate_type!
+    private_class_method :validate_structure, :build_workflow, :validate_type!
   end
 end

@@ -14,10 +14,33 @@ require "tempfile"
 require_relative "../lib/dag"
 
 module TestHelpers
-  def build_test_graph(**node_defs)
-    node_defs.each_with_object(DAG::Graph.new) do |(name, opts), graph|
-      graph.add_node(name: name, type: :exec, command: "echo #{name}", **opts)
+  # Builds a Graph + Registry from a hash of node definitions.
+  # Returns a Workflow::Definition.
+  #
+  #   build_test_workflow(
+  #     a: {},
+  #     b: {depends_on: [:a]},
+  #     c: {type: :ruby, callable: ->(_) { DAG::Success("ok") }}
+  #   )
+  def build_test_workflow(**node_defs)
+    graph = DAG::Graph.new
+    registry = DAG::Workflow::Registry.new
+    deferred_edges = []
+
+    node_defs.each do |name, opts|
+      opts = opts.dup
+      depends_on = Array(opts.delete(:depends_on))
+      type = opts.delete(:type) || :exec
+      opts[:command] ||= "echo #{name}" if type == :exec
+
+      graph.add_node(name)
+      registry.register(DAG::Workflow::Step.new(name: name, type: type, **opts))
+      depends_on.each { |dep| deferred_edges << [dep, name] }
     end
+
+    deferred_edges.each { |from, to| graph.add_edge(from, to) }
+
+    DAG::Workflow::Definition.new(graph: graph, registry: registry)
   end
 
   def with_tempfile(content, suffix: ".txt", prefix: "dag_test")

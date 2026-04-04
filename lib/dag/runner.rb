@@ -3,21 +3,22 @@
 Warning[:experimental] = false
 
 module DAG
-  # Executes a validated Graph layer by layer.
+  # Executes a workflow: takes a Graph (execution order) + Registry (step definitions).
   # Nodes in the same layer run in parallel via Ractors (Ruby 4+).
   #
-  #   result = DAG::Runner.new(graph).call
+  #   result = DAG::Runner.new(graph, registry).call
   #   result.value[:parse].value  #=> "parsed output"
 
   class Runner
-    def initialize(graph, parallel: true, **callback_opts)
+    def initialize(graph, registry, parallel: true, **callback_opts)
       @graph = graph
+      @registry = registry
       @parallel = parallel
       @callbacks = RunCallbacks.new(**callback_opts)
     end
 
     def call
-      @graph.execution_order
+      @graph.topological_sort
         .then { |layers| execute_layers(layers) }
     end
 
@@ -68,26 +69,26 @@ module DAG
     end
 
     def spawn_ractor(name, previous_outputs, results_port)
-      graph_node = @graph.node(name)
-      input = gather_input(graph_node, previous_outputs)
-      node_data = serialize_node(graph_node)
+      step = @registry[name]
+      input = gather_input(name, previous_outputs)
+      step_data = serialize_step(step)
 
-      @callbacks.start(name, graph_node)
+      @callbacks.start(name, step)
 
-      Ractor.new(name, node_data, input, results_port) do |n, nd, inp, out|
-        step = DAG::Steps.build(nd[:type])
-        reconstructed = DAG::Node.new(name: nd[:name], type: nd[:type], **nd[:config])
-        result = step.call(reconstructed, inp)
+      Ractor.new(name, step_data, input, results_port) do |n, sd, inp, out|
+        executor = DAG::Steps.build(sd[:type])
+        reconstructed = DAG::Workflow::Step.new(name: sd[:name], type: sd[:type], **sd[:config])
+        result = executor.call(reconstructed, inp)
 
         out.send([n, result.to_h])
       end
     end
 
-    def serialize_node(node)
+    def serialize_step(step)
       {
-        name: node.name,
-        type: node.type,
-        config: deep_freeze(node.config)
+        name: step.name,
+        type: step.type,
+        config: deep_freeze(step.config)
       }
     end
 
@@ -100,18 +101,19 @@ module DAG
     end
 
     def execute_node(name, previous_outputs)
-      node = @graph.node(name)
-      input = gather_input(node, previous_outputs)
+      step = @registry[name]
+      input = gather_input(name, previous_outputs)
 
-      @callbacks.start(name, node)
+      @callbacks.start(name, step)
 
-      Steps.build(node.type)
-        .call(node, input)
+      Steps.build(step.type)
+        .call(step, input)
         .tap { |result| @callbacks.finish(name, result) }
     end
 
-    def gather_input(node, outputs)
-      node.depends_on
+    def gather_input(name, outputs)
+      @graph.predecessors(name)
+        .to_a
         .then { |deps| resolve_dependencies(deps, outputs) }
     end
 

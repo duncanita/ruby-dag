@@ -120,8 +120,8 @@ class StepsTest < Minitest::Test
   def test_file_write_uses_input_when_no_content
     path = "/tmp/dag_test_input_#{$$}.txt"
 
-    node = DAG::Node.new(name: :write, type: :file_write, path: path)
-    result = DAG::Steps.build(:file_write).call(node, "from input")
+    step = DAG::Workflow::Step.new(name: :write, type: :file_write, path: path)
+    result = DAG::Steps.build(:file_write).call(step, "from input")
 
     assert result.success?
     assert_equal "from input", File.read(path)
@@ -148,8 +148,8 @@ class StepsTest < Minitest::Test
   def test_ruby_passes_input_to_callable
     callable = ->(input) { DAG::Success("got: #{input}") }
 
-    node = DAG::Node.new(name: :test, type: :ruby, callable: callable)
-    result = DAG::Steps.build(:ruby).call(node, "hello")
+    step = DAG::Workflow::Step.new(name: :test, type: :ruby, callable: callable)
+    result = DAG::Steps.build(:ruby).call(step, "hello")
 
     assert_equal "got: hello", result.value
   end
@@ -190,8 +190,8 @@ class StepsTest < Minitest::Test
   end
 
   def test_llm_interpolates_input_in_prompt
-    node = DAG::Node.new(name: :test, type: :llm, prompt: "say {{input}}", command: 'echo "$DAG_LLM_PROMPT"')
-    result = DAG::Steps.build(:llm).call(node, "world")
+    step = DAG::Workflow::Step.new(name: :test, type: :llm, prompt: "say {{input}}", command: 'echo "$DAG_LLM_PROMPT"')
+    result = DAG::Steps.build(:llm).call(step, "world")
 
     assert_equal "say world", result.value
   end
@@ -213,7 +213,7 @@ class StepsTest < Minitest::Test
   private
 
   def run_step(type, **config)
-    node = DAG::Node.new(name: :test, type: type, **config)
-    DAG::Steps.build(type).call(node, nil)
+    step = DAG::Workflow::Step.new(name: :test, type: type, **config)
+    DAG::Steps.build(type).call(step, nil)
   end
 end
