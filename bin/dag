@@ -13,7 +13,7 @@ dry_run = ARGV.include?("--dry-run")
 parallel = !ARGV.include?("--no-parallel")
 verbose = ARGV.include?("--verbose")
 
-definition = DAG::Loader.from_file(file)
+definition = DAG::Workflow::Loader.from_file(file)
 
 if dry_run
   puts "Workflow: #{file}"
@@ -33,7 +33,7 @@ on_finish = ->(name, result) {
   puts "  #{status} #{name}#{detail}"
 }
 
-result = DAG::Runner.new(definition.graph, definition.registry,
+result = DAG::Workflow::Runner.new(definition.graph, definition.registry,
   parallel: parallel, on_node_start: on_start, on_node_finish: on_finish).call
 
 if result.success?

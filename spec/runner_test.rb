@@ -20,7 +20,7 @@ class RunnerTest < Minitest::Test
                 callable: ->(input) { DAG::Success("got: #{input}") }}
     )
 
-    result = DAG::Runner.new(defn.graph, defn.registry, parallel: false).call
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
     assert_equal "got: produce", result.value[:consume].value
   end
 
@@ -32,7 +32,7 @@ class RunnerTest < Minitest::Test
               callable: ->(input) { DAG::Success(input.values.sort.join("+")) }}
     )
 
-    result = DAG::Runner.new(defn.graph, defn.registry, parallel: false).call
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
     assert_equal "X+Y", result.value[:merge].value
   end
 
@@ -44,7 +44,7 @@ class RunnerTest < Minitest::Test
       never_runs: {depends_on: [:fail_node]}
     )
 
-    result = DAG::Runner.new(defn.graph, defn.registry, parallel: false).call
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
     assert result.failure?
     assert_equal :fail_node, result.error[:failed_node]
     refute result.error[:outputs].key?(:never_runs)
@@ -94,7 +94,7 @@ class RunnerTest < Minitest::Test
       write: {type: :file_write, path: output_path, depends_on: [:transform]}
     )
 
-    result = DAG::Runner.new(defn.graph, defn.registry, parallel: false).call
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
 
     assert result.success?
     assert_equal "HELLO WORLD", File.read(output_path)
@@ -113,7 +113,7 @@ class RunnerTest < Minitest::Test
       b: {depends_on: [:a]}
     )
 
-    DAG::Runner.new(defn.graph, defn.registry, parallel: false,
+    DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false,
       on_node_start: ->(name, _step) { started << name },
       on_node_finish: ->(name, _result) { finished << name }).call
 
@@ -126,7 +126,7 @@ class RunnerTest < Minitest::Test
 
     defn = build_test_workflow(a: {}, b: {})
 
-    DAG::Runner.new(defn.graph, defn.registry, parallel: true,
+    DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: true,
       on_node_finish: ->(name, _result) { finished << name }).call
 
     assert_includes finished, :a
@@ -138,7 +138,7 @@ class RunnerTest < Minitest::Test
   def test_empty_graph_succeeds
     graph = DAG::Graph.new
     registry = DAG::Workflow::Registry.new
-    result = DAG::Runner.new(graph, registry, parallel: false).call
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
     assert result.success?
     assert_equal({}, result.value)
   end
@@ -154,6 +154,6 @@ class RunnerTest < Minitest::Test
       registry.register(DAG::Workflow::Step.new(name: name, type: :exec, **config))
     end
 
-    DAG::Runner.new(graph, registry, parallel: parallel).call
+    DAG::Workflow::Runner.new(graph, registry, parallel: parallel).call
   end
 end

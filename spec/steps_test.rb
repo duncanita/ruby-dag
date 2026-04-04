@@ -121,7 +121,7 @@ class StepsTest < Minitest::Test
     path = "/tmp/dag_test_input_#{$$}.txt"
 
     step = DAG::Workflow::Step.new(name: :write, type: :file_write, path: path)
-    result = DAG::Steps.build(:file_write).call(step, "from input")
+    result = DAG::Workflow::Steps.build(:file_write).call(step, "from input")
 
     assert result.success?
     assert_equal "from input", File.read(path)
@@ -149,7 +149,7 @@ class StepsTest < Minitest::Test
     callable = ->(input) { DAG::Success("got: #{input}") }
 
     step = DAG::Workflow::Step.new(name: :test, type: :ruby, callable: callable)
-    result = DAG::Steps.build(:ruby).call(step, "hello")
+    result = DAG::Workflow::Steps.build(:ruby).call(step, "hello")
 
     assert_equal "got: hello", result.value
   end
@@ -191,7 +191,7 @@ class StepsTest < Minitest::Test
 
   def test_llm_interpolates_input_in_prompt
     step = DAG::Workflow::Step.new(name: :test, type: :llm, prompt: "say {{input}}", command: 'echo "$DAG_LLM_PROMPT"')
-    result = DAG::Steps.build(:llm).call(step, "world")
+    result = DAG::Workflow::Steps.build(:llm).call(step, "world")
 
     assert_equal "say world", result.value
   end
@@ -207,13 +207,13 @@ class StepsTest < Minitest::Test
   # --- Unknown type ---
 
   def test_unknown_step_type_raises
-    assert_raises(ArgumentError) { DAG::Steps.build(:banana) }
+    assert_raises(ArgumentError) { DAG::Workflow::Steps.build(:banana) }
   end
 
   private
 
   def run_step(type, **config)
     step = DAG::Workflow::Step.new(name: :test, type: type, **config)
-    DAG::Steps.build(type).call(step, nil)
+    DAG::Workflow::Steps.build(type).call(step, nil)
   end
 end

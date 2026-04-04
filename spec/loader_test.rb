@@ -83,7 +83,7 @@ class LoaderTest < Minitest::Test
     YAML
     file.close
 
-    defn = DAG::Loader.from_file(file.path)
+    defn = DAG::Workflow::Loader.from_file(file.path)
     assert_equal 1, defn.size
   ensure
     file&.unlink
@@ -136,7 +136,7 @@ class LoaderTest < Minitest::Test
   end
 
   def test_rejects_missing_file
-    assert_raises(ArgumentError) { DAG::Loader.from_file("/nonexistent.yml") }
+    assert_raises(ArgumentError) { DAG::Workflow::Loader.from_file("/nonexistent.yml") }
   end
 
   def test_rejects_unknown_dependency
@@ -154,5 +154,5 @@ class LoaderTest < Minitest::Test
 
   private
 
-  def load_yaml(yaml) = DAG::Loader.from_yaml(yaml)
+  def load_yaml(yaml) = DAG::Workflow::Loader.from_yaml(yaml)
 end
