@@ -65,6 +65,29 @@ class GraphValidatorTest < Minitest::Test
     assert result.errors.size >= 2  # disconnected + custom rule
   end
 
+  # --- validate! raises ---
+
+  def test_validate_bang_returns_graph_when_valid
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+    assert_same graph, DAG::Graph::Validator.validate!(graph)
+  end
+
+  def test_validate_bang_raises_on_invalid
+    graph = build_graph([:a, :b, :c], [[:a, :b]])
+    error = assert_raises(DAG::ValidationError) { DAG::Graph::Validator.validate!(graph) }
+    assert error.message.include?("disconnected")
+    assert_kind_of Array, error.errors
+  end
+
+  def test_validate_bang_raises_on_custom_rule_failure
+    graph = build_graph([:a, :b], [[:a, :b]])
+    assert_raises(DAG::ValidationError) do
+      DAG::Graph::Validator.validate!(graph) do |v|
+        v.rule("too small") { |g| g.size >= 10 }
+      end
+    end
+  end
+
   # --- Result object ---
 
   def test_result_has_errors_list

@@ -23,6 +23,12 @@ module DAG
         validator.run
       end
 
+      def self.validate!(graph, &block)
+        result = validate(graph, &block)
+        raise ValidationError, result.errors unless result.valid?
+        graph
+      end
+
       def initialize(graph)
         @graph = graph
         @custom_rules = []
