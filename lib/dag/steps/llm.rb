@@ -1,8 +1,5 @@
 # frozen_string_literal: true
 
-require "open3"
-require "timeout"
-
 module DAG
   module Steps
     class LLM
@@ -14,7 +11,7 @@ module DAG
         return Failure.new(error: "No command for LLM node #{node.name}. Provide a command that accepts the prompt.") unless command
 
         render_prompt(prompt, input)
-          .then { |rendered| execute(node, rendered, command) }
+          .then { |rendered| execute(rendered, command, node.config.fetch(:timeout, 120)) }
       end
 
       private
@@ -23,22 +20,9 @@ module DAG
         prompt.gsub("{{input}}", input.to_s)
       end
 
-      def execute(node, rendered, command)
+      def execute(rendered, command, timeout)
         env = {"DAG_LLM_PROMPT" => rendered}
-        timeout = node.config.fetch(:timeout, 120)
-
-        Timeout.timeout(timeout) { Open3.capture3(env, command) }
-          .then { |stdout, stderr, status| build_result(stdout, stderr, status) }
-      rescue Timeout::Error
-        Failure.new(error: "LLM command timed out after #{timeout}s")
-      end
-
-      def build_result(stdout, stderr, status)
-        if status.success?
-          Success.new(value: stdout.strip)
-        else
-          Failure.new(error: "LLM exit #{status.exitstatus}: #{stderr.strip}")
-        end
+        Exec.new.run_with_env(command, env, timeout)
       end
     end
   end
