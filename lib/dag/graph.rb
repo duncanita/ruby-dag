@@ -1,10 +1,6 @@
 # frozen_string_literal: true
 
-require "set"
-
 module DAG
-  class CycleError < StandardError; end
-
   # The DAG. Holds nodes, validates acyclicity, computes execution layers.
   #
   #   graph = DAG::Graph.new
@@ -74,7 +70,10 @@ module DAG
         raise "Deadlock: cannot resolve #{remaining.to_a}" if ready.empty?
 
         layers << ready.sort
-        ready.each { |name| remaining.delete(name); completed.add(name) }
+        ready.each { |name|
+          remaining.delete(name)
+          completed.add(name)
+        }
       end
 
       layers

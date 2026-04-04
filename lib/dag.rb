@@ -1,6 +1,9 @@
 # frozen_string_literal: true
 
+require_relative "dag/errors"
 require_relative "dag/result"
+require_relative "dag/success"
+require_relative "dag/failure"
 require_relative "dag/node"
 require_relative "dag/graph"
 require_relative "dag/steps"
