@@ -1,8 +1,7 @@
 # frozen_string_literal: true
 
-require "minitest/autorun"
+require_relative "test_helper"
 require "tempfile"
-require_relative "../lib/dag"
 
 class StepsTest < Minitest::Test
   # --- Exec ---
@@ -53,6 +52,22 @@ class StepsTest < Minitest::Test
       result = run_step(:script, path: path)
       assert result.success?
       assert_equal "safe", result.value
+    end
+  end
+
+  def test_script_passes_args_to_script
+    with_tempfile("puts ARGV.join(',')", suffix: ".rb") do |path|
+      result = run_step(:script, path: path, args: ["hello", "world"])
+      assert result.success?
+      assert_equal "hello,world", result.value
+    end
+  end
+
+  def test_script_escapes_args_safely
+    with_tempfile("puts ARGV.first", suffix: ".rb") do |path|
+      result = run_step(:script, path: path, args: ["safe; echo injected"])
+      assert result.success?
+      assert_equal "safe; echo injected", result.value
     end
   end
 
