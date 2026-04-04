@@ -3,6 +3,8 @@
 require_relative "test_helper"
 
 class GraphTest < Minitest::Test
+  include TestHelpers
+
   # --- Execution order ---
 
   def test_linear_chain_executes_in_order
@@ -111,8 +113,6 @@ class GraphTest < Minitest::Test
   private
 
   def build_graph(**node_defs)
-    node_defs.each_with_object(DAG::Graph.new) do |(name, opts), graph|
-      graph.add_node(name: name, type: :exec, command: "echo #{name}", **opts)
-    end.tap(&:validate!)
+    build_test_graph(**node_defs).tap(&:validate!)
   end
 end

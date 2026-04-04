@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
-require "tempfile"
 
 class LoaderTest < Minitest::Test
   def test_loads_simple_workflow

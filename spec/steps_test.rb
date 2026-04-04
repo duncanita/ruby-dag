@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
-require "tempfile"
 
 class StepsTest < Minitest::Test
+  include TestHelpers
+
   # --- Exec ---
 
   def test_exec_runs_command_and_returns_stdout
@@ -214,14 +215,5 @@ class StepsTest < Minitest::Test
   def run_step(type, **config)
     node = DAG::Node.new(name: :test, type: type, **config)
     DAG::Steps.build(type).call(node, nil)
-  end
-
-  def with_tempfile(content, suffix: ".txt", prefix: "dag_test")
-    file = Tempfile.new([prefix, suffix])
-    file.write(content)
-    file.close
-    yield file.path
-  ensure
-    file&.unlink
   end
 end
