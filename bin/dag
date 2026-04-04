@@ -20,7 +20,7 @@ if dry_run
   puts "Nodes: #{definition.size}"
   puts "Execution order:"
   definition.execution_order.each_with_index do |layer, i|
-    note = layer.size > 1 ? " (parallel)" : ""
+    note = (layer.size > 1) ? " (parallel)" : ""
     puts "  Layer #{i}: #{layer.join(", ")}#{note}"
   end
   exit 0
@@ -39,6 +39,6 @@ result = DAG::Workflow::Runner.new(definition.graph, definition.registry,
 if result.success?
   puts "\n✓ Workflow completed (#{definition.size} nodes)"
 else
-  $stderr.puts "\n✗ Failed at '#{result.error[:failed_node]}': #{result.error[:error]}"
+  warn "\n✗ Failed at '#{result.error[:failed_node]}': #{result.error[:error]}"
   exit 1
 end
