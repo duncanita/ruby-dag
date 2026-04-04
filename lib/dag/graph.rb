@@ -29,15 +29,15 @@ module DAG
 
     def validate!
       validate_dependencies!
-      detect_cycle!
+      build_layers_with_cycle_check
       self
     end
 
     # Execution layers: nodes in each layer can run in parallel.
     # [[:a, :b], [:c], [:d]]
     def execution_order
-      validate!
-      build_layers
+      validate_dependencies!
+      build_layers_with_cycle_check
     end
 
     private
@@ -60,50 +60,40 @@ module DAG
       end
     end
 
-    def build_layers
+    # Kahn's algorithm: topological sort into layers + cycle detection in one pass.
+    # O(V+E) using precomputed adjacency list.
+    def build_layers_with_cycle_check
+      dependents = build_dependents_map
+      in_degree = build_in_degree_map
+
       remaining = @nodes.keys.to_set
-      completed = Set.new
       layers = []
 
       until remaining.empty?
-        ready = remaining.select { |name| deps_satisfied?(name, completed) }
-        raise "Deadlock: cannot resolve #{remaining.to_a}" if ready.empty?
+        ready = remaining.select { |name| in_degree[name] == 0 }
+        raise CycleError, "Graph contains a cycle" if ready.empty?
 
         layers << ready.sort
-        ready.each { |name|
+
+        ready.each do |name|
           remaining.delete(name)
-          completed.add(name)
-        }
+          dependents[name].each { |dep| in_degree[dep] -= 1 }
+        end
       end
 
       layers
     end
 
-    def deps_satisfied?(name, completed)
-      @nodes[name].depends_on.all? { |dep| completed.include?(dep) }
+    # Map: node_name => [nodes that depend on it]
+    def build_dependents_map
+      map = Hash.new { |h, k| h[k] = [] }
+      @nodes.each_value { |n| n.depends_on.each { |dep| map[dep] << n.name } }
+      map
     end
 
-    # Kahn's algorithm
-    def detect_cycle!
-      in_degree = Hash.new(0)
-      @nodes.each_value { |n| n.depends_on.each { in_degree[n.name] += 1 } }
-
-      queue = @nodes.keys.select { |name| in_degree[name] == 0 }
-      visited = 0
-
-      until queue.empty?
-        current = queue.shift
-        visited += 1
-
-        @nodes.each_value do |n|
-          next unless n.depends_on.include?(current)
-
-          in_degree[n.name] -= 1
-          queue << n.name if in_degree[n.name] == 0
-        end
-      end
-
-      raise CycleError, "Graph contains a cycle" unless visited == @nodes.size
+    # Map: node_name => number of unresolved dependencies
+    def build_in_degree_map
+      @nodes.keys.to_h { |name| [name, @nodes[name].depends_on.size] }
     end
   end
 end
