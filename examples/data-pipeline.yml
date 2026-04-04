@@ -1,0 +1,28 @@
+name: data-pipeline
+description: "Fetch, transform, and save data"
+
+nodes:
+  fetch:
+    type: exec
+    command: "echo '{\"users\": 42, \"events\": 1337}'"
+    timeout: 10
+
+  read_config:
+    type: file_read
+    path: "/tmp/pipeline-config.txt"
+
+  transform:
+    type: exec
+    command: "echo 'Processed: users=42 events=1337'"
+    depends_on: [fetch, read_config]
+    timeout: 30
+
+  save:
+    type: file_write
+    path: "/tmp/pipeline-output.txt"
+    depends_on: [transform]
+
+  report:
+    type: exec
+    command: "echo 'Pipeline complete. Output saved.'"
+    depends_on: [save]
