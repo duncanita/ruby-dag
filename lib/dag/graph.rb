@@ -66,6 +66,14 @@ module DAG
       super
     end
 
+    # Returns an unfrozen deep copy of this graph.
+    def dup
+      copy = Graph.new
+      @nodes.each { |n| copy.add_node(n) }
+      @edges.each { |e| copy.add_edge(e.from, e.to) }
+      copy
+    end
+
     # --- Scalar queries ---
 
     def size = @nodes.size

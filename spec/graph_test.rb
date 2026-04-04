@@ -309,6 +309,37 @@ class GraphTest < Minitest::Test
     assert_raises(FrozenError) { graph.nodes << :hack }
   end
 
+  # --- dup (unfrozen copy) ---
+
+  def test_dup_returns_unfrozen_copy
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.freeze
+    copy = graph.dup
+
+    refute copy.frozen?
+    assert copy.node?(:a)
+    assert copy.edge?(:a, :b)
+  end
+
+  def test_dup_is_independent
+    graph = build_graph([:a, :b], [[:a, :b]])
+    copy = graph.dup
+    copy.add_node(:c)
+    copy.add_edge(:b, :c)
+
+    refute graph.node?(:c)
+    assert copy.node?(:c)
+  end
+
+  def test_dup_preserves_structure
+    graph = build_graph([:a, :b, :c, :d], [[:a, :b], [:a, :c], [:b, :d], [:c, :d]])
+    copy = graph.dup
+
+    assert_equal graph.topological_sort, copy.topological_sort
+    assert_equal graph.size, copy.size
+    assert_equal graph.edges.size, copy.edges.size
+  end
+
   # --- Edge data type ---
 
   def test_edge_is_frozen
