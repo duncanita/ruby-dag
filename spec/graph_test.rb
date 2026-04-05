@@ -355,6 +355,19 @@ class GraphTest < Minitest::Test
     assert_equal graph.edges.size, copy.edges.size
   end
 
+  def test_dup_of_frozen_graph_is_fully_mutable
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.freeze
+    copy = graph.dup
+
+    copy.add_node(:c)
+    copy.add_edge(:b, :c)
+
+    assert copy.node?(:c)
+    assert copy.edge?(:b, :c)
+    assert_equal [[:a], [:b], [:c]], copy.topological_layers
+  end
+
   # --- Immutable builders (with_node / with_edge) ---
 
   def test_with_node_returns_new_frozen_graph
