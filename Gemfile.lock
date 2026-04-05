@@ -1,3 +1,8 @@
+PATH
+  remote: .
+  specs:
+    ruby-dag (0.1.0)
+
 GEM
   remote: https://rubygems.org/
   specs:
@@ -64,6 +69,7 @@ PLATFORMS
 DEPENDENCIES
   minitest (~> 5.0)
   rake (~> 13.0)
+  ruby-dag!
   simplecov (~> 0.22)
   standard (~> 1.0)
 

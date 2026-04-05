@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "dag/version"
+
 # Core graph
 require_relative "dag/errors"
 require_relative "dag/edge"
