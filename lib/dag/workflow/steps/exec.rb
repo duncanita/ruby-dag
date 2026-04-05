@@ -31,8 +31,7 @@ module DAG
           Failure.new(error: {
             code: :exec_timeout,
             command: command,
-            timeout_seconds: timeout,
-            timeout: true
+            timeout_seconds: timeout
           })
         ensure
           close_streams(stdout, stderr)
@@ -47,8 +46,7 @@ module DAG
               exit_status: status.exitstatus,
               command: command,
               stdout: stdout.strip,
-              stderr: stderr.strip,
-              timeout: false
+              stderr: stderr.strip
             })
           end
         end

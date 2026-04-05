@@ -73,14 +73,7 @@ module DAG
         layer.size.times do
           name, result_hash, duration_ms = results_port.receive
           result = deserialize_result(result_hash)
-          input_keys = @graph.predecessors(name).to_a.sort
-          trace << TraceEntry.new(
-            name: name, layer: layer_index,
-            started_at: nil, finished_at: nil,
-            duration_ms: duration_ms,
-            status: result.success? ? :success : :failure,
-            input_keys: input_keys
-          )
+          trace << build_trace_entry(name, layer_index, result, duration_ms: duration_ms)
           @callbacks.finish(name, result)
           results[name] = result
         end
@@ -114,8 +107,8 @@ module DAG
 
       def execute_step(name, layer_index, previous_outputs, trace)
         step = @registry[name]
-        input = gather_input(name, previous_outputs)
-        input_keys = @graph.predecessors(name).to_a.sort
+        deps = @graph.predecessors(name).to_a
+        input = resolve_dependencies(deps, previous_outputs)
 
         @callbacks.start(name, step)
 
@@ -124,16 +117,23 @@ module DAG
         finished_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         duration_ms = ((finished_at - started_at) * 1000).round(2)
 
-        trace << TraceEntry.new(
+        trace << build_trace_entry(name, layer_index, result,
+          started_at: started_at, finished_at: finished_at, duration_ms: duration_ms,
+          input_keys: deps.sort)
+
+        @callbacks.finish(name, result)
+        result
+      end
+
+      def build_trace_entry(name, layer_index, result, duration_ms:, started_at: nil, finished_at: nil, input_keys: nil)
+        input_keys ||= @graph.predecessors(name).to_a.sort
+        TraceEntry.new(
           name: name, layer: layer_index,
           started_at: started_at, finished_at: finished_at,
           duration_ms: duration_ms,
           status: result.success? ? :success : :failure,
           input_keys: input_keys
         )
-
-        @callbacks.finish(name, result)
-        result
       end
 
       def gather_input(name, outputs)

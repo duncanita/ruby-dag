@@ -20,7 +20,6 @@ class StepsTest < Minitest::Test
     assert_equal 42, result.error[:exit_status]
     assert_equal "echo fail >&2; exit 42", result.error[:command]
     assert_equal "fail", result.error[:stderr]
-    assert_equal false, result.error[:timeout]
   end
 
   def test_exec_returns_structured_failure_on_timeout
@@ -29,7 +28,6 @@ class StepsTest < Minitest::Test
     assert_equal :exec_timeout, result.error[:code]
     assert_equal "sleep 10", result.error[:command]
     assert_equal 1, result.error[:timeout_seconds]
-    assert_equal true, result.error[:timeout]
   end
 
   def test_exec_returns_failure_on_nil_command
