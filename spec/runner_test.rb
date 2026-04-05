@@ -13,7 +13,16 @@ class RunnerTest < Minitest::Test
     assert_equal "hello", result.value[:hello].value
   end
 
-  def test_passes_output_to_dependent_node
+  def test_zero_dep_step_receives_empty_hash
+    defn = build_test_workflow(
+      solo: {type: :ruby, callable: ->(input) { DAG::Success(input) }}
+    )
+
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
+    assert_equal({}, result.value[:solo].value)
+  end
+
+  def test_single_dep_step_receives_hash_keyed_by_dep_name
     defn = build_test_workflow(
       produce: {},
       consume: {type: :ruby, depends_on: [:produce],
@@ -21,7 +30,7 @@ class RunnerTest < Minitest::Test
     )
 
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
-    assert_equal "got: produce", result.value[:consume].value
+    assert_equal "got: {produce: \"produce\"}", result.value[:consume].value
   end
 
   def test_merges_multiple_dependency_outputs
@@ -90,7 +99,7 @@ class RunnerTest < Minitest::Test
     defn = build_test_workflow(
       read: {type: :file_read, path: input_path},
       transform: {type: :ruby, depends_on: [:read],
-                  callable: ->(input) { DAG::Success(input.upcase) }},
+                  callable: ->(input) { DAG::Success(input[:read].upcase) }},
       write: {type: :file_write, path: output_path, depends_on: [:transform]}
     )
 

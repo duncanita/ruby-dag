@@ -18,7 +18,7 @@ graph = DAG::Graph.new
 registry = DAG::Workflow::Registry.new
 registry.register(DAG::Workflow::Step.new(name: :greet, type: :exec, command: 'echo "hello world"'))
 registry.register(DAG::Workflow::Step.new(name: :shout, type: :ruby,
-  callable: ->(input) { DAG::Success(input.upcase) }))
+  callable: ->(input) { DAG::Success(input[:greet].upcase) }))
 
 definition = DAG::Workflow::Definition.new(graph: graph, registry: registry)
 

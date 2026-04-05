@@ -121,7 +121,7 @@ class StepsTest < Minitest::Test
     path = "/tmp/dag_test_input_#{$$}.txt"
 
     step = DAG::Workflow::Step.new(name: :write, type: :file_write, path: path)
-    result = DAG::Workflow::Steps.build(:file_write).call(step, "from input")
+    result = DAG::Workflow::Steps.build(:file_write).call(step, {upstream: "from input"})
 
     assert result.success?
     assert_equal "from input", File.read(path)

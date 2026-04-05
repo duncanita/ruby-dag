@@ -117,11 +117,7 @@ module DAG
       end
 
       def resolve_dependencies(deps, outputs)
-        case deps.size
-        when 0 then nil
-        when 1 then outputs[deps.first]&.value
-        else deps.to_h { |dep| [dep, outputs[dep]&.value] }
-        end
+        deps.to_h { |dep| [dep, outputs[dep]&.value] }
       end
 
       def build_failure(name, result, outputs)
