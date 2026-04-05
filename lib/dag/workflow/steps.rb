@@ -11,7 +11,7 @@ module DAG
     module Steps
       REGISTRY = {
         exec: Exec,
-        script: Script,
+        ruby_script: RubyScript,
         file_read: FileRead,
         file_write: FileWrite,
         ruby: Ruby

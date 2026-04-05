@@ -11,7 +11,7 @@ module DAG
     #   definition.registry  # => DAG::Workflow::Registry
 
     class Loader
-      YAML_TYPES = %w[exec script file_read file_write]
+      YAML_TYPES = %w[exec ruby_script file_read file_write]
       ALL_TYPES = YAML_TYPES + %w[ruby]
 
       def self.from_file(path)

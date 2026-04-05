@@ -5,10 +5,10 @@ require "shellwords"
 module DAG
   module Workflow
     module Steps
-      class Script
+      class RubyScript
         def call(step, _input)
           path = step.config[:path]
-          return Failure.new(error: "No path for script step #{step.name}") unless path
+          return Failure.new(error: "No path for ruby_script step #{step.name}") unless path
 
           build_command(path, step.config)
             .then { |cmd, timeout| Exec.new.call(Step.new(name: step.name, type: :exec, command: cmd, timeout: timeout), nil) }

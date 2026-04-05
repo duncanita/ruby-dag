@@ -38,45 +38,48 @@ class StepsTest < Minitest::Test
     assert_match(/No command/, result.error)
   end
 
-  # --- Script ---
+  # --- RubyScript ---
 
-  def test_script_runs_ruby_file
+  def test_ruby_script_runs_ruby_file
     with_tempfile("puts 'from script'", suffix: ".rb") do |path|
-      result = run_step(:script, path: path)
+      result = run_step(:ruby_script, path: path)
       assert result.success?
       assert_equal "from script", result.value
     end
   end
 
-  def test_script_returns_failure_for_missing_file
-    result = run_step(:script, path: "/nonexistent/script.rb")
+  def test_ruby_script_returns_failure_for_missing_file
+    result = run_step(:ruby_script, path: "/nonexistent/script.rb")
     assert result.failure?
     assert_match(/not found/, result.error)
   end
 
-  def test_script_escapes_path_safely
-    # Path with spaces should not cause injection
+  def test_ruby_script_escapes_path_safely
     with_tempfile("puts 'safe'", suffix: ".rb", prefix: "my script ") do |path|
-      result = run_step(:script, path: path)
+      result = run_step(:ruby_script, path: path)
       assert result.success?
       assert_equal "safe", result.value
     end
   end
 
-  def test_script_passes_args_to_script
+  def test_ruby_script_passes_args_to_script
     with_tempfile("puts ARGV.join(',')", suffix: ".rb") do |path|
-      result = run_step(:script, path: path, args: ["hello", "world"])
+      result = run_step(:ruby_script, path: path, args: ["hello", "world"])
       assert result.success?
       assert_equal "hello,world", result.value
     end
   end
 
-  def test_script_escapes_args_safely
+  def test_ruby_script_escapes_args_safely
     with_tempfile("puts ARGV.first", suffix: ".rb") do |path|
-      result = run_step(:script, path: path, args: ["safe; echo injected"])
+      result = run_step(:ruby_script, path: path, args: ["safe; echo injected"])
       assert result.success?
       assert_equal "safe; echo injected", result.value
     end
+  end
+
+  def test_old_script_type_raises
+    assert_raises(ArgumentError) { DAG::Workflow::Steps.build(:script) }
   end
 
   # --- FileRead ---
