@@ -64,6 +64,29 @@ result.value.each do |name, step_result|
 end
 puts
 
+# --- Programmatic workflow with from_hash ---
+
+puts "=== from_hash Workflow ==="
+
+definition = DAG::Workflow::Loader.from_hash(
+  fetch: {type: :exec, command: 'echo "fetched"'},
+  transform: {type: :exec, command: 'echo "transformed"', depends_on: [:fetch], timeout: 30},
+  store: {type: :exec, command: 'echo "stored"', depends_on: [:transform]}
+)
+
+puts "Loaded: #{definition.inspect}"
+puts "Layers: #{definition.execution_order.inspect}"
+puts "Transform config: #{definition.step(:transform).config.inspect}"
+puts
+
+# --- Dumper (round-trip) ---
+
+puts "=== Dumper ==="
+yaml_out = DAG::Workflow::Dumper.to_yaml(definition)
+puts yaml_out
+puts "Round-trip equal? #{DAG::Workflow::Loader.from_yaml(yaml_out).execution_order == definition.execution_order}"
+puts
+
 # --- Callbacks ---
 
 puts "=== Callbacks ==="
@@ -113,24 +136,38 @@ puts "Failed step: #{result.error[:failed_node]}"
 puts "Completed: #{result.error[:outputs].keys}"
 puts
 
-# --- Planner ---
+# --- Result monad ---
 
-puts "=== Planner ==="
+puts "=== Result Monad ==="
 
-graph = DAG::Graph::Builder.build do |b|
-  b.add_node(:a)
-  b.add_node(:b)
-  b.add_node(:c)
-  b.add_node(:d)
-  b.add_edge(:a, :b)
-  b.add_edge(:a, :c)
-  b.add_edge(:b, :d)
-  b.add_edge(:c, :d)
-end
+success = DAG::Success("hello")
+failure = DAG::Failure("oops")
 
-planner = DAG::Graph::Planner.new(graph)
-puts "Layers: #{planner.layers.inspect}"
-puts "Flat order: #{planner.flat_order.inspect}"
-planner.each_layer.with_index(1) do |layer, i|
-  puts "  Layer #{i}: #{layer.inspect} (#{layer.size} parallel)"
-end
+puts "Success: #{success.inspect}"
+puts "Failure: #{failure.inspect}"
+puts
+
+# map transforms the value inside a Success
+puts "map:       #{success.map { |v| v.upcase }.inspect}"
+puts "map fail:  #{failure.map { |v| v.upcase }.inspect}"
+puts
+
+# and_then chains computations (returns a new Result)
+chained = success.and_then { |v| DAG::Success("#{v} world") }
+puts "and_then:       #{chained.inspect}"
+puts "and_then fail:  #{failure.and_then { |v| DAG::Success("#{v} world") }.inspect}"
+puts
+
+# map_error transforms the error inside a Failure
+puts "map_error:       #{failure.map_error { |e| "wrapped: #{e}" }.inspect}"
+puts "map_error ok:    #{success.map_error { |e| "wrapped: #{e}" }.inspect}"
+puts
+
+# unwrap! and value_or
+puts "unwrap!:    #{success.unwrap!}"
+puts "value_or:   #{failure.value_or("default")}"
+puts
+
+# to_h for serialization
+puts "Success to_h: #{success.to_h.inspect}"
+puts "Failure to_h: #{failure.to_h.inspect}"

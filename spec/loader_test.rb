@@ -152,6 +152,65 @@ class LoaderTest < Minitest::Test
     end
   end
 
+  # --- from_hash ---
+
+  def test_from_hash_builds_workflow
+    defn = DAG::Workflow::Loader.from_hash(
+      greet: {type: :exec, command: "echo hello"}
+    )
+
+    assert_equal 1, defn.size
+    assert_equal :exec, defn.step(:greet).type
+    assert_equal "echo hello", defn.step(:greet).config[:command]
+  end
+
+  def test_from_hash_with_dependencies
+    defn = DAG::Workflow::Loader.from_hash(
+      first: {type: :exec, command: "echo 1"},
+      second: {type: :exec, command: "echo 2", depends_on: [:first]}
+    )
+
+    assert_equal [[:first], [:second]], defn.execution_order
+  end
+
+  def test_from_hash_rejects_missing_type
+    assert_raises(ArgumentError) do
+      DAG::Workflow::Loader.from_hash(bad: {command: "echo oops"})
+    end
+  end
+
+  def test_from_hash_rejects_invalid_type
+    assert_raises(ArgumentError) do
+      DAG::Workflow::Loader.from_hash(bad: {type: :banana})
+    end
+  end
+
+  def test_from_hash_rejects_unknown_dependency
+    assert_raises(ArgumentError) do
+      DAG::Workflow::Loader.from_hash(
+        a: {type: :exec, command: "echo a", depends_on: [:missing]}
+      )
+    end
+  end
+
+  def test_from_hash_detects_cycle
+    assert_raises(DAG::CycleError) do
+      DAG::Workflow::Loader.from_hash(
+        a: {type: :exec, command: "echo a", depends_on: [:b]},
+        b: {type: :exec, command: "echo b", depends_on: [:a]}
+      )
+    end
+  end
+
+  def test_from_hash_preserves_extra_config
+    defn = DAG::Workflow::Loader.from_hash(
+      task: {type: :exec, command: "echo x", timeout: 60, custom_key: "custom_value"}
+    )
+
+    assert_equal 60, defn.step(:task).config[:timeout]
+    assert_equal "custom_value", defn.step(:task).config[:custom_key]
+  end
+
   private
 
   def load_yaml(yaml) = DAG::Workflow::Loader.from_yaml(yaml)

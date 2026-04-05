@@ -443,6 +443,113 @@ class GraphTest < Minitest::Test
     assert_equal g1.hash, g2.hash
   end
 
+  # --- remove_node / remove_edge ---
+
+  def test_remove_node_removes_node_and_incident_edges
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+    graph.remove_node(:b)
+
+    refute graph.node?(:b)
+    assert_equal 2, graph.size
+    assert_equal 0, graph.edges.size
+  end
+
+  def test_remove_node_unknown_raises
+    graph = build_graph([:a], [])
+    assert_raises(ArgumentError) { graph.remove_node(:missing) }
+  end
+
+  def test_remove_edge_keeps_both_nodes
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.remove_edge(:a, :b)
+
+    assert graph.node?(:a)
+    assert graph.node?(:b)
+    refute graph.edge?(:a, :b)
+  end
+
+  def test_remove_edge_unknown_raises
+    graph = build_graph([:a, :b], [])
+    assert_raises(ArgumentError) { graph.remove_edge(:a, :b) }
+  end
+
+  def test_frozen_graph_rejects_remove_node
+    graph = build_graph([:a], [])
+    graph.freeze
+    assert_raises(FrozenError) { graph.remove_node(:a) }
+  end
+
+  def test_frozen_graph_rejects_remove_edge
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.freeze
+    assert_raises(FrozenError) { graph.remove_edge(:a, :b) }
+  end
+
+  def test_topological_sort_after_removal
+    graph = build_graph([:a, :b, :c, :d], [[:a, :b], [:b, :c], [:a, :d]])
+    graph.remove_node(:b)
+
+    assert_equal [[:a, :c], [:d]], graph.topological_layers
+  end
+
+  # --- without_node / without_edge ---
+
+  def test_without_node_returns_new_frozen_graph
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+    graph.freeze
+    new_graph = graph.without_node(:b)
+
+    assert new_graph.frozen?
+    refute new_graph.node?(:b)
+    assert_equal 2, new_graph.size
+    assert_equal 0, new_graph.edges.size
+  end
+
+  def test_without_node_original_unchanged
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.without_node(:b)
+
+    assert graph.node?(:b)
+    assert graph.edge?(:a, :b)
+  end
+
+  def test_without_node_on_mutable_graph
+    graph = build_graph([:a, :b], [[:a, :b]])
+    new_graph = graph.without_node(:b)
+
+    assert new_graph.frozen?
+    refute new_graph.node?(:b)
+    assert graph.node?(:b)
+  end
+
+  def test_without_node_unknown_raises
+    graph = build_graph([:a], [])
+    assert_raises(ArgumentError) { graph.without_node(:missing) }
+  end
+
+  def test_without_edge_returns_new_frozen_graph
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.freeze
+    new_graph = graph.without_edge(:a, :b)
+
+    assert new_graph.frozen?
+    refute new_graph.edge?(:a, :b)
+    assert new_graph.node?(:a)
+    assert new_graph.node?(:b)
+  end
+
+  def test_without_edge_original_unchanged
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.without_edge(:a, :b)
+
+    assert graph.edge?(:a, :b)
+  end
+
+  def test_without_edge_unknown_raises
+    graph = build_graph([:a, :b], [])
+    assert_raises(ArgumentError) { graph.without_edge(:a, :b) }
+  end
+
   # --- Empty graph ---
 
   def test_empty_graph

@@ -26,6 +26,31 @@ module DAG
           .then { |data| build_workflow(data) }
       end
 
+      def self.from_hash(**node_defs)
+        graph = Graph.new
+        registry = Registry.new
+        deferred_edges = []
+
+        node_defs.each do |name, opts|
+          opts = opts.dup
+          type = opts.delete(:type) || raise(ArgumentError, "Node '#{name}' missing 'type'")
+          validate_type!(name, type.to_s)
+
+          depends_on = Array(opts.delete(:depends_on))
+
+          graph.add_node(name)
+          registry.register(Step.new(name: name, type: type, **opts))
+          depends_on.each { |dep| deferred_edges << [dep.to_sym, name.to_sym] }
+        end
+
+        deferred_edges.each do |from, to|
+          raise ArgumentError, "Node #{to} depends on unknown node #{from}" unless graph.node?(from)
+          graph.add_edge(from, to)
+        end
+
+        Definition.new(graph: graph, registry: registry)
+      end
+
       def self.validate_structure(data)
         raise ArgumentError, "YAML must contain 'nodes' key" unless data&.key?("nodes")
 

@@ -51,6 +51,18 @@ puts "Extended frozen? #{extended.frozen?}"
 puts "Original == Extended? #{graph == extended}"
 puts
 
+# --- without_node / without_edge (copy-on-write removal) ---
+
+puts "=== Copy-on-Write (without_node / without_edge) ==="
+trimmed = extended.without_node(:d)
+puts "without_node(:d): #{trimmed.inspect}"
+puts "Frozen? #{trimmed.frozen?}"
+puts "Extended unchanged: #{extended.inspect}"
+
+trimmed2 = extended.without_edge(:c, :d)
+puts "without_edge(:c, :d): edges=#{trimmed2.edges.size}, still has :d? #{trimmed2.node?(:d)}"
+puts
+
 # --- Equality ---
 
 puts "=== Equality ==="

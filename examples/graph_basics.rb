@@ -67,6 +67,37 @@ puts "Subgraph (without :fetch): #{sub.inspect}"
 puts "Subgraph layers: #{sub.topological_layers.inspect}"
 puts
 
+# --- Membership checks ---
+
+puts "=== Membership ==="
+puts "node?(:fetch):    #{graph.node?(:fetch)}"
+puts "node?(:missing):  #{graph.node?(:missing)}"
+puts "edge?(:fetch, :parse):  #{graph.edge?(:fetch, :parse)}"
+puts "edge?(:parse, :fetch):  #{graph.edge?(:parse, :fetch)}"
+puts
+
+# --- Edge iteration ---
+
+puts "=== Edge Iteration ==="
+graph.each_edge do |edge|
+  puts "  #{edge.from} → #{edge.to}"
+end
+puts
+
+# --- Mutable removal ---
+
+puts "=== Mutable Removal ==="
+mutable = graph.dup
+puts "Before: #{mutable.size} nodes, #{mutable.edges.size} edges"
+
+mutable.remove_edge(:validate, :store)
+puts "After remove_edge(:validate, :store): #{mutable.edges.size} edges"
+
+mutable.remove_node(:transform)
+puts "After remove_node(:transform): #{mutable.size} nodes, #{mutable.edges.size} edges"
+puts "Layers: #{mutable.topological_layers.inspect}"
+puts
+
 # --- Serialization ---
 
 puts "=== Serialization ==="
@@ -81,3 +112,11 @@ begin
 rescue DAG::CycleError => e
   puts "Caught: #{e.message}"
 end
+
+# --- Empty graph ---
+
+puts
+puts "=== Empty Graph ==="
+empty = DAG::Graph.new
+puts "Empty? #{empty.empty?}"
+puts "Size:  #{empty.size}"

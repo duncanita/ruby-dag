@@ -54,6 +54,30 @@ module DAG
       self
     end
 
+    def remove_node(name)
+      check_frozen!
+      sym = name.to_sym
+      raise ArgumentError, "Unknown node: #{sym}" unless @nodes.include?(sym)
+
+      fetch_set(@adjacency, sym).dup.each { |to| remove_edge_internal(sym, to) }
+      fetch_set(@reverse, sym).dup.each { |from| remove_edge_internal(from, sym) }
+
+      @adjacency.delete(sym)
+      @reverse.delete(sym)
+      @nodes.delete(sym)
+      self
+    end
+
+    def remove_edge(from, to)
+      check_frozen!
+      from_sym = from.to_sym
+      to_sym = to.to_sym
+      raise ArgumentError, "Unknown edge: #{from_sym} → #{to_sym}" unless @edges.include?(Edge.new(from: from_sym, to: to_sym))
+
+      remove_edge_internal(from_sym, to_sym)
+      self
+    end
+
     # --- Immutable builders ---
 
     def with_node(name)
@@ -62,6 +86,14 @@ module DAG
 
     def with_edge(from, to)
       dup.add_edge(from, to).freeze
+    end
+
+    def without_node(name)
+      dup.tap { |g| g.remove_node(name) }.freeze
+    end
+
+    def without_edge(from, to)
+      dup.tap { |g| g.remove_edge(from, to) }.freeze
     end
 
     # --- Freezing ---
@@ -204,6 +236,12 @@ module DAG
 
     def check_frozen!
       raise FrozenError, "can't modify frozen #{self.class}" if frozen?
+    end
+
+    def remove_edge_internal(from, to)
+      @adjacency[from]&.delete(to)
+      @reverse[to]&.delete(from)
+      @edges.delete(Edge.new(from: from, to: to))
     end
 
     # Safe hash lookup that doesn't trigger the default block on frozen hashes.

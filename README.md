@@ -103,6 +103,20 @@ DAG::Workflow::Dumper.to_file(definition, "workflow.yml")
 # Round-trips: Loader.from_yaml(Dumper.to_yaml(def)) == def
 ```
 
+### Build with `from_hash`
+
+```ruby
+require_relative "lib/dag"
+
+definition = DAG::Workflow::Loader.from_hash(
+  fetch:     { type: :exec, command: "curl -s https://api.example.com/data" },
+  transform: { type: :exec, command: "jq '.results'", depends_on: [:fetch], timeout: 30 },
+  save:      { type: :file_write, path: "output.json", depends_on: [:transform] }
+)
+
+result = DAG::Workflow::Runner.new(definition.graph, definition.registry).call
+```
+
 ## Graph API
 
 Pure DAG with no workflow awareness.
@@ -124,11 +138,25 @@ end  # => frozen
 
 # Immutable builders (return new frozen graphs)
 graph2 = graph.with_node(:c).with_edge(:b, :c)
+graph3 = graph2.without_node(:c)   # removes node and its edges
+graph4 = graph2.without_edge(:b, :c) # removes edge, keeps both nodes
+```
+
+### Mutable Removal
+
+```ruby
+graph = DAG::Graph.new.add_node(:a).add_node(:b).add_edge(:a, :b)
+graph.remove_edge(:a, :b)  # removes edge, keeps nodes
+graph.remove_node(:b)      # removes node and all incident edges
 ```
 
 ### Queries
 
 ```ruby
+graph.size               # => 3
+graph.empty?             # => false
+graph.node?(:a)          # => true
+graph.edge?(:a, :b)      # => true
 graph.nodes              # => Set[:a, :b, :c]
 graph.edges              # => Set[Edge(a -> b), ...]
 graph.successors(:a)     # => Set[:b]
@@ -141,6 +169,10 @@ graph.path?(:a, :c)      # => true
 graph.indegree(:b)       # => 1
 graph.outdegree(:a)      # => 1
 graph.subgraph([:a, :b]) # => new Graph with only those nodes
+graph.to_h               # => {nodes: [:a, :b, :c], edges: [{from: :a, to: :b}, ...]}
+
+graph.each_node { |n| puts n }
+graph.each_edge { |e| puts "#{e.from} → #{e.to}" }
 ```
 
 ### Topological Sort
@@ -202,8 +234,8 @@ DAG::Success(10)
 
 ```ruby
 runner = DAG::Workflow::Runner.new(graph, registry,
-  on_node_start: ->(name, step) { puts "Starting #{name}" },
-  on_node_finish: ->(name, result) { puts "#{name}: #{result}" }
+  on_step_start: ->(name, step) { puts "Starting #{name}" },
+  on_step_finish: ->(name, result) { puts "#{name}: #{result}" }
 )
 ```
 
