@@ -11,8 +11,8 @@ module DAG
     #   definition.registry  # => DAG::Workflow::Registry
 
     class Loader
-      YAML_TYPES = %w[exec script file_read file_write llm].freeze
-      ALL_TYPES = (YAML_TYPES + %w[ruby]).freeze
+      YAML_TYPES = %w[exec script file_read file_write]
+      ALL_TYPES = YAML_TYPES + %w[ruby]
 
       def self.from_file(path)
         raise ArgumentError, "File not found: #{path}" unless File.exist?(path)

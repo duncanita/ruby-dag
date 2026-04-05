@@ -33,7 +33,7 @@ class LoaderTest < Minitest::Test
     assert_equal [[:first], [:second]], defn.execution_order
   end
 
-  def test_loads_all_node_types
+  def test_loads_all_core_node_types
     defn = load_yaml(<<~YAML)
       name: test
       nodes:
@@ -47,14 +47,9 @@ class LoaderTest < Minitest::Test
           type: file_write
           path: "/tmp/out.txt"
           depends_on: [b]
-        d:
-          type: llm
-          prompt: "test"
-          command: "echo test"
-          depends_on: [a]
     YAML
 
-    assert_equal 4, defn.size
+    assert_equal 3, defn.size
   end
 
   def test_passes_extra_config_through

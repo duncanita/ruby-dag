@@ -10,15 +10,13 @@ module DAG
     #   step.config  # => {command: "curl ..."}
 
     Step = Data.define(:name, :type, :config) do
-      SHAREABLE_TYPES = %i[exec script file_read file_write llm].freeze
-
       def initialize(name:, type:, **config)
         super(
           name: name.to_sym,
           type: type.to_sym,
           config: config.freeze
         )
-        return unless SHAREABLE_TYPES.include?(self.type)
+        return if self.type == :ruby
 
         Ractor.make_shareable(self)
       rescue Ractor::Error => e

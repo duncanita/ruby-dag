@@ -175,42 +175,6 @@ class StepsTest < Minitest::Test
     assert_match(/No callable/, result.error)
   end
 
-  # --- LLM ---
-
-  def test_llm_fails_without_prompt
-    result = run_step(:llm, command: "echo test")
-    assert result.failure?
-    assert_match(/No prompt/, result.error)
-  end
-
-  def test_llm_fails_without_command
-    result = run_step(:llm, prompt: "hello")
-    assert result.failure?
-    assert_match(/No command/, result.error)
-  end
-
-  def test_llm_passes_prompt_via_env_var
-    result = run_step(:llm, prompt: "hello {{input}}", command: 'echo "$DAG_LLM_PROMPT"')
-
-    assert result.success?
-    assert_equal "hello", result.value
-  end
-
-  def test_llm_interpolates_input_in_prompt
-    step = DAG::Workflow::Step.new(name: :test, type: :llm, prompt: "say {{input}}", command: 'echo "$DAG_LLM_PROMPT"')
-    result = DAG::Workflow::Steps.build(:llm).call(step, "world")
-
-    assert_equal "say world", result.value
-  end
-
-  def test_llm_prompt_with_shell_metacharacters_is_safe
-    # Single quotes, semicolons, pipes should not cause injection
-    result = run_step(:llm, prompt: "test'; rm -rf /; echo '", command: 'echo "$DAG_LLM_PROMPT"')
-
-    assert result.success?
-    assert_includes result.value, "test'"
-  end
-
   # --- Step shareability ---
 
   def test_step_with_simple_config_is_shareable

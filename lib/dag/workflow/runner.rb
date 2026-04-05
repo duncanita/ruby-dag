@@ -80,13 +80,12 @@ module DAG
       def spawn_ractor(name, previous_outputs, results_port)
         step = @registry[name]
         input = gather_input(name, previous_outputs)
+        executor_class = Steps.build(step.type).class
 
         @callbacks.start(name, step)
 
-        Ractor.new(name, step, input, results_port) do |n, s, inp, out|
-          executor = DAG::Workflow::Steps.build(s.type)
-          result = executor.call(s, inp)
-
+        Ractor.new(name, step, input, results_port, executor_class) do |n, s, inp, out, klass|
+          result = klass.new.call(s, inp)
           out.send([n, result.to_h])
         end
       end
