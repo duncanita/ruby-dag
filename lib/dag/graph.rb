@@ -108,7 +108,6 @@ module DAG
       super
     end
 
-
     # --- Scalar queries ---
 
     def size = @nodes.size

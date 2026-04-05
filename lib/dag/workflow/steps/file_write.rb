@@ -24,7 +24,7 @@ module DAG
 
         def extract_content(input)
           case input
-          when Hash then input.size == 1 ? input.values.first : input.to_s
+          when Hash then (input.size == 1) ? input.values.first : input.to_s
           else input
           end
         end
