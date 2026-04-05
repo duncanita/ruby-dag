@@ -149,6 +149,16 @@ class RunnerTest < Minitest::Test
     assert steps.all? { |s| s.is_a?(DAG::Workflow::Step) }
   end
 
+  # --- Unknown callback keyword ---
+
+  def test_rejects_unknown_callback_keyword
+    graph = DAG::Graph.new
+    registry = DAG::Workflow::Registry.new
+    assert_raises(ArgumentError) do
+      DAG::Workflow::Runner.new(graph, registry, on_typo_key: ->(*) {})
+    end
+  end
+
   # --- Edge cases ---
 
   def test_empty_graph_succeeds

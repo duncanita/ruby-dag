@@ -34,7 +34,7 @@ on_finish = ->(name, result) {
 }
 
 result = DAG::Workflow::Runner.new(definition.graph, definition.registry,
-  parallel: parallel, on_node_start: on_start, on_node_finish: on_finish).call
+  parallel: parallel, on_step_start: on_start, on_step_finish: on_finish).call
 
 if result.success?
   puts "\n✓ Workflow completed (#{definition.size} nodes)"

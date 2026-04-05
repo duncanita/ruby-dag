@@ -11,11 +11,11 @@ module DAG
     #   result.value[:parse].value  #=> "parsed output"
 
     class Runner
-      def initialize(graph, registry, parallel: true, **callback_opts)
+      def initialize(graph, registry, parallel: true, on_step_start: nil, on_step_finish: nil)
         @graph = graph
         @registry = registry
         @parallel = parallel
-        @callbacks = RunCallbacks.new(**callback_opts)
+        @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
       end
 
       def call
