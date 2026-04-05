@@ -204,6 +204,21 @@ class StepsTest < Minitest::Test
     assert_includes result.value, "test'"
   end
 
+  # --- Step shareability ---
+
+  def test_step_with_simple_config_is_shareable
+    step = DAG::Workflow::Step.new(name: :test, type: :exec, command: "echo hi", timeout: 30)
+    assert Ractor.shareable?(step)
+  end
+
+  def test_step_with_non_shareable_config_raises
+    io = StringIO.new
+    error = assert_raises(ArgumentError) do
+      DAG::Workflow::Step.new(name: :test, type: :exec, command: io)
+    end
+    assert_match(/non-shareable/, error.message)
+  end
+
   # --- Unknown type ---
 
   def test_unknown_step_type_raises

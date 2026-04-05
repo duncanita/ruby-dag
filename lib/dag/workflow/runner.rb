@@ -70,25 +70,15 @@ module DAG
       def spawn_ractor(name, previous_outputs, results_port)
         step = @registry[name]
         input = gather_input(name, previous_outputs)
-        step_data = serialize_step(step)
 
         @callbacks.start(name, step)
 
-        Ractor.new(name, step_data, input, results_port) do |n, sd, inp, out|
-          executor = DAG::Workflow::Steps.build(sd[:type])
-          reconstructed = DAG::Workflow::Step.new(name: sd[:name], type: sd[:type], **sd[:config])
-          result = executor.call(reconstructed, inp)
+        Ractor.new(name, step, input, results_port) do |n, s, inp, out|
+          executor = DAG::Workflow::Steps.build(s.type)
+          result = executor.call(s, inp)
 
           out.send([n, result.to_h])
         end
-      end
-
-      def serialize_step(step)
-        {
-          name: step.name,
-          type: step.type,
-          config: deep_freeze(step.config)
-        }
       end
 
       def deserialize_result(hash)
@@ -122,17 +112,6 @@ module DAG
 
       def build_failure(name, result, outputs)
         Failure.new(error: {failed_node: name, error: result.error, outputs: outputs})
-      end
-
-      def deep_freeze(obj)
-        return obj if obj.frozen?
-
-        case obj
-        when Hash then obj.transform_keys(&:to_sym).transform_values { |v| deep_freeze(v) }.freeze
-        when Array then obj.map { |v| deep_freeze(v) }.freeze
-        when String then obj.dup.freeze
-        else obj
-        end
       end
     end
   end
