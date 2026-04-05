@@ -355,6 +355,60 @@ class GraphTest < Minitest::Test
     assert_equal graph.edges.size, copy.edges.size
   end
 
+  # --- Immutable builders (with_node / with_edge) ---
+
+  def test_with_node_returns_new_frozen_graph
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.freeze
+    new_graph = graph.with_node(:c)
+
+    assert new_graph.frozen?
+    assert new_graph.node?(:c)
+    assert_equal 3, new_graph.size
+    refute graph.node?(:c)
+    assert_equal 2, graph.size
+  end
+
+  def test_with_edge_returns_new_frozen_graph
+    graph = build_graph([:a, :b, :c], [[:a, :b]])
+    graph.freeze
+    new_graph = graph.with_edge(:b, :c)
+
+    assert new_graph.frozen?
+    assert new_graph.edge?(:b, :c)
+    refute graph.edge?(:b, :c)
+  end
+
+  def test_with_node_on_mutable_graph
+    graph = build_graph([:a], [])
+    new_graph = graph.with_node(:b)
+
+    assert new_graph.frozen?
+    assert new_graph.node?(:b)
+    refute graph.node?(:b)
+  end
+
+  def test_with_edge_rejects_cycle
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.freeze
+    assert_raises(DAG::CycleError) { graph.with_edge(:b, :a) }
+  end
+
+  # --- to_h ---
+
+  def test_to_h_returns_nodes_and_edges
+    graph = build_graph([:a, :b], [[:a, :b]])
+    h = graph.to_h
+
+    assert_equal [:a, :b], h[:nodes]
+    assert_equal [{from: :a, to: :b}], h[:edges]
+  end
+
+  def test_to_h_empty_graph
+    h = DAG::Graph.new.to_h
+    assert_equal({nodes: [], edges: []}, h)
+  end
+
   # --- Edge data type ---
 
   def test_edge_is_frozen

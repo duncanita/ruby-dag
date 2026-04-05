@@ -54,6 +54,16 @@ module DAG
       self
     end
 
+    # --- Immutable builders ---
+
+    def with_node(name)
+      dup.add_node(name).freeze
+    end
+
+    def with_edge(from, to)
+      dup.add_edge(from, to).freeze
+    end
+
     # --- Freezing ---
 
     def freeze
@@ -179,6 +189,13 @@ module DAG
         end
         g
       end
+    end
+
+    def to_h
+      {
+        nodes: @nodes.to_a.sort,
+        edges: @edges.map { |e| {from: e.from, to: e.to} }
+      }
     end
 
     def inspect
