@@ -6,7 +6,8 @@ module DAG
     # Nodes in the same layer run in parallel via Ractors (Ruby 4+).
     #
     #   result = DAG::Workflow::Runner.new(graph, registry).call
-    #   result.value[:parse].value  #=> "parsed output"
+    #   result.value[:outputs][:parse].value  #=> "parsed output"
+    #   result.value[:trace]                  #=> [TraceEntry, ...]
     #
     # # Execution Contract
     #
@@ -17,6 +18,8 @@ module DAG
     # - Callback ordering is per-step but not globally deterministic across parallel layers.
     # - On first step failure, the workflow halts. Completed outputs and failure details
     #   are returned in the result.
+
+    TraceEntry = Data.define(:name, :layer, :started_at, :finished_at, :duration_ms, :status, :input_keys)
 
     class Runner
       def initialize(graph, registry, parallel: true, on_step_start: nil, on_step_finish: nil)
@@ -35,40 +38,49 @@ module DAG
 
       def execute_layers(layers)
         outputs = {}
+        trace = []
 
-        layers.each do |layer|
-          execute_layer(layer, outputs).each do |name, result|
+        layers.each_with_index do |layer, layer_index|
+          execute_layer(layer, layer_index, outputs, trace).each do |name, result|
             outputs[name] = result
-            return build_failure(name, result, outputs) if result.failure?
+            return build_failure(name, result, outputs, trace) if result.failure?
           end
         end
 
-        Success.new(value: outputs)
+        Success.new(value: {outputs: outputs, trace: trace})
       end
 
-      def execute_layer(layer, previous_outputs)
+      def execute_layer(layer, layer_index, previous_outputs, trace)
         if @parallel && layer.size > 1
-          execute_parallel(layer, previous_outputs)
+          execute_parallel(layer, layer_index, previous_outputs, trace)
         else
-          execute_sequential(layer, previous_outputs)
+          execute_sequential(layer, layer_index, previous_outputs, trace)
         end
       end
 
-      def execute_sequential(layer, previous_outputs)
+      def execute_sequential(layer, layer_index, previous_outputs, trace)
         layer.each_with_object({}) do |name, results|
-          results[name] = execute_step(name, previous_outputs)
+          results[name] = execute_step(name, layer_index, previous_outputs, trace)
         end
       end
 
-      def execute_parallel(layer, previous_outputs)
+      def execute_parallel(layer, layer_index, previous_outputs, trace)
         results_port = Ractor::Port.new
 
         ractors = layer.map { |name| spawn_ractor(name, previous_outputs, results_port) }
 
         results = {}
         layer.size.times do
-          name, result_hash = results_port.receive
+          name, result_hash, duration_ms = results_port.receive
           result = deserialize_result(result_hash)
+          input_keys = @graph.predecessors(name).to_a.sort
+          trace << TraceEntry.new(
+            name: name, layer: layer_index,
+            started_at: nil, finished_at: nil,
+            duration_ms: duration_ms,
+            status: result.success? ? :success : :failure,
+            input_keys: input_keys
+          )
           @callbacks.finish(name, result)
           results[name] = result
         end
@@ -85,8 +97,10 @@ module DAG
         @callbacks.start(name, step)
 
         Ractor.new(name, step, input, results_port, executor_class) do |n, s, inp, out, klass|
+          t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           result = klass.new.call(s, inp)
-          out.send([n, result.to_h])
+          elapsed = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000).round(2)
+          out.send([n, result.to_h, elapsed])
         end
       end
 
@@ -98,15 +112,28 @@ module DAG
         end
       end
 
-      def execute_step(name, previous_outputs)
+      def execute_step(name, layer_index, previous_outputs, trace)
         step = @registry[name]
         input = gather_input(name, previous_outputs)
+        input_keys = @graph.predecessors(name).to_a.sort
 
         @callbacks.start(name, step)
 
-        Steps.build(step.type)
-          .call(step, input)
-          .tap { |result| @callbacks.finish(name, result) }
+        started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        result = Steps.build(step.type).call(step, input)
+        finished_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        duration_ms = ((finished_at - started_at) * 1000).round(2)
+
+        trace << TraceEntry.new(
+          name: name, layer: layer_index,
+          started_at: started_at, finished_at: finished_at,
+          duration_ms: duration_ms,
+          status: result.success? ? :success : :failure,
+          input_keys: input_keys
+        )
+
+        @callbacks.finish(name, result)
+        result
       end
 
       def gather_input(name, outputs)
@@ -119,8 +146,8 @@ module DAG
         deps.to_h { |dep| [dep, outputs[dep]&.value] }
       end
 
-      def build_failure(name, result, outputs)
-        Failure.new(error: {failed_node: name, error: result.error, outputs: outputs})
+      def build_failure(name, result, outputs, trace)
+        Failure.new(error: {failed_node: name, error: result.error, outputs: outputs, trace: trace})
       end
     end
   end

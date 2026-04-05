@@ -37,7 +37,7 @@ result = DAG::Workflow::Runner.new(definition.graph, definition.registry,
   parallel: parallel, on_step_start: on_start, on_step_finish: on_finish).call
 
 if result.success?
-  puts "\n✓ Workflow completed (#{definition.size} nodes)"
+  puts "\n✓ Workflow completed (#{definition.size} nodes, #{result.value[:trace].size} steps traced)"
 else
   warn "\n✗ Failed at '#{result.error[:failed_node]}': #{result.error[:error]}"
   exit 1

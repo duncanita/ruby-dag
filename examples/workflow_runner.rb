@@ -30,7 +30,7 @@ puts "Execution order: #{definition.execution_order.inspect}"
 result = DAG::Workflow::Runner.new(definition.graph, definition.registry, parallel: false).call
 
 puts "Success? #{result.success?}"
-puts "Output:  #{result.value[:shout].value}"
+puts "Output:  #{result.value[:outputs][:shout].value}"
 puts
 
 # --- Loading from YAML ---
@@ -59,7 +59,7 @@ puts "Layers: #{definition.execution_order.inspect}"
 
 result = DAG::Workflow::Runner.new(definition.graph, definition.registry, parallel: false).call
 puts "Success? #{result.success?}"
-result.value.each do |name, step_result|
+result.value[:outputs].each do |name, step_result|
   puts "  #{name}: #{step_result.value}"
 end
 puts
