@@ -62,7 +62,8 @@ class RunnerTest < Minitest::Test
   def test_failure_includes_error_detail
     result = run_workflow({bad: {command: "echo fail >&2; exit 42"}})
     assert result.failure?
-    assert_match(/Exit 42/, result.error[:error])
+    assert_equal :exec_failed, result.error[:error][:code]
+    assert_equal 42, result.error[:error][:exit_status]
   end
 
   # --- Parallel execution ---

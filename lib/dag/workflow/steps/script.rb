@@ -12,7 +12,7 @@ module DAG
 
           build_command(path, step.config)
             .then { |cmd, timeout| Exec.new.call(Step.new(name: step.name, type: :exec, command: cmd, timeout: timeout), nil) }
-            .then { |result| (result.failure? && result.error&.include?("No such file")) ? Failure.new(error: "Script not found: #{path}") : result }
+            .then { |result| (result.failure? && result.error.is_a?(Hash) && result.error[:stderr]&.include?("No such file")) ? Failure.new(error: "Script not found: #{path}") : result }
         end
 
         private

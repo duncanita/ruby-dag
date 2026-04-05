@@ -25,19 +25,31 @@ module DAG
           stdin.close
 
           Timeout.timeout(timeout) { wait_thread.value }
-            .then { |status| build_result(stdout.read, stderr.read, status) }
+            .then { |status| build_result(command, stdout.read, stderr.read, status) }
         rescue Timeout::Error
           kill_process(wait_thread)
-          Failure.new(error: "Command timed out after #{timeout}s")
+          Failure.new(error: {
+            code: :exec_timeout,
+            command: command,
+            timeout_seconds: timeout,
+            timeout: true
+          })
         ensure
           close_streams(stdout, stderr)
         end
 
-        def build_result(stdout, stderr, status)
+        def build_result(command, stdout, stderr, status)
           if status.success?
             Success.new(value: stdout.strip)
           else
-            Failure.new(error: "Exit #{status.exitstatus}: #{stderr.strip}")
+            Failure.new(error: {
+              code: :exec_failed,
+              exit_status: status.exitstatus,
+              command: command,
+              stdout: stdout.strip,
+              stderr: stderr.strip,
+              timeout: false
+            })
           end
         end
 
