@@ -7,11 +7,11 @@ module DAG
   module Workflow
     module Steps
       class Exec
-        def call(node, _input)
-          command = node.config[:command]
-          return Failure.new(error: "No command for exec node #{node.name}") unless command
+        def call(step, _input)
+          command = step.config[:command]
+          return Failure.new(error: "No command for exec step #{step.name}") unless command
 
-          run_command(command, node.config.fetch(:timeout, 30))
+          run_command(command, step.config.fetch(:timeout, 30))
         end
 
         def run_with_env(command, env, timeout)

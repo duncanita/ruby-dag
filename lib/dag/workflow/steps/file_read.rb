@@ -4,9 +4,9 @@ module DAG
   module Workflow
     module Steps
       class FileRead
-        def call(node, _input)
-          path = node.config[:path]
-          return Failure.new(error: "No path for file_read node #{node.name}") unless path
+        def call(step, _input)
+          path = step.config[:path]
+          return Failure.new(error: "No path for file_read step #{step.name}") unless path
 
           Success.new(value: File.read(path))
         rescue Errno::ENOENT

@@ -6,12 +6,12 @@ module DAG
   module Workflow
     module Steps
       class Script
-        def call(node, _input)
-          path = node.config[:path]
-          return Failure.new(error: "No path for script node #{node.name}") unless path
+        def call(step, _input)
+          path = step.config[:path]
+          return Failure.new(error: "No path for script step #{step.name}") unless path
 
-          build_command(path, node.config)
-            .then { |cmd, timeout| Exec.new.call(Step.new(name: node.name, type: :exec, command: cmd, timeout: timeout), nil) }
+          build_command(path, step.config)
+            .then { |cmd, timeout| Exec.new.call(Step.new(name: step.name, type: :exec, command: cmd, timeout: timeout), nil) }
             .then { |result| (result.failure? && result.error&.include?("No such file")) ? Failure.new(error: "Script not found: #{path}") : result }
         end
 

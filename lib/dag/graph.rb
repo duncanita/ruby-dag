@@ -105,11 +105,11 @@ module DAG
     # --- Transitive queries ---
 
     def ancestors(name)
-      walk(:predecessors, name.to_sym)
+      walk(@reverse, name.to_sym)
     end
 
     def descendants(name)
-      walk(:successors, name.to_sym)
+      walk(@adjacency, name.to_sym)
     end
 
     # Is there a directed path from `from` to `to`?
@@ -150,7 +150,7 @@ module DAG
         layers << ready.sort
         ready.each do |n|
           remaining.delete(n)
-          @adjacency[n].each { |succ| in_degree[succ] -= 1 }
+          fetch_set(@adjacency, n).each { |succ| in_degree[succ] -= 1 }
         end
       end
 
@@ -198,6 +198,15 @@ module DAG
       }
     end
 
+    def ==(other)
+      other.is_a?(Graph) && @nodes == other.nodes && @edges == other.edges
+    end
+    alias_method :eql?, :==
+
+    def hash
+      [@nodes, @edges].hash
+    end
+
     def inspect
       "#<DAG::Graph nodes=#{@nodes.to_a} edges=#{@edges.size}>"
     end
@@ -214,16 +223,16 @@ module DAG
       hash.fetch(key) { Set.new }
     end
 
-    def walk(direction, start)
+    def walk(adjacency_hash, start)
       visited = Set.new
-      stack = send(direction, start).to_a
+      stack = fetch_set(adjacency_hash, start).to_a
 
       until stack.empty?
         current = stack.pop
         next if visited.include?(current)
 
         visited << current
-        stack.concat(send(direction, current).to_a)
+        stack.concat(fetch_set(adjacency_hash, current).to_a)
       end
 
       visited
@@ -246,7 +255,7 @@ module DAG
         return true if current == from
 
         visited << current
-        @adjacency[current].each { |succ| stack << succ }
+        fetch_set(@adjacency, current).each { |succ| stack << succ }
       end
 
       false

@@ -4,9 +4,9 @@ module DAG
   module Workflow
     module Steps
       class Ruby
-        def call(node, input)
-          callable = node.config[:callable]
-          return Failure.new(error: "No callable for ruby node #{node.name}") unless callable
+        def call(step, input)
+          callable = step.config[:callable]
+          return Failure.new(error: "No callable for ruby step #{step.name}") unless callable
 
           callable.call(input)
         rescue => e

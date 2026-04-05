@@ -418,6 +418,31 @@ class GraphTest < Minitest::Test
     assert_equal :b, edge.to
   end
 
+  # --- Equality ---
+
+  def test_equality_same_structure
+    g1 = build_graph([:a, :b], [[:a, :b]])
+    g2 = build_graph([:a, :b], [[:a, :b]])
+    assert_equal g1, g2
+  end
+
+  def test_equality_different_structure
+    g1 = build_graph([:a, :b], [[:a, :b]])
+    g2 = build_graph([:a, :b, :c], [[:a, :b]])
+    refute_equal g1, g2
+  end
+
+  def test_equality_with_non_graph
+    graph = build_graph([:a], [])
+    refute_equal graph, "not a graph"
+  end
+
+  def test_hash_same_for_equal_graphs
+    g1 = build_graph([:a, :b], [[:a, :b]])
+    g2 = build_graph([:a, :b], [[:a, :b]])
+    assert_equal g1.hash, g2.hash
+  end
+
   # --- Empty graph ---
 
   def test_empty_graph

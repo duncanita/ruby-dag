@@ -6,13 +6,13 @@ module DAG
       class FileWrite
         VALID_MODES = %w[w a].freeze
 
-        def call(node, input)
-          path = node.config[:path]
-          return Failure.new(error: "No path for file_write node #{node.name}") unless path
+        def call(step, input)
+          path = step.config[:path]
+          return Failure.new(error: "No path for file_write step #{step.name}") unless path
 
-          content = node.config[:content] || input
-          mode = node.config.fetch(:mode, "w")
-          return Failure.new(error: "Invalid mode '#{mode}' for file_write node #{node.name}. Valid: #{VALID_MODES.join(", ")}") unless VALID_MODES.include?(mode)
+          content = step.config[:content] || input
+          mode = step.config.fetch(:mode, "w")
+          return Failure.new(error: "Invalid mode '#{mode}' for file_write step #{step.name}. Valid: #{VALID_MODES.join(", ")}") unless VALID_MODES.include?(mode)
 
           File.open(path, mode) { |f| f.write(content) }
           Success.new(value: path)

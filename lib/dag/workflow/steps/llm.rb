@@ -4,15 +4,15 @@ module DAG
   module Workflow
     module Steps
       class LLM
-        def call(node, input)
-          prompt = node.config[:prompt]
-          return Failure.new(error: "No prompt for LLM node #{node.name}") unless prompt
+        def call(step, input)
+          prompt = step.config[:prompt]
+          return Failure.new(error: "No prompt for LLM step #{step.name}") unless prompt
 
-          command = node.config[:command]
-          return Failure.new(error: "No command for LLM node #{node.name}. Provide a command that accepts the prompt.") unless command
+          command = step.config[:command]
+          return Failure.new(error: "No command for LLM step #{step.name}. Provide a command that accepts the prompt.") unless command
 
           render_prompt(prompt, input)
-            .then { |rendered| execute(rendered, command, node.config.fetch(:timeout, 120)) }
+            .then { |rendered| execute(rendered, command, step.config.fetch(:timeout, 120)) }
         end
 
         private
