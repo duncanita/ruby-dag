@@ -22,58 +22,47 @@ module DAG
       end
 
       def self.from_yaml(yaml_string)
-        YAML.safe_load(yaml_string, permitted_classes: [Symbol])
-          .then { |data| validate_structure(data) }
-          .then { |data| build_workflow(data) }
-      end
-
-      def self.from_hash(**node_defs)
-        graph = Graph.new
-        registry = Registry.new
-        deferred_edges = []
-
-        node_defs.each do |name, opts|
-          opts = opts.dup
-          type = opts.delete(:type) || raise(ArgumentError, "Node '#{name}' missing 'type'")
-          validate_type!(name, type.to_s)
-
-          depends_on = Array(opts.delete(:depends_on))
-
-          graph.add_node(name)
-          registry.register(Step.new(name: name, type: type, **opts))
-          depends_on.each { |dep| deferred_edges << [dep.to_sym, name.to_sym] }
-        end
-
-        deferred_edges.each do |from, to|
-          raise ArgumentError, "Node #{to} depends on unknown node #{from}" unless graph.node?(from)
-          graph.add_edge(from, to)
-        end
-
-        Definition.new(graph: graph, registry: registry)
-      end
-
-      def self.validate_structure(data)
+        data = YAML.safe_load(yaml_string, permitted_classes: [Symbol])
         raise ArgumentError, "YAML must contain 'nodes' key" unless data&.key?("nodes")
 
-        data
-      end
-
-      def self.build_workflow(data)
-        graph = Graph.new
-        registry = Registry.new
-        deferred_edges = []
-
-        data["nodes"].each do |name, config|
+        entries = data["nodes"].map do |name, config|
           config = config.dup
           type = config.delete("type") || raise(ArgumentError, "Node '#{name}' missing 'type'")
           validate_type!(name, type, valid_types: YAML_TYPES)
 
-          depends_on = Array(config.delete("depends_on"))
+          depends_on = Array(config.delete("depends_on")).map { |d| d.to_sym }
+          [name.to_sym, {type: type.to_sym, depends_on: depends_on, **config.transform_keys(&:to_sym)}]
+        end
+
+        build_definition(entries)
+      end
+
+      def self.from_hash(**node_defs)
+        entries = node_defs.map do |name, opts|
+          opts = opts.dup
+          type = opts.delete(:type) || raise(ArgumentError, "Node '#{name}' missing 'type'")
+          validate_type!(name, type.to_s)
+
+          depends_on = Array(opts.delete(:depends_on)).map { |d| d.to_sym }
+          [name.to_sym, {type: type.to_sym, depends_on: depends_on, **opts}]
+        end
+
+        build_definition(entries)
+      end
+
+      def self.build_definition(entries)
+        graph = Graph.new
+        registry = Registry.new
+        deferred_edges = []
+
+        entries.each do |name, opts|
+          opts = opts.dup
+          depends_on = opts.delete(:depends_on)
+          type = opts.delete(:type)
 
           graph.add_node(name)
-          registry.register(Step.new(name: name, type: type, **config.transform_keys(&:to_sym)))
-
-          depends_on.each { |dep| deferred_edges << [dep.to_sym, name.to_sym] }
+          registry.register(Step.new(name: name, type: type, **opts))
+          depends_on.each { |dep| deferred_edges << [dep, name] }
         end
 
         deferred_edges.each do |from, to|
@@ -85,16 +74,16 @@ module DAG
       end
 
       def self.validate_type!(name, type, valid_types: ALL_TYPES)
-        return if valid_types.include?(type)
+        return if valid_types.include?(type.to_s)
 
-        if ALL_TYPES.include?(type) && !valid_types.include?(type)
+        if ALL_TYPES.include?(type.to_s) && !valid_types.include?(type.to_s)
           raise ArgumentError, "Node '#{name}' has type '#{type}' which is not supported in YAML. Use from_hash for programmatic step types."
         end
 
         raise ArgumentError, "Node '#{name}' has invalid type '#{type}'. Valid: #{valid_types.join(", ")}"
       end
 
-      private_class_method :validate_structure, :build_workflow, :validate_type!
+      private_class_method :build_definition, :validate_type!
     end
   end
 end
