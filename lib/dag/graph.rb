@@ -10,8 +10,8 @@ module DAG
   #     .add_node(:parse)
   #     .add_edge(:fetch, :parse)
   #
-  #   graph.topological_sort  # => [[:fetch], [:parse]]
-  #   graph.topological_order # => [:fetch, :parse]
+  #   graph.topological_layers # => [[:fetch], [:parse]]
+  #   graph.topological_sort   # => [:fetch, :parse]
   #   graph.descendants(:fetch) # => Set[:parse]
 
   class Graph
@@ -106,6 +106,7 @@ module DAG
     def path?(from, to)
       from_sym = from.to_sym
       to_sym = to.to_sym
+      return false unless @nodes.include?(from_sym) && @nodes.include?(to_sym)
       return true if from_sym == to_sym
 
       visited = Set.new
@@ -127,7 +128,7 @@ module DAG
 
     # Kahn's algorithm: topological sort into parallel layers.
     # Returns array of arrays — nodes in each layer can run concurrently.
-    def topological_sort
+    def topological_layers
       in_degree = @nodes.to_h { |n| [n, fetch_set(@reverse, n).size] }
       remaining = @nodes.dup
       layers = []
@@ -147,8 +148,8 @@ module DAG
     end
 
     # Flat deterministic topological ordering.
-    def topological_order
-      topological_sort.flatten
+    def topological_sort
+      topological_layers.flatten
     end
 
     # --- Iteration ---

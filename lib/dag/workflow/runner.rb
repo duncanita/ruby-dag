@@ -19,7 +19,7 @@ module DAG
       end
 
       def call
-        @graph.topological_sort
+        @graph.topological_layers
           .then { |layers| execute_layers(layers) }
       end
 

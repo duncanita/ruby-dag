@@ -17,7 +17,7 @@ module DAG
       # Kahn's algorithm: topological sort into parallel layers.
       # Nodes in each layer can run concurrently.
       def layers
-        @graph.topological_sort
+        @graph.topological_layers
       end
 
       # Flat deterministic topological ordering.

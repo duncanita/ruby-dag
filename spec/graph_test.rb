@@ -76,23 +76,23 @@ class GraphTest < Minitest::Test
     assert_equal 4, graph.edges.size
   end
 
-  # --- Topological sort ---
+  # --- Topological layers ---
 
   def test_linear_chain
     graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
-    assert_equal [[:a], [:b], [:c]], graph.topological_sort
+    assert_equal [[:a], [:b], [:c]], graph.topological_layers
   end
 
   def test_independent_nodes_in_same_layer
     graph = build_graph([:a, :b, :c], [[:a, :c], [:b, :c]])
-    order = graph.topological_sort
+    order = graph.topological_layers
     assert_equal [:a, :b], order[0]
     assert_equal [:c], order[1]
   end
 
   def test_diamond_dependency
     graph = build_graph([:a, :b, :c, :d], [[:a, :b], [:a, :c], [:b, :d], [:c, :d]])
-    order = graph.topological_sort
+    order = graph.topological_layers
     assert_equal [:a], order[0]
     assert_equal [:b, :c], order[1]
     assert_equal [:d], order[2]
@@ -100,7 +100,7 @@ class GraphTest < Minitest::Test
 
   def test_single_node
     graph = build_graph([:only], [])
-    assert_equal [[:only]], graph.topological_sort
+    assert_equal [[:only]], graph.topological_layers
   end
 
   def test_large_fan_out
@@ -108,13 +108,13 @@ class GraphTest < Minitest::Test
     edges = (1..5).map { |i| [:root, :"leaf_#{i}"] }
     graph = build_graph(nodes, edges)
 
-    order = graph.topological_sort
+    order = graph.topological_layers
     assert_equal [:root], order[0]
     assert_equal (1..5).map { |i| :"leaf_#{i}" }.sort, order[1]
   end
 
   def test_empty_graph_sort
-    assert_equal [], DAG::Graph.new.topological_sort
+    assert_equal [], DAG::Graph.new.topological_layers
   end
 
   # --- Graph queries ---
@@ -184,29 +184,29 @@ class GraphTest < Minitest::Test
     assert_raises(ArgumentError) { graph.subgraph([:a, :missing]) }
   end
 
-  # --- Flat topological order ---
+  # --- Flat topological sort ---
 
-  def test_topological_order_linear
+  def test_topological_sort_linear
     graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
-    assert_equal [:a, :b, :c], graph.topological_order
+    assert_equal [:a, :b, :c], graph.topological_sort
   end
 
-  def test_topological_order_diamond
+  def test_topological_sort_diamond
     graph = build_graph([:a, :b, :c, :d], [[:a, :b], [:a, :c], [:b, :d], [:c, :d]])
-    order = graph.topological_order
+    order = graph.topological_sort
     assert_equal :a, order.first
     assert_equal :d, order.last
     assert order.index(:b) < order.index(:d)
     assert order.index(:c) < order.index(:d)
   end
 
-  def test_topological_order_independent_is_sorted
+  def test_topological_sort_independent_is_sorted
     graph = build_graph([:c, :b, :a], [])
-    assert_equal [:a, :b, :c], graph.topological_order
+    assert_equal [:a, :b, :c], graph.topological_sort
   end
 
-  def test_topological_order_empty_graph
-    assert_equal [], DAG::Graph.new.topological_order
+  def test_topological_sort_empty_graph
+    assert_equal [], DAG::Graph.new.topological_sort
   end
 
   # --- path? ---
@@ -234,6 +234,21 @@ class GraphTest < Minitest::Test
   def test_path_reflexive
     graph = build_graph([:a], [])
     assert graph.path?(:a, :a)
+  end
+
+  def test_path_nonexistent_same_node
+    graph = build_graph([:a], [])
+    refute graph.path?(:ghost, :ghost)
+  end
+
+  def test_path_nonexistent_different_nodes
+    graph = build_graph([:a], [])
+    refute graph.path?(:ghost, :phantom)
+  end
+
+  def test_path_one_exists_one_missing
+    graph = build_graph([:a, :b], [[:a, :b]])
+    refute graph.path?(:a, :ghost)
   end
 
   # --- indegree / outdegree ---
@@ -298,8 +313,8 @@ class GraphTest < Minitest::Test
     assert_equal 3, graph.size
     assert graph.node?(:a)
     assert graph.edge?(:a, :b)
-    assert_equal [[:a], [:b], [:c]], graph.topological_sort
-    assert_equal [:a, :b, :c], graph.topological_order
+    assert_equal [[:a], [:b], [:c]], graph.topological_layers
+    assert_equal [:a, :b, :c], graph.topological_sort
     assert graph.path?(:a, :c)
   end
 
@@ -335,7 +350,7 @@ class GraphTest < Minitest::Test
     graph = build_graph([:a, :b, :c, :d], [[:a, :b], [:a, :c], [:b, :d], [:c, :d]])
     copy = graph.dup
 
-    assert_equal graph.topological_sort, copy.topological_sort
+    assert_equal graph.topological_layers, copy.topological_layers
     assert_equal graph.size, copy.size
     assert_equal graph.edges.size, copy.edges.size
   end

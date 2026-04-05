@@ -96,8 +96,8 @@ class GraphBuilderTest < Minitest::Test
       b.add_edge(:b, :c)
     end
 
-    assert_equal [[:a], [:b], [:c]], graph.topological_sort
-    assert_equal [:a, :b, :c], graph.topological_order
+    assert_equal [[:a], [:b], [:c]], graph.topological_layers
+    assert_equal [:a, :b, :c], graph.topological_sort
     assert graph.path?(:a, :c)
     assert_equal 3, graph.size
   end

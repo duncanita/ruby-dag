@@ -11,7 +11,7 @@ module DAG
     Definition = Data.define(:graph, :registry) do
       def size = graph.size
 
-      def execution_order = graph.topological_sort
+      def execution_order = graph.topological_layers
 
       def step(name) = registry[name]
 
