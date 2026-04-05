@@ -109,10 +109,11 @@ module DAG
     end
 
     # Returns an unfrozen deep copy of this graph.
+    # Uses add_edge_unchecked since the source graph is already acyclic.
     def dup
       copy = Graph.new
       @nodes.each { |n| copy.add_node(n) }
-      @edges.each { |e| copy.add_edge(e.from, e.to) }
+      @edges.each { |e| copy.send(:add_edge_unchecked, e.from, e.to) }
       copy
     end
 
@@ -236,6 +237,14 @@ module DAG
 
     def check_frozen!
       raise FrozenError, "can't modify frozen #{self.class}" if frozen?
+    end
+
+    # Like add_edge but skips cycle detection and frozen check.
+    # Only safe when the caller guarantees no cycle (e.g., copying an existing DAG).
+    def add_edge_unchecked(from_sym, to_sym)
+      @adjacency[from_sym] << to_sym
+      @reverse[to_sym] << from_sym
+      @edges << Edge.new(from: from_sym, to: to_sym)
     end
 
     def remove_edge_internal(from, to)
