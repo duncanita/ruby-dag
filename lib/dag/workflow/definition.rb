@@ -10,6 +10,8 @@ module DAG
 
     Definition = Data.define(:graph, :registry) do
       def size = graph.size
+      def empty? = graph.empty? && registry.empty?
+      def steps = registry.steps
 
       def execution_order = graph.topological_layers
 

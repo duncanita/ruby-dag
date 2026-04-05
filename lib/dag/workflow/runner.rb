@@ -48,7 +48,7 @@ module DAG
 
       def execute_sequential(layer, previous_outputs)
         layer.each_with_object({}) do |name, results|
-          results[name] = execute_node(name, previous_outputs)
+          results[name] = execute_step(name, previous_outputs)
         end
       end
 
@@ -101,7 +101,7 @@ module DAG
         end
       end
 
-      def execute_node(name, previous_outputs)
+      def execute_step(name, previous_outputs)
         step = @registry[name]
         input = gather_input(name, previous_outputs)
 

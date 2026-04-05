@@ -114,8 +114,8 @@ class RunnerTest < Minitest::Test
     )
 
     DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false,
-      on_node_start: ->(name, _step) { started << name },
-      on_node_finish: ->(name, _result) { finished << name }).call
+      on_step_start: ->(name, _step) { started << name },
+      on_step_finish: ->(name, _result) { finished << name }).call
 
     assert_equal [:a, :b], started
     assert_equal [:a, :b], finished
@@ -127,10 +127,26 @@ class RunnerTest < Minitest::Test
     defn = build_test_workflow(a: {}, b: {})
 
     DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: true,
-      on_node_finish: ->(name, _result) { finished << name }).call
+      on_step_finish: ->(name, _result) { finished << name }).call
 
     assert_includes finished, :a
     assert_includes finished, :b
+  end
+
+  # --- Definition convenience methods ---
+
+  def test_definition_empty
+    graph = DAG::Graph.new
+    registry = DAG::Workflow::Registry.new
+    defn = DAG::Workflow::Definition.new(graph: graph, registry: registry)
+    assert defn.empty?
+  end
+
+  def test_definition_steps
+    defn = build_test_workflow(a: {}, b: {depends_on: [:a]})
+    steps = defn.steps
+    assert_equal 2, steps.size
+    assert steps.all? { |s| s.is_a?(DAG::Workflow::Step) }
   end
 
   # --- Edge cases ---
