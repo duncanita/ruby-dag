@@ -40,19 +40,19 @@ module DAG
 
       def run
         errors = []
-        check_disconnected(errors)
+        check_isolated_nodes(errors)
         check_custom_rules(errors)
         Result.new(errors: errors.freeze)
       end
 
       private
 
-      def check_disconnected(errors)
+      def check_isolated_nodes(errors)
         return if @graph.size <= 1
 
         @graph.nodes.each do |node|
           if @graph.predecessors(node).empty? && @graph.successors(node).empty?
-            errors << "Node #{node} is disconnected"
+            errors << "Node #{node} is isolated (no edges)"
           end
         end
       end

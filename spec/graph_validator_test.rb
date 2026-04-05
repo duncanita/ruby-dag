@@ -19,11 +19,11 @@ class GraphValidatorTest < Minitest::Test
 
   # --- Disconnected node detection ---
 
-  def test_detects_disconnected_nodes
+  def test_detects_isolated_nodes
     graph = build_graph([:a, :b, :c], [[:a, :b]])
     result = DAG::Graph::Validator.validate(graph)
     refute result.valid?
-    assert result.errors.any? { |e| e.include?("disconnected") && e.include?("c") }
+    assert result.errors.any? { |e| e.include?("isolated") && e.include?("c") }
   end
 
   def test_single_node_graph_is_valid
@@ -62,7 +62,7 @@ class GraphValidatorTest < Minitest::Test
       v.rule("must have exactly 2 nodes") { |g| g.size == 2 }
     end
 
-    assert result.errors.size >= 2  # disconnected + custom rule
+    assert result.errors.size >= 2  # isolated + custom rule
   end
 
   # --- validate! raises ---
@@ -75,7 +75,7 @@ class GraphValidatorTest < Minitest::Test
   def test_validate_bang_raises_on_invalid
     graph = build_graph([:a, :b, :c], [[:a, :b]])
     error = assert_raises(DAG::ValidationError) { DAG::Graph::Validator.validate!(graph) }
-    assert error.message.include?("disconnected")
+    assert error.message.include?("isolated")
     assert_kind_of Array, error.errors
   end
 
