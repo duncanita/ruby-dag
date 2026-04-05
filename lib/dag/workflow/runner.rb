@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-Warning[:experimental] = false
-
 module DAG
   module Workflow
     # Executes a workflow: takes a Graph (execution order) + Registry (step definitions).
