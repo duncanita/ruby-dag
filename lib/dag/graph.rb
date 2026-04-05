@@ -119,19 +119,7 @@ module DAG
       return false unless @nodes.include?(from_sym) && @nodes.include?(to_sym)
       return true if from_sym == to_sym
 
-      visited = Set.new
-      stack = fetch_set(@adjacency, from_sym).to_a
-
-      until stack.empty?
-        current = stack.pop
-        next if visited.include?(current)
-        return true if current == to_sym
-
-        visited << current
-        stack.concat(fetch_set(@adjacency, current).to_a)
-      end
-
-      false
+      reachable?(from_sym, to_sym)
     end
 
     # --- Topological algorithms ---
@@ -243,22 +231,25 @@ module DAG
       raise ArgumentError, "Unknown node: #{to}" unless @nodes.include?(to)
     end
 
-    # Would adding from→to create a cycle? True if `to` can already reach `from`.
-    def would_create_cycle?(from, to)
+    def reachable?(from, to)
       visited = Set.new
-      stack = [to]
+      stack = fetch_set(@adjacency, from).to_a
 
       until stack.empty?
         current = stack.pop
         next if visited.include?(current)
-
-        return true if current == from
+        return true if current == to
 
         visited << current
-        fetch_set(@adjacency, current).each { |succ| stack << succ }
+        stack.concat(fetch_set(@adjacency, current).to_a)
       end
 
       false
+    end
+
+    # Would adding from→to create a cycle? True if `to` can already reach `from`.
+    def would_create_cycle?(from, to)
+      reachable?(to, from)
     end
   end
 end

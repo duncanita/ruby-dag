@@ -2,7 +2,7 @@
 
 Lightweight DAG workflow runner in pure Ruby. Zero runtime dependencies.
 
-Define multi-step workflows as YAML, execute them with automatic dependency resolution and parallel execution.
+Define multi-step workflows as YAML or build them programmatically. Automatic dependency resolution and parallel execution via Ractors.
 
 ## Install
 
@@ -14,43 +14,24 @@ bundle install
 
 Requires Ruby 4.0+.
 
+## Architecture
+
+Two layers, loosely coupled:
+
+- **Graph** (`DAG::Graph`) -- pure DAG data structure. Nodes are symbols, edges are first-class. Enforces acyclicity. No workflow concepts.
+- **Workflow** (`DAG::Workflow::*`) -- steps, types, YAML loading/dumping, parallel execution. Built on top of Graph.
+
+You can use the Graph layer alone if you just need a DAG.
+
 ## Quick Start
 
 ### CLI
 
 ```bash
-# Run a workflow
-bin/dag examples/deploy.yml
-
-# Dry run (show execution plan)
-bin/dag examples/deploy.yml --dry-run
-
-# Verbose output
-bin/dag examples/deploy.yml --verbose
-
-# Disable parallel execution
-bin/dag examples/deploy.yml --no-parallel
-```
-
-### Ruby API
-
-```ruby
-require_relative "lib/dag"
-
-# Build a graph programmatically
-graph = DAG::Graph.new
-  .add_node(name: :fetch, type: :exec, command: "curl -s https://api.example.com/data")
-  .add_node(name: :process, type: :ruby, depends_on: [:fetch],
-    callable: ->(input) { DAG::Success(JSON.parse(input)) })
-  .add_node(name: :save, type: :file_write, path: "output.json", depends_on: [:process])
-
-result = DAG::Runner.new(graph).call
-
-if result.success?
-  puts "Done! Outputs: #{result.value.keys}"
-else
-  puts "Failed at #{result.error[:failed_node]}: #{result.error[:error]}"
-end
+bin/dag examples/deploy.yml              # run a workflow
+bin/dag examples/deploy.yml --dry-run    # show execution plan
+bin/dag examples/deploy.yml --verbose    # verbose output
+bin/dag examples/deploy.yml --no-parallel # disable parallel execution
 ```
 
 ### YAML Workflow
@@ -76,29 +57,114 @@ nodes:
 
   notify:
     type: exec
-    command: "curl -X POST https://hooks.slack.com/... -d '{\"text\": \"Deployed!\"}'"
+    command: "echo 'Deployed!'"
     depends_on: [push]
 ```
 
-```bash
-bin/dag deploy.yml --verbose
+### Load and Run
+
+```ruby
+require_relative "lib/dag"
+
+definition = DAG::Workflow::Loader.from_file("deploy.yml")
+runner = DAG::Workflow::Runner.new(definition.graph, definition.registry)
+result = runner.call
+
+if result.success?
+  puts "Done! Outputs: #{result.value.keys}"
+else
+  puts "Failed at #{result.error[:failed_node]}: #{result.error[:error]}"
+end
 ```
 
-Output:
-```
-▶ test
-  ✓ test
-▶ build
-  ✓ build
-▶ push
-  ✓ push
-▶ notify
-  ✓ notify
+### Build Programmatically and Dump to YAML
 
-✓ Workflow completed (4 nodes)
+```ruby
+require_relative "lib/dag"
+
+graph = DAG::Graph.new
+graph.add_node(:fetch)
+graph.add_node(:transform)
+graph.add_node(:save)
+graph.add_edge(:fetch, :transform)
+graph.add_edge(:transform, :save)
+
+registry = DAG::Workflow::Registry.new
+registry.register(DAG::Workflow::Step.new(name: :fetch, type: :exec, command: "curl -s https://api.example.com/data"))
+registry.register(DAG::Workflow::Step.new(name: :transform, type: :exec, command: "jq '.results'"))
+registry.register(DAG::Workflow::Step.new(name: :save, type: :file_write, path: "output.json"))
+
+definition = DAG::Workflow::Definition.new(graph: graph, registry: registry)
+
+# Serialize to YAML
+yaml_string = DAG::Workflow::Dumper.to_yaml(definition)
+DAG::Workflow::Dumper.to_file(definition, "workflow.yml")
+
+# Round-trips: Loader.from_yaml(Dumper.to_yaml(def)) == def
 ```
 
-## Node Types
+## Graph API
+
+Pure DAG with no workflow awareness.
+
+```ruby
+# Build mutable
+graph = DAG::Graph.new
+graph.add_node(:a)
+graph.add_node(:b)
+graph.add_edge(:a, :b)
+graph.freeze
+
+# Or use the Builder
+graph = DAG::Graph::Builder.build do |b|
+  b.add_node(:a)
+  b.add_node(:b)
+  b.add_edge(:a, :b)
+end  # => frozen
+
+# Immutable builders (return new frozen graphs)
+graph2 = graph.with_node(:c).with_edge(:b, :c)
+```
+
+### Queries
+
+```ruby
+graph.nodes              # => Set[:a, :b, :c]
+graph.edges              # => Set[Edge(a -> b), ...]
+graph.successors(:a)     # => Set[:b]
+graph.predecessors(:b)   # => Set[:a]
+graph.ancestors(:c)      # => Set[:a, :b]
+graph.descendants(:a)    # => Set[:b, :c]
+graph.roots              # => [:a]
+graph.leaves             # => [:c]
+graph.path?(:a, :c)      # => true
+graph.indegree(:b)       # => 1
+graph.outdegree(:a)      # => 1
+graph.subgraph([:a, :b]) # => new Graph with only those nodes
+```
+
+### Topological Sort
+
+```ruby
+graph.topological_layers # => [[:a], [:b], [:c]]  -- parallel layers
+graph.topological_sort   # => [:a, :b, :c]        -- flat order
+```
+
+### Validation
+
+```ruby
+result = DAG::Graph::Validator.validate(graph) do |v|
+  v.rule("must have a single root") { |g| g.roots.size == 1 }
+end
+
+result.valid?  # => true/false
+result.errors  # => ["Node x is disconnected", ...]
+
+# Or raise on failure:
+DAG::Graph::Validator.validate!(graph)
+```
+
+## Step Types
 
 | Type | Purpose | Required Config |
 |------|---------|----------------|
@@ -106,104 +172,23 @@ Output:
 | `script` | Run a Ruby script | `path` |
 | `file_read` | Read a file | `path` |
 | `file_write` | Write a file | `path` |
-| `ruby` | Execute a lambda/proc | `callable` |
+| `ruby` | Execute a lambda/proc (programmatic only, not YAML-serializable) | `callable` |
 | `llm` | LLM prompt via command | `prompt`, `command` |
-
-### exec
-
-```yaml
-fetch:
-  type: exec
-  command: "curl -s https://example.com"
-  timeout: 30  # seconds, default 30
-```
-
-### script
-
-```yaml
-process:
-  type: script
-  path: "scripts/transform.rb"
-  args: ["--format", "json"]  # optional, escaped automatically
-  timeout: 60
-```
-
-### file_read / file_write
-
-```yaml
-read_config:
-  type: file_read
-  path: "config.yml"
-
-write_output:
-  type: file_write
-  path: "output.txt"
-  mode: "a"          # "w" (overwrite, default) or "a" (append)
-  content: "hello"   # or receives input from dependency
-  depends_on: [read_config]
-```
-
-### ruby (programmatic only)
-
-```ruby
-graph.add_node(
-  name: :transform,
-  type: :ruby,
-  depends_on: [:fetch],
-  callable: ->(input) { DAG::Success(input.upcase) }
-)
-```
-
-### llm
-
-Passes rendered prompt via `$DAG_LLM_PROMPT` environment variable to avoid shell injection.
-
-```yaml
-summarize:
-  type: llm
-  prompt: "Summarize this: {{input}}"
-  command: "openclaw message send --stdin"
-  timeout: 120
-  depends_on: [fetch_data]
-```
 
 ## Dependencies
 
 Nodes declare dependencies with `depends_on`. The runner:
 
-1. Computes execution layers via topological sort
-2. Runs nodes in the same layer in parallel (via threads)
+1. Computes execution layers via Kahn's topological sort
+2. Runs nodes in the same layer in parallel via Ractors
 3. Passes output from completed nodes as input to dependents
-4. Stops the entire workflow on first failure
-
-```yaml
-#        ┌─ b ─┐
-#  a ────┤     ├──── d
-#        └─ c ─┘
-
-nodes:
-  a:
-    type: exec
-    command: "echo start"
-  b:
-    type: exec
-    command: "echo branch-b"
-    depends_on: [a]
-  c:
-    type: exec
-    command: "echo branch-c"
-    depends_on: [a]
-  d:
-    type: ruby
-    depends_on: [b, c]
-    # receives {b: "branch-b", c: "branch-c"} as input
-```
+4. Stops the workflow on first failure
 
 When a node has **one** dependency, it receives the value directly. With **multiple** dependencies, it receives a hash `{dep_name: value}`.
 
 ## Result Monad
 
-Every step returns `Success(value)` or `Failure(error)`. Chain with railway semantics:
+Every step returns `Success(value)` or `Failure(error)`:
 
 ```ruby
 DAG::Success(10)
@@ -216,8 +201,8 @@ DAG::Success(10)
 ## Callbacks
 
 ```ruby
-runner = DAG::Runner.new(graph,
-  on_node_start: ->(name, node) { puts "Starting #{name}" },
+runner = DAG::Workflow::Runner.new(graph, registry,
+  on_node_start: ->(name, step) { puts "Starting #{name}" },
   on_node_finish: ->(name, result) { puts "#{name}: #{result}" }
 )
 ```

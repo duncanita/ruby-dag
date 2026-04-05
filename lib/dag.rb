@@ -9,7 +9,6 @@ require_relative "dag/failure"
 require_relative "dag/graph"
 require_relative "dag/graph/builder"
 require_relative "dag/graph/validator"
-require_relative "dag/graph/planner"
 
 # Workflow layer
 require_relative "dag/workflow/step"
@@ -19,3 +18,4 @@ require_relative "dag/workflow/steps"
 require_relative "dag/workflow/run_callbacks"
 require_relative "dag/workflow/runner"
 require_relative "dag/workflow/loader"
+require_relative "dag/workflow/dumper"
