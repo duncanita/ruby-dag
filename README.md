@@ -4,6 +4,8 @@ Lightweight DAG workflow runner in pure Ruby. Zero runtime dependencies.
 
 Define multi-step workflows as YAML or build them programmatically. Automatic dependency resolution and parallel execution via Ractors.
 
+**Version:** 0.1.0
+
 ## Install
 
 ```bash
@@ -71,7 +73,9 @@ runner = DAG::Workflow::Runner.new(definition.graph, definition.registry)
 result = runner.call
 
 if result.success?
-  puts "Done! Outputs: #{result.value.keys}"
+  outputs = result.value[:outputs]
+  trace = result.value[:trace]
+  puts "Done! Steps: #{outputs.keys}, Trace: #{trace.size} entries"
 else
   puts "Failed at #{result.error[:failed_node]}: #{result.error[:error]}"
 end
@@ -190,7 +194,7 @@ result = DAG::Graph::Validator.validate(graph) do |v|
 end
 
 result.valid?  # => true/false
-result.errors  # => ["Node x is disconnected", ...]
+result.errors  # => ["Node x is isolated (no edges)", ...]
 
 # Or raise on failure:
 DAG::Graph::Validator.validate!(graph)
@@ -198,14 +202,25 @@ DAG::Graph::Validator.validate!(graph)
 
 ## Step Types
 
+### Core Types
+
 | Type | Purpose | Required Config |
 |------|---------|----------------|
 | `exec` | Run a shell command | `command` |
-| `script` | Run a Ruby script | `path` |
+| `ruby_script` | Run a Ruby script file | `path` |
 | `file_read` | Read a file | `path` |
 | `file_write` | Write a file | `path` |
 | `ruby` | Execute a lambda/proc (programmatic only, not YAML-serializable) | `callable` |
-| `llm` | LLM prompt via command | `prompt`, `command` |
+
+### Extension Types
+
+| Type | Purpose | Required Config | Require |
+|------|---------|----------------|---------|
+| `llm` | LLM prompt via command | `prompt`, `command` | `require "dag/ext/llm"` |
+
+```ruby
+require "dag/ext/llm"  # registers :llm step type and adds "llm" to YAML types
+```
 
 ## Dependencies
 
@@ -224,6 +239,8 @@ Step inputs are **always** hashes keyed by dependency step name (e.g., `{ fetch:
 - Step outputs should be JSON-like values (strings, numbers, booleans, arrays, hashes of the same) when using parallel execution. Arbitrary Ruby objects are only guaranteed to work in sequential mode (`parallel: false`).
 - Callback ordering is per-step but not globally deterministic across nodes in the same parallel layer.
 - On first step failure, the workflow halts. Completed step outputs and the failure details are returned in the result.
+- Successful results include an execution trace: `result.value[:trace]` is an array of `TraceEntry` with `:name`, `:layer`, `:duration_ms`, and `:status`.
+- Failed results include a partial trace: `result.error[:trace]`.
 
 ## Result Monad
 
@@ -235,6 +252,13 @@ DAG::Success(10)
   .and_then { |v| v > 100 ? DAG::Failure("too big") : DAG::Success(v) }
   .map { |v| v.to_s }
 # => Success("20")
+```
+
+Exec step failures return structured error hashes:
+
+```ruby
+# { code: :exec_failed, exit_status: 1, command: "...", stdout: "...", stderr: "...", timeout: false }
+# { code: :exec_timeout, command: "...", timeout_seconds: 30, timeout: true }
 ```
 
 ## Callbacks
