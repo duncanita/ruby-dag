@@ -27,6 +27,7 @@ module DAG
         @registry = registry
         @parallel = parallel
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
+        validate_coverage!(graph, registry)
       end
 
       def call
@@ -144,6 +145,13 @@ module DAG
 
       def resolve_dependencies(deps, outputs)
         deps.to_h { |dep| [dep, outputs[dep]&.value] }
+      end
+
+      def validate_coverage!(graph, registry)
+        missing = graph.nodes.reject { |node| registry.key?(node) }
+        return if missing.empty?
+
+        raise ArgumentError, "Missing steps for graph nodes: #{missing.sort.join(", ")}"
       end
 
       def build_failure(name, result, outputs, trace)

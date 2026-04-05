@@ -188,7 +188,8 @@ module DAG
 
     # --- Subgraph ---
 
-    # Returns a new Graph containing only the specified nodes and edges between them.
+    # Returns a new (mutable, unfrozen) Graph containing only the specified nodes
+    # and edges between them. Freeze the result if immutability is needed.
     def subgraph(node_names)
       keep = node_names.map(&:to_sym).to_set
       raise ArgumentError, "Unknown nodes: #{(keep - @nodes).to_a}" unless keep.subset?(@nodes)

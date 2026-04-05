@@ -213,6 +213,17 @@ class RunnerTest < Minitest::Test
 
   # --- Edge cases ---
 
+  def test_raises_when_graph_has_unregistered_steps
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo a"))
+
+    error = assert_raises(ArgumentError) do
+      DAG::Workflow::Runner.new(graph, registry, parallel: false)
+    end
+    assert_match(/b/, error.message)
+  end
+
   def test_empty_graph_succeeds
     graph = DAG::Graph.new
     registry = DAG::Workflow::Registry.new

@@ -27,6 +27,7 @@ module DAG
       def steps = @steps.values
       def size = @steps.size
       def empty? = @steps.empty?
+      def key?(name) = @steps.key?(name.to_sym)
 
       def inspect
         "#<DAG::Workflow::Registry steps=#{@steps.keys}>"
