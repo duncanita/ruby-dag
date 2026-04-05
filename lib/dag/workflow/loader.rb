@@ -11,7 +11,8 @@ module DAG
     #   definition.registry  # => DAG::Workflow::Registry
 
     class Loader
-      VALID_TYPES = %w[exec script file_read file_write ruby llm].freeze
+      YAML_TYPES = %w[exec script file_read file_write llm].freeze
+      ALL_TYPES = (YAML_TYPES + %w[ruby]).freeze
 
       def self.from_file(path)
         raise ArgumentError, "File not found: #{path}" unless File.exist?(path)
@@ -65,7 +66,7 @@ module DAG
         data["nodes"].each do |name, config|
           config = config.dup
           type = config.delete("type") || raise(ArgumentError, "Node '#{name}' missing 'type'")
-          validate_type!(name, type)
+          validate_type!(name, type, valid_types: YAML_TYPES)
 
           depends_on = Array(config.delete("depends_on"))
 
@@ -83,10 +84,14 @@ module DAG
         Definition.new(graph: graph, registry: registry)
       end
 
-      def self.validate_type!(name, type)
-        return if VALID_TYPES.include?(type)
+      def self.validate_type!(name, type, valid_types: ALL_TYPES)
+        return if valid_types.include?(type)
 
-        raise ArgumentError, "Node '#{name}' has invalid type '#{type}'. Valid: #{VALID_TYPES.join(", ")}"
+        if ALL_TYPES.include?(type) && !valid_types.include?(type)
+          raise ArgumentError, "Node '#{name}' has type '#{type}' which is not supported in YAML. Use from_hash for programmatic step types."
+        end
+
+        raise ArgumentError, "Node '#{name}' has invalid type '#{type}'. Valid: #{valid_types.join(", ")}"
       end
 
       private_class_method :validate_structure, :build_workflow, :validate_type!

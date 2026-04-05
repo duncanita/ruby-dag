@@ -152,6 +152,20 @@ class LoaderTest < Minitest::Test
     end
   end
 
+  # --- ruby type rejection in YAML ---
+
+  def test_rejects_ruby_type_in_yaml
+    error = assert_raises(ArgumentError) do
+      load_yaml(<<~YAML)
+        name: test
+        nodes:
+          bad:
+            type: ruby
+      YAML
+    end
+    assert_match(/not supported in YAML/, error.message)
+  end
+
   # --- from_hash ---
 
   def test_from_hash_builds_workflow
@@ -200,6 +214,13 @@ class LoaderTest < Minitest::Test
         b: {type: :exec, command: "echo b", depends_on: [:a]}
       )
     end
+  end
+
+  def test_from_hash_accepts_ruby_type
+    defn = DAG::Workflow::Loader.from_hash(
+      task: {type: :ruby, callable: ->(_) { DAG::Success("ok") }}
+    )
+    assert_equal :ruby, defn.step(:task).type
   end
 
   def test_from_hash_preserves_extra_config
