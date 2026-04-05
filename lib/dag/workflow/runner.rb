@@ -7,6 +7,16 @@ module DAG
     #
     #   result = DAG::Workflow::Runner.new(graph, registry).call
     #   result.value[:parse].value  #=> "parsed output"
+    #
+    # # Execution Contract
+    #
+    # - Step inputs are always hashes keyed by dependency step name (e.g., { fetch: "data" }).
+    #   Zero-dependency steps receive {}.
+    # - Step outputs should be JSON-like values (strings, numbers, booleans, arrays, hashes)
+    #   when using parallel execution. Arbitrary Ruby objects work only in sequential mode.
+    # - Callback ordering is per-step but not globally deterministic across parallel layers.
+    # - On first step failure, the workflow halts. Completed outputs and failure details
+    #   are returned in the result.
 
     class Runner
       def initialize(graph, registry, parallel: true, on_step_start: nil, on_step_finish: nil)

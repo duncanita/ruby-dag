@@ -216,7 +216,14 @@ Nodes declare dependencies with `depends_on`. The runner:
 3. Passes output from completed nodes as input to dependents
 4. Stops the workflow on first failure
 
-When a node has **one** dependency, it receives the value directly. With **multiple** dependencies, it receives a hash `{dep_name: value}`.
+Step inputs are **always** hashes keyed by dependency step name (e.g., `{ fetch: "data" }`). Zero-dependency steps receive `{}`.
+
+## Execution Contract
+
+- Step inputs are always hashes keyed by dependency step name (e.g., `{ fetch: "data" }`). Zero-dependency steps receive `{}`.
+- Step outputs should be JSON-like values (strings, numbers, booleans, arrays, hashes of the same) when using parallel execution. Arbitrary Ruby objects are only guaranteed to work in sequential mode (`parallel: false`).
+- Callback ordering is per-step but not globally deterministic across nodes in the same parallel layer.
+- On first step failure, the workflow halts. Completed step outputs and the failure details are returned in the result.
 
 ## Result Monad
 
