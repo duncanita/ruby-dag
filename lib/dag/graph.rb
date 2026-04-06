@@ -1,19 +1,6 @@
 # frozen_string_literal: true
 
 module DAG
-  # Pure directed acyclic graph. Nodes are symbols, edges are first-class.
-  # Enforces acyclicity on every add_edge call.
-  # Supports freeze for immutability after construction.
-  #
-  #   graph = DAG::Graph.new
-  #     .add_node(:fetch)
-  #     .add_node(:parse)
-  #     .add_edge(:fetch, :parse)
-  #
-  #   graph.topological_layers # => [[:fetch], [:parse]]
-  #   graph.topological_sort   # => [:fetch, :parse]
-  #   graph.descendants(:fetch) # => Set[:parse]
-
   class Graph
     include Enumerable
 
@@ -45,8 +32,7 @@ module DAG
       validate_edge_nodes!(from_sym, to_sym)
       raise ArgumentError, "Self-referencing edge: #{from_sym}" if from_sym == to_sym
       return self if fetch_set(@adjacency, from_sym).include?(to_sym)
-
-      raise CycleError, "Edge #{from_sym} → #{to_sym} would create a cycle" if would_create_cycle?(from_sym, to_sym)
+      raise CycleError, "Edge #{from_sym} → #{to_sym} would create a cycle" if reachable?(to_sym, from_sym)
 
       @adjacency[from_sym] << to_sym
       @reverse[to_sym] << from_sym
@@ -106,8 +92,9 @@ module DAG
       @reverse.freeze
       @edge_metadata.freeze
       @cached_layers = compute_topological_layers.freeze
-      @cached_roots = compute_roots.freeze
-      @cached_leaves = compute_leaves.freeze
+      @cached_sort = @cached_layers.flatten.freeze
+      @cached_roots = nodes_with_no(@reverse).freeze
+      @cached_leaves = nodes_with_no(@adjacency).freeze
       @cached_edges = compute_edges.freeze
       super
     end
@@ -125,11 +112,10 @@ module DAG
     def indegree(name) = fetch_set(@reverse, name.to_sym).size
     def outdegree(name) = fetch_set(@adjacency, name.to_sym).size
 
-    # --- Edge objects (lazy) ---
+    # --- Edge objects ---
 
     def edges
       return @cached_edges if frozen?
-
       compute_edges
     end
 
@@ -147,102 +133,42 @@ module DAG
     def successors(name) = fetch_set(@adjacency, name.to_sym).dup
     def predecessors(name) = fetch_set(@reverse, name.to_sym).dup
 
-    def roots = frozen? ? @cached_roots : compute_roots
-    def leaves = frozen? ? @cached_leaves : compute_leaves
+    def roots = frozen? ? @cached_roots : nodes_with_no(@reverse)
+    def leaves = frozen? ? @cached_leaves : nodes_with_no(@adjacency)
 
     # --- Transitive queries ---
 
-    def ancestors(name)
-      walk(@reverse, name.to_sym)
-    end
+    def ancestors(name) = walk(@reverse, name.to_sym)
+    def descendants(name) = walk(@adjacency, name.to_sym)
 
-    def descendants(name)
-      walk(@adjacency, name.to_sym)
-    end
-
-    # Is there a directed path from `from` to `to`?
     def path?(from, to)
       from_sym = from.to_sym
       to_sym = to.to_sym
       return false unless @nodes.include?(from_sym) && @nodes.include?(to_sym)
       return true if from_sym == to_sym
-
       reachable?(from_sym, to_sym)
     end
 
     # --- Topological algorithms ---
 
-    # Kahn's algorithm: topological sort into parallel layers.
-    # Returns array of arrays — nodes in each layer can run concurrently.
     def topological_layers
       return @cached_layers if frozen?
-
       compute_topological_layers
     end
 
-    # Flat deterministic topological ordering.
     def topological_sort
+      return @cached_sort if frozen?
       topological_layers.flatten
     end
 
-    # Shortest path (by weight sum) from source to target. O(V+E).
-    # Returns {cost:, path:} or nil if unreachable.
     def shortest_path(from, to)
-      from_sym = from.to_sym
-      to_sym = to.to_sym
-      return {cost: 0, path: [from_sym]} if from_sym == to_sym
-
-      dist = Hash.new(Float::INFINITY)
-      pred = {}
-      dist[from_sym] = 0
-
-      topological_sort.each do |u|
-        next if dist[u] == Float::INFINITY
-
-        fetch_set(@adjacency, u).each do |v|
-          w = edge_metadata(u, v).fetch(:weight, 1)
-          if dist[u] + w < dist[v]
-            dist[v] = dist[u] + w
-            pred[v] = u
-          end
-        end
-      end
-
-      return nil if dist[to_sym] == Float::INFINITY
-
-      {cost: dist[to_sym], path: reconstruct_path(pred, from_sym, to_sym)}
+      relax_path(from.to_sym, to.to_sym, Float::INFINITY, :<)
     end
 
-    # Longest path (by weight sum) from source to target. O(V+E).
-    # Returns {cost:, path:} or nil if unreachable.
     def longest_path(from, to)
-      from_sym = from.to_sym
-      to_sym = to.to_sym
-      return {cost: 0, path: [from_sym]} if from_sym == to_sym
-
-      dist = Hash.new(-Float::INFINITY)
-      pred = {}
-      dist[from_sym] = 0
-
-      topological_sort.each do |u|
-        next if dist[u] == -Float::INFINITY
-
-        fetch_set(@adjacency, u).each do |v|
-          w = edge_metadata(u, v).fetch(:weight, 1)
-          if dist[u] + w > dist[v]
-            dist[v] = dist[u] + w
-            pred[v] = u
-          end
-        end
-      end
-
-      return nil if dist[to_sym] == -Float::INFINITY
-
-      {cost: dist[to_sym], path: reconstruct_path(pred, from_sym, to_sym)}
+      relax_path(from.to_sym, to.to_sym, -Float::INFINITY, :>)
     end
 
-    # Critical path: longest weighted path from any root to any leaf. O(V+E).
-    # Returns {cost:, path:} or nil for empty graphs.
     def critical_path
       return nil if empty?
 
@@ -260,8 +186,7 @@ module DAG
       end
 
       target = leaves.max_by { |l| dist[l] }
-      path = reconstruct_path(pred, nil, target)
-      {cost: dist[target], path: path}
+      {cost: dist[target], path: rebuild_path(pred, target)}
     end
 
     # --- Iteration ---
@@ -280,8 +205,6 @@ module DAG
 
     # --- Subgraph ---
 
-    # Returns a new (mutable, unfrozen) Graph containing only the specified nodes
-    # and edges between them. Freeze the result if immutability is needed.
     def subgraph(node_names)
       keep = node_names.map(&:to_sym).to_set
       raise ArgumentError, "Unknown nodes: #{(keep - @nodes).to_a}" unless keep.subset?(@nodes)
@@ -299,10 +222,10 @@ module DAG
     end
 
     def to_dot(name: "dag")
+      sorted = topological_sort
       lines = ["digraph #{name} {"]
-      topological_sort.each { |n| lines << "  #{n};" }
-      # Include isolated nodes not in topo sort (none in a valid DAG, but defensive)
-      topological_sort.each do |from|
+      sorted.each { |n| lines << "  #{n};" }
+      sorted.each do |from|
         fetch_set(@adjacency, from).sort.each do |to|
           meta = edge_metadata(from, to)
           if meta.empty?
@@ -344,8 +267,7 @@ module DAG
 
     private
 
-    def compute_roots = @nodes.select { |n| fetch_set(@reverse, n).empty? }
-    def compute_leaves = @nodes.select { |n| fetch_set(@adjacency, n).empty? }
+    def nodes_with_no(hash) = @nodes.select { |n| fetch_set(hash, n).empty? }
 
     def compute_edges
       @adjacency.each_with_object(Set.new) do |(from, tos), set|
@@ -353,14 +275,33 @@ module DAG
       end
     end
 
-    def reconstruct_path(pred, from, to)
-      path = [to]
-      current = to
-      while pred.key?(current)
-        current = pred[current]
-        path.unshift(current)
+    def relax_path(from_sym, to_sym, init, cmp)
+      return {cost: 0, path: [from_sym]} if from_sym == to_sym
+
+      dist = Hash.new(init)
+      pred = {}
+      dist[from_sym] = 0
+
+      topological_sort.each do |u|
+        next if dist[u] == init
+
+        fetch_set(@adjacency, u).each do |v|
+          w = edge_metadata(u, v).fetch(:weight, 1)
+          if (dist[u] + w).send(cmp, dist[v])
+            dist[v] = dist[u] + w
+            pred[v] = u
+          end
+        end
       end
-      path
+
+      return nil if dist[to_sym] == init
+      {cost: dist[to_sym], path: rebuild_path(pred, to_sym)}
+    end
+
+    def rebuild_path(pred, target)
+      path = [target]
+      path << pred[path.last] while pred.key?(path.last)
+      path.reverse!
     end
 
     def compute_topological_layers
@@ -385,7 +326,6 @@ module DAG
       end
 
       raise CycleError, "Graph contains a cycle" if processed < @nodes.size
-
       layers
     end
 
@@ -413,50 +353,34 @@ module DAG
       @edge_metadata.delete([from, to])
     end
 
-    # Safe hash lookup that doesn't trigger the default block on frozen hashes.
+    # Avoids auto-vivification on frozen hashes
     def fetch_set(hash, key)
       hash.fetch(key) { Set.new }
     end
 
-    def walk(adjacency_hash, start)
+    def walk(adjacency_hash, start, target: nil)
       visited = Set.new
       stack = fetch_set(adjacency_hash, start).to_a
 
       until stack.empty?
         current = stack.pop
         next if visited.include?(current)
+        return true if target == current
 
         visited << current
         stack.concat(fetch_set(adjacency_hash, current).to_a)
       end
 
-      visited
+      target ? false : visited
+    end
+
+    def reachable?(from, to)
+      walk(@adjacency, from, target: to)
     end
 
     def validate_edge_nodes!(from, to)
       raise UnknownNodeError, "Unknown node: #{from}" unless @nodes.include?(from)
       raise UnknownNodeError, "Unknown node: #{to}" unless @nodes.include?(to)
-    end
-
-    def reachable?(from, to)
-      visited = Set.new
-      stack = fetch_set(@adjacency, from).to_a
-
-      until stack.empty?
-        current = stack.pop
-        next if visited.include?(current)
-        return true if current == to
-
-        visited << current
-        stack.concat(fetch_set(@adjacency, current).to_a)
-      end
-
-      false
-    end
-
-    # Would adding from→to create a cycle? True if `to` can already reach `from`.
-    def would_create_cycle?(from, to)
-      reachable?(to, from)
     end
   end
 end

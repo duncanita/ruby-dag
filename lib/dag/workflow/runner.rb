@@ -2,23 +2,6 @@
 
 module DAG
   module Workflow
-    # Executes a workflow: takes a Graph (execution order) + Registry (step definitions).
-    # Nodes in the same layer run in parallel via Ractors (Ruby 4+).
-    #
-    #   result = DAG::Workflow::Runner.new(graph, registry).call
-    #   result.value[:outputs][:parse].value  #=> "parsed output"
-    #   result.value[:trace]                  #=> [TraceEntry, ...]
-    #
-    # # Execution Contract
-    #
-    # - Step inputs are always hashes keyed by dependency step name (e.g., { fetch: "data" }).
-    #   Zero-dependency steps receive {}.
-    # - Step outputs should be JSON-like values (strings, numbers, booleans, arrays, hashes)
-    #   when using parallel execution. Arbitrary Ruby objects work only in sequential mode.
-    # - Callback ordering is per-step but not globally deterministic across parallel layers.
-    # - On first step failure, the workflow halts. Completed outputs and failure details
-    #   are returned in the result.
-
     TraceEntry = Data.define(:name, :layer, :started_at, :finished_at, :duration_ms, :status, :input_keys)
 
     class Runner
@@ -27,6 +10,7 @@ module DAG
         @registry = registry
         @parallel = parallel
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
+        @executors = {}
         validate_coverage!(graph, registry)
       end
 
@@ -36,6 +20,10 @@ module DAG
       end
 
       private
+
+      def executor(type)
+        @executors[type] ||= Steps.build(type)
+      end
 
       def execute_layers(layers)
         outputs = {}
@@ -85,8 +73,8 @@ module DAG
 
       def spawn_ractor(name, previous_outputs, results_port)
         step = @registry[name]
-        input = gather_input(name, previous_outputs)
-        executor_class = Steps.build(step.type).class
+        input = resolve_input(name, previous_outputs)
+        executor_class = executor(step.type).class
 
         @callbacks.start(name, step)
 
@@ -109,7 +97,7 @@ module DAG
       def execute_step(name, layer_index, previous_outputs, trace)
         step = @registry[name]
         deps = @graph.predecessors(name).to_a
-        input = resolve_dependencies(deps, previous_outputs)
+        input = deps.to_h { |dep| [dep, previous_outputs[dep]&.value] }
 
         run_if = step.config[:run_if]
         if run_if && !run_if.call(input)
@@ -123,7 +111,7 @@ module DAG
         @callbacks.start(name, step)
 
         started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        result = Steps.build(step.type).call(step, input)
+        result = executor(step.type).call(step, input)
         finished_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         duration_ms = ((finished_at - started_at) * 1000).round(2)
 
@@ -146,14 +134,8 @@ module DAG
         )
       end
 
-      def gather_input(name, outputs)
-        @graph.predecessors(name)
-          .to_a
-          .then { |deps| resolve_dependencies(deps, outputs) }
-      end
-
-      def resolve_dependencies(deps, outputs)
-        deps.to_h { |dep| [dep, outputs[dep]&.value] }
+      def resolve_input(name, outputs)
+        @graph.predecessors(name).to_a.to_h { |dep| [dep, outputs[dep]&.value] }
       end
 
       def validate_coverage!(graph, registry)
