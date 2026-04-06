@@ -151,20 +151,27 @@ module DAG
     # Kahn's algorithm: topological sort into parallel layers.
     # Returns array of arrays — nodes in each layer can run concurrently.
     def topological_layers
-      in_degree = @nodes.to_h { |n| [n, fetch_set(@reverse, n).size] }
-      remaining = @nodes.dup
+      in_degree = Hash.new(0)
+      @nodes.each { |n| fetch_set(@adjacency, n).each { |succ| in_degree[succ] += 1 } }
+
+      queue = @nodes.select { |n| in_degree[n] == 0 }.sort
+      processed = 0
       layers = []
 
-      until remaining.empty?
-        ready = remaining.select { |n| in_degree[n] == 0 }
-        raise CycleError, "Graph contains a cycle" if ready.empty?
-
-        layers << ready.sort
-        ready.each do |n|
-          remaining.delete(n)
-          fetch_set(@adjacency, n).each { |succ| in_degree[succ] -= 1 }
+      until queue.empty?
+        layers << queue
+        next_queue = []
+        queue.each do |n|
+          processed += 1
+          fetch_set(@adjacency, n).each do |succ|
+            in_degree[succ] -= 1
+            next_queue << succ if in_degree[succ] == 0
+          end
         end
+        queue = next_queue.sort
       end
+
+      raise CycleError, "Graph contains a cycle" if processed < @nodes.size
 
       layers
     end
