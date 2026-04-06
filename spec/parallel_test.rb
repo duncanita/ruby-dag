@@ -36,7 +36,7 @@ class ParallelTest < Minitest::Test
     defn = build_test_workflow(
       producer: {command: "echo layer1_data"},
       consumer: {type: :ruby, depends_on: [:producer],
-                 callable: ->(input) { DAG::Success("got: #{input[:producer]}") }}
+                 callable: ->(input) { DAG::Success.new(value: "got: #{input[:producer]}") }}
     )
 
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: true).call

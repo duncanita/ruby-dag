@@ -15,7 +15,7 @@ class RunnerTest < Minitest::Test
 
   def test_zero_dep_step_receives_empty_hash
     defn = build_test_workflow(
-      solo: {type: :ruby, callable: ->(input) { DAG::Success(input) }}
+      solo: {type: :ruby, callable: ->(input) { DAG::Success.new(value: input) }}
     )
 
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
@@ -26,7 +26,7 @@ class RunnerTest < Minitest::Test
     defn = build_test_workflow(
       produce: {},
       consume: {type: :ruby, depends_on: [:produce],
-                callable: ->(input) { DAG::Success("got: #{input}") }}
+                callable: ->(input) { DAG::Success.new(value: "got: #{input}") }}
     )
 
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
@@ -38,7 +38,7 @@ class RunnerTest < Minitest::Test
       x: {command: "echo X"},
       y: {command: "echo Y"},
       merge: {type: :ruby, depends_on: [:x, :y],
-              callable: ->(input) { DAG::Success(input.values.sort.join("+")) }}
+              callable: ->(input) { DAG::Success.new(value: input.values.sort.join("+")) }}
     )
 
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
@@ -100,7 +100,7 @@ class RunnerTest < Minitest::Test
     defn = build_test_workflow(
       read: {type: :file_read, path: input_path},
       transform: {type: :ruby, depends_on: [:read],
-                  callable: ->(input) { DAG::Success(input[:read].upcase) }},
+                  callable: ->(input) { DAG::Success.new(value: input[:read].upcase) }},
       write: {type: :file_write, path: output_path, depends_on: [:transform]}
     )
 

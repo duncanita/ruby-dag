@@ -152,7 +152,7 @@ class StepsTest < Minitest::Test
   # --- Ruby ---
 
   def test_ruby_executes_callable
-    callable = ->(_input) { DAG::Success(42) }
+    callable = ->(_input) { DAG::Success.new(value: 42) }
     result = run_step(:ruby, callable: callable)
 
     assert result.success?
@@ -160,7 +160,7 @@ class StepsTest < Minitest::Test
   end
 
   def test_ruby_passes_input_to_callable
-    callable = ->(input) { DAG::Success("got: #{input}") }
+    callable = ->(input) { DAG::Success.new(value: "got: #{input}") }
 
     step = DAG::Workflow::Step.new(name: :test, type: :ruby, callable: callable)
     result = DAG::Workflow::Steps.build(:ruby).call(step, "hello")
@@ -191,8 +191,11 @@ class StepsTest < Minitest::Test
 
   def test_step_with_non_shareable_config_is_not_ractor_safe
     io = StringIO.new
-    step = DAG::Workflow::Step.new(name: :test, type: :exec, command: io)
+    step = nil
+    _, stderr = capture_io { step = DAG::Workflow::Step.new(name: :test, type: :exec, command: io) }
     refute step.ractor_safe?
+    assert_match(/not Ractor-shareable/, stderr)
+    assert_match(/run sequentially/, stderr)
   end
 
   def test_exec_step_is_ractor_safe

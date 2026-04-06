@@ -5,14 +5,16 @@ module DAG
     # Validates a Graph for structural issues beyond basic acyclicity.
     # Collects all errors rather than failing on the first.
     #
-    #   result = DAG::Graph::Validator.validate(graph) do |v|
+    #   report = DAG::Graph::Validator.validate(graph) do |v|
     #     v.rule("must have a single root") { |g| g.roots.size == 1 }
     #   end
     #
-    #   result.valid?  # => true/false
-    #   result.errors  # => ["Node c is disconnected", ...]
+    #   report.valid?  # => true/false
+    #   report.errors  # => ["Node c is disconnected", ...]
 
-    Result = Data.define(:errors) do
+    # Renamed from Result to avoid collision with DAG::Result (the value-monad
+    # marker module included by Success/Failure).
+    Report = Data.define(:errors) do
       def valid? = errors.empty?
     end
 
@@ -24,8 +26,8 @@ module DAG
       end
 
       def self.validate!(graph, &block)
-        result = validate(graph, &block)
-        raise ValidationError, result.errors unless result.valid?
+        report = validate(graph, &block)
+        raise ValidationError, report.errors unless report.valid?
         graph
       end
 
@@ -42,18 +44,21 @@ module DAG
         errors = []
         check_isolated_nodes(errors)
         check_custom_rules(errors)
-        Result.new(errors: errors.freeze)
+        Report.new(errors: errors.freeze)
       end
 
       private
 
+      # A node is "isolated" only in a multi-node graph where it has no edges.
+      # A single-node graph is trivially valid: the lone node is both root and
+      # leaf, and an empty graph has nothing to check.
       def check_isolated_nodes(errors)
         return if @graph.size <= 1
 
         @graph.nodes.each do |node|
-          if @graph.predecessors(node).empty? && @graph.successors(node).empty?
-            errors << "Node #{node} is isolated (no edges)"
-          end
+          next unless @graph.predecessors(node).empty? && @graph.successors(node).empty?
+
+          errors << "Node #{node} is isolated (no edges)"
         end
       end
 

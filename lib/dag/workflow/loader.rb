@@ -12,10 +12,9 @@ module DAG
 
     class Loader
       def self.from_file(path)
-        raise ArgumentError, "File not found: #{path}" unless File.exist?(path)
-
-        File.read(path)
-          .then { |content| from_yaml(content) }
+        from_yaml(File.read(path))
+      rescue Errno::ENOENT
+        raise ArgumentError, "File not found: #{path}"
       end
 
       def self.from_yaml(yaml_string)

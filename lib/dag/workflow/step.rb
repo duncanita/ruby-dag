@@ -18,8 +18,11 @@ module DAG
         return if self.type == :ruby
 
         Ractor.make_shareable(self)
-      rescue Ractor::Error
-        # Non-shareable config; step will run sequentially
+      rescue Ractor::Error => e
+        # Non-shareable config; step will run sequentially. Surface this once
+        # per step so users with parallel: true know why a layer degraded.
+        warn "[DAG::Workflow::Step] #{self.name} (#{self.type}) is not Ractor-shareable: #{e.message}. " \
+             "This step will run sequentially even when parallel: true."
       end
 
       def ractor_safe?

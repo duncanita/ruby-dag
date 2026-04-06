@@ -6,22 +6,23 @@ module DAG
   module Workflow
     module Steps
       class RubyScript
+        DEFAULT_TIMEOUT = 60
+
         def call(step, _input)
           path = step.config[:path]
           return Failure.new(error: "No path for ruby_script step #{step.name}") unless path
+          return Failure.new(error: "Script not found: #{path}") unless File.exist?(path)
 
-          build_command(path, step.config)
-            .then { |cmd, timeout| Exec.new.call(Step.new(name: step.name, type: :exec, command: cmd, timeout: timeout), nil) }
-            .then { |result| (result.failure? && result.error.is_a?(Hash) && result.error[:stderr]&.include?("No such file")) ? Failure.new(error: "Script not found: #{path}") : result }
+          command = build_command(path, Array(step.config[:args]))
+          timeout = step.config.fetch(:timeout, DEFAULT_TIMEOUT)
+          Exec.run_command(command, timeout: timeout)
         end
 
         private
 
-        def build_command(path, config)
-          args = Array(config[:args]).map { |a| Shellwords.shellescape(a) }.join(" ")
-          timeout = config.fetch(:timeout, 60)
-          cmd = args.empty? ? "ruby #{Shellwords.shellescape(path)}" : "ruby #{Shellwords.shellescape(path)} #{args}"
-          [cmd, timeout]
+        def build_command(path, args)
+          escaped_args = args.map { |a| Shellwords.shellescape(a) }
+          ["ruby", Shellwords.shellescape(path), *escaped_args].join(" ")
         end
       end
     end

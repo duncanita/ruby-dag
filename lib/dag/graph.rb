@@ -64,6 +64,27 @@ module DAG
       self
     end
 
+    def replace_node(old_name, new_name)
+      check_frozen!
+      old_sym = old_name.to_sym
+      new_sym = new_name.to_sym
+      return self if old_sym == new_sym
+
+      raise UnknownNodeError, "Unknown node: #{old_sym}" unless @nodes.include?(old_sym)
+      raise DuplicateNodeError, "Duplicate node: #{new_sym}" if @nodes.include?(new_sym)
+
+      incoming = fetch_set(@reverse, old_sym).map { |pred| [pred, edge_metadata(pred, old_sym)] }
+      outgoing = fetch_set(@adjacency, old_sym).map { |succ| [succ, edge_metadata(old_sym, succ)] }
+
+      remove_node(old_sym)
+      add_node(new_sym)
+
+      incoming.each { |pred, meta| add_edge(pred, new_sym, **meta) }
+      outgoing.each { |succ, meta| add_edge(new_sym, succ, **meta) }
+
+      self
+    end
+
     # --- Immutable builders ---
 
     def with_node(name)
@@ -80,6 +101,10 @@ module DAG
 
     def without_edge(from, to)
       dup.tap { |g| g.remove_edge(from, to) }.freeze
+    end
+
+    def with_node_replaced(old_name, new_name)
+      dup.tap { |g| g.replace_node(old_name, new_name) }.freeze
     end
 
     # --- Freezing ---
@@ -162,29 +187,17 @@ module DAG
     end
 
     def shortest_path(from, to)
-      relax_path(from.to_sym, to.to_sym, Float::INFINITY, :<)
+      weighted_path(from, to, Float::INFINITY) { |a, b| a < b }
     end
 
     def longest_path(from, to)
-      relax_path(from.to_sym, to.to_sym, -Float::INFINITY, :>)
+      weighted_path(from, to, -Float::INFINITY) { |a, b| a > b }
     end
 
     def critical_path
       return nil if empty?
 
-      dist = Hash.new(0)
-      pred = {}
-
-      topological_sort.each do |u|
-        fetch_set(@adjacency, u).each do |v|
-          w = edge_metadata(u, v).fetch(:weight, 1)
-          if dist[u] + w > dist[v]
-            dist[v] = dist[u] + w
-            pred[v] = u
-          end
-        end
-      end
-
+      dist, pred = relax(roots, -Float::INFINITY) { |a, b| a > b }
       target = leaves.max_by { |l| dist[l] }
       {cost: dist[target], path: rebuild_path(pred, target)}
     end
@@ -267,12 +280,6 @@ module DAG
 
     private
 
-    COMPARATORS = {
-      :< => ->(a, b) { a < b },
-      :> => ->(a, b) { a > b }
-    }.freeze
-    private_constant :COMPARATORS
-
     def nodes_with_no(hash) = @nodes.select { |n| fetch_set(hash, n).empty? }
 
     def compute_edges
@@ -281,27 +288,40 @@ module DAG
       end
     end
 
-    def relax_path(from_sym, to_sym, init, cmp)
+    def weighted_path(from, to, sentinel, &better)
+      from_sym = from.to_sym
+      to_sym = to.to_sym
+      return nil unless @nodes.include?(from_sym) && @nodes.include?(to_sym)
       return {cost: 0, path: [from_sym]} if from_sym == to_sym
 
-      dist = Hash.new(init)
+      dist, pred = relax(from_sym, sentinel, &better)
+      return nil if dist[to_sym] == sentinel
+      {cost: dist[to_sym], path: rebuild_path(pred, to_sym)}
+    end
+
+    # Single- or multi-source relaxation in topological order.
+    # `sources` may be a Symbol or any Enumerable of Symbols. Each source
+    # starts with cost 0; all other nodes start at `sentinel`.
+    # `better` decides whether a candidate cost replaces the current one.
+    # Returns [dist, pred].
+    def relax(sources, sentinel, &better)
+      dist = Hash.new(sentinel)
+      Array(sources).each { |s| dist[s] = 0 }
       pred = {}
-      dist[from_sym] = 0
 
       topological_sort.each do |u|
-        next if dist[u] == init
+        next if dist[u] == sentinel
 
         fetch_set(@adjacency, u).each do |v|
-          w = edge_metadata(u, v).fetch(:weight, 1)
-          if COMPARATORS[cmp].call(dist[u] + w, dist[v])
-            dist[v] = dist[u] + w
+          candidate = dist[u] + edge_metadata(u, v).fetch(:weight, 1)
+          if better.call(candidate, dist[v])
+            dist[v] = candidate
             pred[v] = u
           end
         end
       end
 
-      return nil if dist[to_sym] == init
-      {cost: dist[to_sym], path: rebuild_path(pred, to_sym)}
+      [dist, pred]
     end
 
     def rebuild_path(pred, target)

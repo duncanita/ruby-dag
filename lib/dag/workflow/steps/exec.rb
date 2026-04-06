@@ -4,25 +4,23 @@ module DAG
   module Workflow
     module Steps
       class Exec
+        DEFAULT_TIMEOUT = 30
+        KILL_GRACE_SECONDS = 0.1
+        READ_CHUNK = 16_384
+
         def call(step, _input)
           command = step.config[:command]
           return Failure.new(error: "No command for exec step #{step.name}") unless command
 
-          run_command(command, step.config.fetch(:timeout, 30))
+          self.class.run_command(command, timeout: step.config.fetch(:timeout, DEFAULT_TIMEOUT))
         end
 
-        def run_with_env(command, env, timeout)
-          run_command(command, timeout, env: env)
-        end
-
-        private
-
-        def run_command(command, timeout, env: {})
+        # Spawns `command`, drains stdout/stderr, returns a Result.
+        # Used by Exec#call and by RubyScript (which composes a `ruby ...` command).
+        def self.run_command(command, timeout:)
           rd_out, wr_out = IO.pipe
           rd_err, wr_err = IO.pipe
-          pid = nil
-
-          pid = Process.spawn(env, command, out: wr_out, err: wr_err)
+          pid = Process.spawn(command, out: wr_out, err: wr_err)
           wr_out.close
           wr_err.close
 
@@ -46,56 +44,58 @@ module DAG
           kill_process(pid) if pid
         end
 
-        def drain_pipes(rd_out, rd_err, timeout)
-          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
-          stdout_buf = +""
-          stderr_buf = +""
-          readers = [rd_out, rd_err]
+        class << self
+          private
 
-          until readers.empty?
-            remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            return nil if remaining <= 0
+          def drain_pipes(rd_out, rd_err, timeout)
+            deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+            stdout_buf = +""
+            stderr_buf = +""
+            readers = [rd_out, rd_err]
 
-            ready = IO.select(readers, nil, nil, remaining)
-            next unless ready
+            until readers.empty?
+              remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+              return nil if remaining <= 0
 
-            ready[0].each do |io|
-              chunk = io.read_nonblock(16384, exception: false)
-              case chunk
-              when :wait_readable
-                next
-              when nil
-                readers.delete(io)
-              else
-                ((io == rd_out) ? stdout_buf : stderr_buf) << chunk
+              ready = IO.select(readers, nil, nil, remaining)
+              next unless ready
+
+              ready[0].each do |io|
+                chunk = io.read_nonblock(READ_CHUNK, exception: false)
+                case chunk
+                when :wait_readable then next
+                when nil then readers.delete(io)
+                else ((io == rd_out) ? stdout_buf : stderr_buf) << chunk
+                end
               end
             end
+
+            [stdout_buf, stderr_buf]
           end
 
-          [stdout_buf, stderr_buf]
-        end
+          def kill_process(pid)
+            Process.kill("TERM", pid)
+            return if Process.waitpid(pid, Process::WNOHANG)
 
-        def kill_process(pid)
-          Process.kill("TERM", pid)
-          Process.waitpid(pid, Process::WNOHANG) && return
-          sleep(0.1)
-          Process.kill("KILL", pid)
-          Process.waitpid(pid)
-        rescue Errno::ESRCH, Errno::ECHILD
-          # process already exited or reaped
-        end
+            sleep(KILL_GRACE_SECONDS)
+            Process.kill("KILL", pid)
+            Process.waitpid(pid)
+          rescue Errno::ESRCH, Errno::ECHILD
+            # process already exited or reaped
+          end
 
-        def build_result(command, stdout, stderr, status)
-          if status.success?
-            Success.new(value: stdout.strip)
-          else
-            Failure.new(error: {
-              code: :exec_failed,
-              exit_status: status.exitstatus,
-              command: command,
-              stdout: stdout.strip,
-              stderr: stderr.strip
-            })
+          def build_result(command, stdout, stderr, status)
+            if status.success?
+              Success.new(value: stdout.strip)
+            else
+              Failure.new(error: {
+                code: :exec_failed,
+                exit_status: status.exitstatus,
+                command: command,
+                stdout: stdout.strip,
+                stderr: stderr.strip
+              })
+            end
           end
         end
       end

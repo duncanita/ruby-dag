@@ -18,7 +18,7 @@ graph = DAG::Graph.new
 registry = DAG::Workflow::Registry.new
 registry.register(DAG::Workflow::Step.new(name: :greet, type: :exec, command: 'echo "hello world"'))
 registry.register(DAG::Workflow::Step.new(name: :shout, type: :ruby,
-  callable: ->(input) { DAG::Success(input[:greet].upcase) }))
+  callable: ->(input) { DAG::Success.new(value: input[:greet].upcase) }))
 
 definition = DAG::Workflow::Definition.new(graph: graph, registry: registry)
 
@@ -140,8 +140,8 @@ puts
 
 puts "=== Result Monad ==="
 
-success = DAG::Success("hello")
-failure = DAG::Failure("oops")
+success = DAG::Success.new(value: "hello")
+failure = DAG::Failure.new(error: "oops")
 
 puts "Success: #{success.inspect}"
 puts "Failure: #{failure.inspect}"
@@ -153,9 +153,9 @@ puts "map fail:  #{failure.map { |v| v.upcase }.inspect}"
 puts
 
 # and_then chains computations (returns a new Result)
-chained = success.and_then { |v| DAG::Success("#{v} world") }
+chained = success.and_then { |v| DAG::Success.new(value: "#{v} world") }
 puts "and_then:       #{chained.inspect}"
-puts "and_then fail:  #{failure.and_then { |v| DAG::Success("#{v} world") }.inspect}"
+puts "and_then fail:  #{failure.and_then { |v| DAG::Success.new(value: "#{v} world") }.inspect}"
 puts
 
 # map_error transforms the error inside a Failure

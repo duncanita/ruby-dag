@@ -1,12 +1,10 @@
 # frozen_string_literal: true
 
 module DAG
-  # Base module for Result types. Provides the shared interface contract.
+  # Marker module included by Success and Failure. Use `result.is_a?(DAG::Result)`
+  # to type-check a value monad. The actual contract (`success?`, `failure?`,
+  # `value`, `error`, `and_then`, `map`, `map_error`, `unwrap!`, `value_or`, `to_h`)
+  # lives on Success and Failure themselves.
   module Result
-    def success? = raise NotImplementedError
-    def failure? = raise NotImplementedError
   end
-
-  def self.Success(value = nil) = Success.new(value: value)
-  def self.Failure(error = nil) = Failure.new(error: error)
 end

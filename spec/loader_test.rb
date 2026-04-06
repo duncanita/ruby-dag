@@ -213,7 +213,7 @@ class LoaderTest < Minitest::Test
 
   def test_from_hash_accepts_ruby_type
     defn = DAG::Workflow::Loader.from_hash(
-      task: {type: :ruby, callable: ->(_) { DAG::Success("ok") }}
+      task: {type: :ruby, callable: ->(_) { DAG::Success.new(value: "ok") }}
     )
     assert_equal :ruby, defn.step(:task).type
   end

@@ -253,12 +253,6 @@ DAG::Graph::Validator.validate!(graph)
 | `file_write` | Write a file | `path` | yes |
 | `ruby` | Execute a lambda/proc | `callable` | no |
 
-### Extension Types
-
-| Type | Purpose | Required Config | Require |
-|------|---------|----------------|---------|
-| `llm` | LLM prompt via command | `prompt`, `command` | `require "dag/ext/llm"` |
-
 ### Custom Step Types
 
 Register custom step types via the plugin registry:
@@ -340,12 +334,12 @@ rescue DAG::CycleError => e # catches only cycle errors
 
 ## Result Monad
 
-Every step returns `Success(value)` or `Failure(error)`:
+Every step returns a `DAG::Success` or `DAG::Failure`:
 
 ```ruby
-DAG::Success(10)
-  .and_then { |v| DAG::Success(v * 2) }
-  .and_then { |v| v > 100 ? DAG::Failure("too big") : DAG::Success(v) }
+DAG::Success.new(value: 10)
+  .and_then { |v| DAG::Success.new(value: v * 2) }
+  .and_then { |v| v > 100 ? DAG::Failure.new(error: "too big") : DAG::Success.new(value: v) }
   .map { |v| v.to_s }
 # => Success("20")
 ```

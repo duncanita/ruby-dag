@@ -15,8 +15,7 @@ module DAG
       end
 
       def call
-        @graph.topological_layers
-          .then { |layers| execute_layers(layers) }
+        execute_layers(@graph.topological_layers)
       end
 
       private
@@ -28,14 +27,18 @@ module DAG
       def execute_layers(layers)
         outputs = {}
         trace = []
+        failure = nil
 
         layers.each_with_index do |layer, layer_index|
+          break if failure
+
           execute_layer(layer, layer_index, outputs, trace).each do |name, result|
             outputs[name] = result
-            return build_failure(name, result, outputs, trace) if result.failure?
+            failure ||= [name, result] if result.failure?
           end
         end
 
+        return build_failure(*failure, outputs, trace) if failure
         Success.new(value: {outputs: outputs, trace: trace})
       end
 
@@ -55,14 +58,14 @@ module DAG
 
       def execute_parallel(layer, layer_index, previous_outputs, trace)
         results_port = Ractor::Port.new
-
         ractors = layer.map { |name| spawn_ractor(name, previous_outputs, results_port) }
 
         results = {}
         layer.size.times do
-          name, result_hash, duration_ms = results_port.receive
+          name, result_hash, started_at, finished_at, duration_ms = results_port.receive
           result = deserialize_result(result_hash)
-          trace << build_trace_entry(name, layer_index, result, duration_ms: duration_ms)
+          trace << build_trace_entry(name, layer_index, result,
+            started_at: started_at, finished_at: finished_at, duration_ms: duration_ms)
           @callbacks.finish(name, result)
           results[name] = result
         end
@@ -79,10 +82,11 @@ module DAG
         @callbacks.start(name, step)
 
         Ractor.new(name, step, input, results_port, executor_class) do |n, s, inp, out, klass|
-          t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           result = klass.new.call(s, inp)
-          elapsed = ((Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0) * 1000).round(2)
-          out.send([n, result.to_h, elapsed])
+          finished_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          duration_ms = ((finished_at - started_at) * 1000).round(2)
+          out.send([n, result.to_h, started_at, finished_at, duration_ms])
         end
       end
 
@@ -103,7 +107,8 @@ module DAG
         if run_if && !run_if.call(input)
           result = Success.new(value: nil)
           trace << build_trace_entry(name, layer_index, result,
-            duration_ms: 0, input_keys: deps.sort, status: :skipped)
+            started_at: nil, finished_at: nil, duration_ms: 0,
+            input_keys: deps.sort, status: :skipped)
           @callbacks.finish(name, result)
           return result
         end
@@ -123,14 +128,13 @@ module DAG
         result
       end
 
-      def build_trace_entry(name, layer_index, result, duration_ms:, started_at: nil, finished_at: nil, input_keys: nil, status: nil)
-        input_keys ||= @graph.predecessors(name).to_a.sort
+      def build_trace_entry(name, layer_index, result, started_at:, finished_at:, duration_ms:, input_keys: nil, status: nil)
         TraceEntry.new(
           name: name, layer: layer_index,
           started_at: started_at, finished_at: finished_at,
           duration_ms: duration_ms,
           status: status || (result.success? ? :success : :failure),
-          input_keys: input_keys
+          input_keys: input_keys || @graph.predecessors(name).to_a.sort
         )
       end
 

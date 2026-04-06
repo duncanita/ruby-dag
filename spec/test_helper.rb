@@ -20,7 +20,7 @@ module TestHelpers
   #   build_test_workflow(
   #     a: {},
   #     b: {depends_on: [:a]},
-  #     c: {type: :ruby, callable: ->(_) { DAG::Success("ok") }}
+  #     c: {type: :ruby, callable: ->(_) { DAG::Success.new(value: "ok") }}
   #   )
   def build_test_workflow(**node_defs)
     graph = DAG::Graph.new
