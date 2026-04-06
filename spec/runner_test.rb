@@ -224,6 +224,18 @@ class RunnerTest < Minitest::Test
     assert_match(/b/, error.message)
   end
 
+  def test_runner_degrades_unsafe_layer_to_sequential
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo safe"))
+    registry.register(DAG::Workflow::Step.new(name: :b, type: :ruby, callable: ->(input) { DAG::Success.new(value: "from ruby") }))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: true).call
+    assert result.success?
+    assert_equal "safe", result.value[:outputs][:a].value
+    assert_equal "from ruby", result.value[:outputs][:b].value
+  end
+
   def test_empty_graph_succeeds
     graph = DAG::Graph.new
     registry = DAG::Workflow::Registry.new

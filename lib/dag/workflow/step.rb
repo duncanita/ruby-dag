@@ -18,8 +18,12 @@ module DAG
         return if self.type == :ruby
 
         Ractor.make_shareable(self)
-      rescue Ractor::Error => e
-        raise ParallelSafetyError, "Step #{name} contains non-shareable values: #{e.message}. Parallel execution requires JSON-like config values."
+      rescue Ractor::Error
+        # Non-shareable config; step will run sequentially
+      end
+
+      def ractor_safe?
+        Ractor.shareable?(self)
       end
 
       def to_s = "Step(#{name}:#{type})"

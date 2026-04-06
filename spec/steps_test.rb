@@ -189,12 +189,20 @@ class StepsTest < Minitest::Test
     assert Ractor.shareable?(step)
   end
 
-  def test_step_with_non_shareable_config_raises
+  def test_step_with_non_shareable_config_is_not_ractor_safe
     io = StringIO.new
-    error = assert_raises(DAG::ParallelSafetyError) do
-      DAG::Workflow::Step.new(name: :test, type: :exec, command: io)
-    end
-    assert_match(/non-shareable/, error.message)
+    step = DAG::Workflow::Step.new(name: :test, type: :exec, command: io)
+    refute step.ractor_safe?
+  end
+
+  def test_exec_step_is_ractor_safe
+    step = DAG::Workflow::Step.new(name: :test, type: :exec, command: "echo hi")
+    assert step.ractor_safe?
+  end
+
+  def test_ruby_step_is_not_ractor_safe
+    step = DAG::Workflow::Step.new(name: :test, type: :ruby, callable: -> { "hi" })
+    refute step.ractor_safe?
   end
 
   # --- Unknown type ---

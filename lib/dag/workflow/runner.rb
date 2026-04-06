@@ -52,7 +52,7 @@ module DAG
       end
 
       def execute_layer(layer, layer_index, previous_outputs, trace)
-        if @parallel && layer.size > 1
+        if @parallel && layer.size > 1 && layer.all? { |name| @registry[name].ractor_safe? }
           execute_parallel(layer, layer_index, previous_outputs, trace)
         else
           execute_sequential(layer, layer_index, previous_outputs, trace)
