@@ -644,6 +644,31 @@ class GraphTest < Minitest::Test
     assert_equal({weight: 2}, sub.edge_metadata(:a, :b))
   end
 
+  # --- Frozen graph caching ---
+
+  def test_frozen_graph_caches_topological_layers
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.freeze
+    assert_same graph.topological_layers, graph.topological_layers
+  end
+
+  def test_frozen_graph_caches_roots
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.freeze
+    assert_same graph.roots, graph.roots
+  end
+
+  def test_frozen_graph_caches_leaves
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.freeze
+    assert_same graph.leaves, graph.leaves
+  end
+
+  def test_mutable_graph_does_not_cache
+    graph = build_graph([:a, :b], [[:a, :b]])
+    refute_same graph.topological_layers, graph.topological_layers
+  end
+
   def test_edge_metadata_removed_on_remove_edge
     graph = build_graph([:a, :b], [])
     graph.add_edge(:a, :b, weight: 5)

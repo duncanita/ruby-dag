@@ -105,6 +105,9 @@ module DAG
       @reverse.each_value(&:freeze)
       @reverse.freeze
       @edge_metadata.freeze
+      @cached_layers = compute_topological_layers.freeze
+      @cached_roots = compute_roots.freeze
+      @cached_leaves = compute_leaves.freeze
       super
     end
 
@@ -143,8 +146,8 @@ module DAG
     def successors(name) = fetch_set(@adjacency, name.to_sym).dup
     def predecessors(name) = fetch_set(@reverse, name.to_sym).dup
 
-    def roots = @nodes.select { |n| fetch_set(@reverse, n).empty? }
-    def leaves = @nodes.select { |n| fetch_set(@adjacency, n).empty? }
+    def roots = frozen? ? @cached_roots : compute_roots
+    def leaves = frozen? ? @cached_leaves : compute_leaves
 
     # --- Transitive queries ---
 
@@ -171,29 +174,9 @@ module DAG
     # Kahn's algorithm: topological sort into parallel layers.
     # Returns array of arrays — nodes in each layer can run concurrently.
     def topological_layers
-      in_degree = Hash.new(0)
-      @nodes.each { |n| fetch_set(@adjacency, n).each { |succ| in_degree[succ] += 1 } }
+      return @cached_layers if frozen?
 
-      queue = @nodes.select { |n| in_degree[n] == 0 }.sort
-      processed = 0
-      layers = []
-
-      until queue.empty?
-        layers << queue
-        next_queue = []
-        queue.each do |n|
-          processed += 1
-          fetch_set(@adjacency, n).each do |succ|
-            in_degree[succ] -= 1
-            next_queue << succ if in_degree[succ] == 0
-          end
-        end
-        queue = next_queue.sort
-      end
-
-      raise CycleError, "Graph contains a cycle" if processed < @nodes.size
-
-      layers
+      compute_topological_layers
     end
 
     # Flat deterministic topological ordering.
@@ -261,6 +244,35 @@ module DAG
     alias_method :to_s, :inspect
 
     private
+
+    def compute_roots = @nodes.select { |n| fetch_set(@reverse, n).empty? }
+    def compute_leaves = @nodes.select { |n| fetch_set(@adjacency, n).empty? }
+
+    def compute_topological_layers
+      in_degree = Hash.new(0)
+      @nodes.each { |n| fetch_set(@adjacency, n).each { |succ| in_degree[succ] += 1 } }
+
+      queue = @nodes.select { |n| in_degree[n] == 0 }.sort
+      processed = 0
+      layers = []
+
+      until queue.empty?
+        layers << queue
+        next_queue = []
+        queue.each do |n|
+          processed += 1
+          fetch_set(@adjacency, n).each do |succ|
+            in_degree[succ] -= 1
+            next_queue << succ if in_degree[succ] == 0
+          end
+        end
+        queue = next_queue.sort
+      end
+
+      raise CycleError, "Graph contains a cycle" if processed < @nodes.size
+
+      layers
+    end
 
     def initialize_dup(orig)
       super
