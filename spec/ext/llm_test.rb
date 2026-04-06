@@ -38,11 +38,11 @@ class LLMExtensionTest < Minitest::Test
   end
 
   def test_llm_registered_after_require
-    assert DAG::Workflow::Steps::REGISTRY.key?(:llm)
+    assert DAG::Workflow::Steps.registered?(:llm)
   end
 
   def test_llm_in_yaml_types_after_require
-    assert_includes DAG::Workflow::Loader::YAML_TYPES, :llm
+    assert_includes DAG::Workflow::Steps.yaml_types, :llm
   end
 
   def test_loads_llm_from_yaml

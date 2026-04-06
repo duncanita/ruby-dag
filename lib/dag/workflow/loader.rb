@@ -11,8 +11,6 @@ module DAG
     #   definition.registry  # => DAG::Workflow::Registry
 
     class Loader
-      YAML_TYPES = %i[exec ruby_script file_read file_write]
-      ALL_TYPES = YAML_TYPES + %i[ruby]
 
       def self.from_file(path)
         raise ArgumentError, "File not found: #{path}" unless File.exist?(path)
@@ -28,7 +26,7 @@ module DAG
         entries = data["nodes"].map do |name, config|
           config = config.dup
           type = config.delete("type") || raise(ArgumentError, "Node '#{name}' missing 'type'")
-          validate_type!(name, type.to_sym, valid_types: YAML_TYPES)
+          validate_type!(name, type.to_sym, valid_types: Steps.yaml_types)
 
           depends_on = Array(config.delete("depends_on")).map { |d| d.to_sym }
           [name.to_sym, {type: type.to_sym, depends_on: depends_on, **config.transform_keys(&:to_sym)}]
@@ -73,10 +71,10 @@ module DAG
         Definition.new(graph: graph, registry: registry)
       end
 
-      def self.validate_type!(name, type, valid_types: ALL_TYPES)
+      def self.validate_type!(name, type, valid_types: Steps.types)
         return if valid_types.include?(type)
 
-        if ALL_TYPES.include?(type) && !valid_types.include?(type)
+        if Steps.types.include?(type) && !valid_types.include?(type)
           raise ArgumentError, "Node '#{name}' has type '#{type}' which is not supported in YAML. Use from_hash for programmatic step types."
         end
 
