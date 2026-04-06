@@ -240,6 +240,29 @@ module DAG
       {cost: dist[to_sym], path: reconstruct_path(pred, from_sym, to_sym)}
     end
 
+    # Critical path: longest weighted path from any root to any leaf. O(V+E).
+    # Returns {cost:, path:} or nil for empty graphs.
+    def critical_path
+      return nil if empty?
+
+      dist = Hash.new(0)
+      pred = {}
+
+      topological_sort.each do |u|
+        fetch_set(@adjacency, u).each do |v|
+          w = edge_metadata(u, v).fetch(:weight, 1)
+          if dist[u] + w > dist[v]
+            dist[v] = dist[u] + w
+            pred[v] = u
+          end
+        end
+      end
+
+      target = leaves.max_by { |l| dist[l] }
+      path = reconstruct_path(pred, nil, target)
+      {cost: dist[target], path: path}
+    end
+
     # --- Iteration ---
 
     def each(&block)

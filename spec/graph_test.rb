@@ -727,6 +727,47 @@ class GraphTest < Minitest::Test
     assert_nil graph.longest_path(:a, :b)
   end
 
+  # --- Critical path ---
+
+  def test_critical_path_linear_chain
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+    result = graph.critical_path
+    assert_equal({cost: 2, path: [:a, :b, :c]}, result)
+  end
+
+  def test_critical_path_diamond_picks_longest_branch
+    graph = build_graph([:a, :b, :c, :d], [])
+    graph.add_edge(:a, :b, weight: 1)
+    graph.add_edge(:a, :c, weight: 10)
+    graph.add_edge(:b, :d, weight: 1)
+    graph.add_edge(:c, :d, weight: 1)
+    result = graph.critical_path
+    assert_equal 11, result[:cost]
+    assert_equal [:a, :c, :d], result[:path]
+  end
+
+  def test_critical_path_single_node
+    graph = build_graph([:a], [])
+    result = graph.critical_path
+    assert_equal({cost: 0, path: [:a]}, result)
+  end
+
+  def test_critical_path_empty_graph
+    graph = DAG::Graph.new
+    assert_nil graph.critical_path
+  end
+
+  def test_critical_path_parallel_branches
+    graph = build_graph([:a, :b, :c, :d, :e], [])
+    graph.add_edge(:a, :b, weight: 5)
+    graph.add_edge(:a, :c, weight: 2)
+    graph.add_edge(:b, :d, weight: 3)
+    graph.add_edge(:c, :e, weight: 1)
+    result = graph.critical_path
+    assert_equal 8, result[:cost]
+    assert_equal [:a, :b, :d], result[:path]
+  end
+
   # --- Empty graph ---
 
   def test_empty_graph
