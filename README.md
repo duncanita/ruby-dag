@@ -4,7 +4,7 @@ Lightweight DAG workflow runner in pure Ruby. Zero runtime dependencies.
 
 Define multi-step workflows as YAML or build them programmatically. Automatic dependency resolution and parallel execution via Ractors.
 
-**Version:** 0.1.0
+**Version:** 0.2.0 | **License:** MIT | **Ruby:** >= 4.0
 
 ## Install
 
@@ -14,14 +14,12 @@ cd ruby-dag
 bundle install
 ```
 
-Requires Ruby 4.0+.
-
 ## Architecture
 
 Two layers, loosely coupled:
 
-- **Graph** (`DAG::Graph`) -- pure DAG data structure. Nodes are symbols, edges are first-class. Enforces acyclicity. No workflow concepts.
-- **Workflow** (`DAG::Workflow::*`) -- steps, types, YAML loading/dumping, parallel execution. Built on top of Graph.
+- **Graph** (`DAG::Graph`) -- pure DAG data structure. Nodes are symbols, edges carry optional metadata. Enforces acyclicity. Includes `Enumerable`. No workflow concepts.
+- **Workflow** (`DAG::Workflow::*`) -- steps, types, YAML loading/dumping, parallel execution with capability-based degradation. Built on top of Graph.
 
 You can use the Graph layer alone if you just need a DAG.
 
@@ -123,7 +121,7 @@ result = DAG::Workflow::Runner.new(definition.graph, definition.registry).call
 
 ## Graph API
 
-Pure DAG with no workflow awareness.
+Pure DAG with no workflow awareness. Includes `Enumerable` (iterates over nodes).
 
 ```ruby
 # Build mutable
@@ -131,7 +129,7 @@ graph = DAG::Graph.new
 graph.add_node(:a)
 graph.add_node(:b)
 graph.add_edge(:a, :b)
-graph.freeze
+graph.freeze  # caches topological_layers, roots, leaves
 
 # Or use the Builder
 graph = DAG::Graph::Builder.build do |b|
@@ -162,28 +160,71 @@ graph.empty?             # => false
 graph.node?(:a)          # => true
 graph.edge?(:a, :b)      # => true
 graph.nodes              # => Set[:a, :b, :c]
-graph.edges              # => Set[Edge(a -> b), ...]
+graph.edges              # => Set[Edge(a -> b), ...]  (lazy, computed on each call)
+graph.incoming_edges(:c) # => [Edge(b -> c)]
 graph.successors(:a)     # => Set[:b]
 graph.predecessors(:b)   # => Set[:a]
 graph.ancestors(:c)      # => Set[:a, :b]
 graph.descendants(:a)    # => Set[:b, :c]
-graph.roots              # => [:a]
-graph.leaves             # => [:c]
+graph.roots              # => [:a]         (cached if frozen)
+graph.leaves             # => [:c]         (cached if frozen)
 graph.path?(:a, :c)      # => true
 graph.indegree(:b)       # => 1
 graph.outdegree(:a)      # => 1
 graph.subgraph([:a, :b]) # => new Graph with only those nodes
-graph.to_h               # => {nodes: [:a, :b, :c], edges: [{from: :a, to: :b}, ...]}
 
-graph.each_node { |n| puts n }
-graph.each_edge { |e| puts "#{e.from} → #{e.to}" }
+# Enumerable (iterates over nodes)
+graph.map { |n| n.upcase }
+graph.select { |n| graph.indegree(n) == 0 }
+graph.count              # => 3
+graph.include?(:a)       # => true
+
+# Serialization
+graph.to_h               # => {nodes: [:a, :b, :c], edges: [{from: :a, to: :b}, ...]}
+graph.to_dot             # => "digraph dag {\n  a;\n  b;\n  a -> b;\n}"
+graph.to_dot(name: "my_dag")
 ```
 
 ### Topological Sort
 
 ```ruby
-graph.topological_layers # => [[:a], [:b], [:c]]  -- parallel layers
+graph.topological_layers # => [[:a], [:b], [:c]]  -- parallel layers (cached if frozen)
 graph.topological_sort   # => [:a, :b, :c]        -- flat order
+```
+
+### Edge Metadata
+
+Edges carry optional metadata (default `{}`). Useful for weighted path analysis.
+
+```ruby
+graph.add_edge(:a, :b, weight: 5, label: "critical")
+graph.edge_metadata(:a, :b)  # => {weight: 5, label: "critical"}
+
+edge = graph.edges.first
+edge.metadata  # => {weight: 5, label: "critical"}
+edge.weight    # => 5  (convenience, defaults to 1)
+```
+
+In YAML, use expanded `depends_on` for metadata:
+
+```yaml
+nodes:
+  parse:
+    type: exec
+    command: "parse data"
+    depends_on:
+      - from: fetch
+        weight: 3
+```
+
+### Path Analysis
+
+All path algorithms are O(V+E) using a single topological pass with edge weights.
+
+```ruby
+graph.shortest_path(:a, :d) # => {cost: 2, path: [:a, :b, :d]} or nil
+graph.longest_path(:a, :d)  # => {cost: 11, path: [:a, :c, :d]} or nil
+graph.critical_path         # => {cost: 8, path: [:a, :b, :d]}  (longest root-to-leaf)
 ```
 
 ### Validation
@@ -204,13 +245,13 @@ DAG::Graph::Validator.validate!(graph)
 
 ### Core Types
 
-| Type | Purpose | Required Config |
-|------|---------|----------------|
-| `exec` | Run a shell command | `command` |
-| `ruby_script` | Run a Ruby script file | `path` |
-| `file_read` | Read a file | `path` |
-| `file_write` | Write a file | `path` |
-| `ruby` | Execute a lambda/proc (programmatic only, not YAML-serializable) | `callable` |
+| Type | Purpose | Required Config | YAML-safe |
+|------|---------|----------------|-----------|
+| `exec` | Run a shell command | `command` | yes |
+| `ruby_script` | Run a Ruby script file | `path` | yes |
+| `file_read` | Read a file | `path` | yes |
+| `file_write` | Write a file | `path` | yes |
+| `ruby` | Execute a lambda/proc | `callable` | no |
 
 ### Extension Types
 
@@ -218,29 +259,84 @@ DAG::Graph::Validator.validate!(graph)
 |------|---------|----------------|---------|
 | `llm` | LLM prompt via command | `prompt`, `command` | `require "dag/ext/llm"` |
 
+### Custom Step Types
+
+Register custom step types via the plugin registry:
+
 ```ruby
-require "dag/ext/llm"  # registers :llm step type and adds "llm" to YAML types
+DAG::Workflow::Steps.register(:my_type, MyStepClass, yaml_safe: true)
+DAG::Workflow::Steps.freeze_registry!  # optional: locks registry, makes Ractor-shareable
 ```
+
+## Ractor Parallel Execution
+
+Steps in the same topological layer run in parallel via Ractors when `parallel: true` (default).
+
+The Runner checks `Step#ractor_safe?` for each layer. If any step in a layer is not Ractor-safe (e.g., `:ruby` type or non-shareable config), that layer degrades to sequential execution automatically.
+
+```ruby
+step = DAG::Workflow::Step.new(name: :fetch, type: :exec, command: "echo hi")
+step.ractor_safe?  # => true
+
+step = DAG::Workflow::Step.new(name: :compute, type: :ruby, callable: -> { 42 })
+step.ractor_safe?  # => false (lambdas can't be shared across Ractors)
+```
+
+## Conditional Execution
+
+Steps can have a `run_if` condition. When the condition returns false, the step is skipped with `Success(nil)` output and `:skipped` trace status.
+
+```ruby
+DAG::Workflow::Step.new(
+  name: :deploy,
+  type: :exec,
+  command: "deploy.sh",
+  run_if: ->(inputs) { inputs[:test]&.include?("PASS") }
+)
+```
+
+Downstream steps receive `nil` for skipped dependencies.
 
 ## Dependencies
 
 Nodes declare dependencies with `depends_on`. The runner:
 
-1. Computes execution layers via Kahn's topological sort
-2. Runs nodes in the same layer in parallel via Ractors
-3. Passes output from completed nodes as input to dependents
-4. Stops the workflow on first failure
+1. Computes execution layers via Kahn's topological sort (O(V+E))
+2. Checks Ractor safety per layer, degrades to sequential if needed
+3. Runs nodes in the same layer in parallel via Ractors
+4. Checks `run_if` conditions before execution
+5. Passes output from completed nodes as input to dependents
+6. Stops the workflow on first failure
 
 Step inputs are **always** hashes keyed by dependency step name (e.g., `{ fetch: "data" }`). Zero-dependency steps receive `{}`.
 
 ## Execution Contract
 
-- Step inputs are always hashes keyed by dependency step name (e.g., `{ fetch: "data" }`). Zero-dependency steps receive `{}`.
-- Step outputs should be JSON-like values (strings, numbers, booleans, arrays, hashes of the same) when using parallel execution. Arbitrary Ruby objects are only guaranteed to work in sequential mode (`parallel: false`).
+- Step inputs are always hashes keyed by dependency step name. Zero-dependency steps receive `{}`.
+- Step outputs should be JSON-like values (strings, numbers, booleans, arrays, hashes) when using parallel execution. Arbitrary Ruby objects work only in sequential mode.
 - Callback ordering is per-step but not globally deterministic across nodes in the same parallel layer.
-- On first step failure, the workflow halts. Completed step outputs and the failure details are returned in the result.
-- Successful results include an execution trace: `result.value[:trace]` is an array of `TraceEntry` with `:name`, `:layer`, `:duration_ms`, and `:status`.
+- On first step failure, the workflow halts. Completed outputs and failure details are returned.
+- Successful results include an execution trace: `result.value[:trace]` is an array of `TraceEntry` with `:name`, `:layer`, `:duration_ms`, `:status` (`:success`, `:failure`, or `:skipped`).
 - Failed results include a partial trace: `result.error[:trace]`.
+
+## Error Handling
+
+All errors inherit from `DAG::Error < StandardError`:
+
+| Error | When raised |
+|-------|-------------|
+| `CycleError` | `add_edge` would create a cycle |
+| `DuplicateNodeError` | `add_node` with existing name |
+| `UnknownNodeError` | Reference to non-existent node or edge |
+| `DuplicateEdgeError` | Adding a duplicate edge |
+| `ValidationError` | Structural validation failure (has `.errors` array) |
+| `SerializationError` | Dumper encounters non-serializable step (`:ruby`) |
+| `ParallelSafetyError` | Ractor shareability violation |
+
+```ruby
+rescue DAG::Error => e     # catches all DAG errors
+rescue DAG::CycleError => e # catches only cycle errors
+```
 
 ## Result Monad
 
@@ -257,8 +353,8 @@ DAG::Success(10)
 Exec step failures return structured error hashes:
 
 ```ruby
-# { code: :exec_failed, exit_status: 1, command: "...", stdout: "...", stderr: "...", timeout: false }
-# { code: :exec_timeout, command: "...", timeout_seconds: 30, timeout: true }
+# { code: :exec_failed, exit_status: 1, command: "...", stdout: "...", stderr: "..." }
+# { code: :exec_timeout, command: "...", timeout_seconds: 30 }
 ```
 
 ## Callbacks
@@ -270,16 +366,52 @@ runner = DAG::Workflow::Runner.new(graph, registry,
 )
 ```
 
+## API Reference
+
+### Graph Methods
+
+| Method | Args | Return | Complexity |
+|--------|------|--------|------------|
+| `add_node` | `name` | `self` | O(1) |
+| `add_edge` | `from, to, **metadata` | `self` | O(V+E) (cycle check) |
+| `remove_node` | `name` | `self` | O(deg) |
+| `remove_edge` | `from, to` | `self` | O(1) |
+| `with_node` | `name` | frozen Graph | O(V+E) |
+| `with_edge` | `from, to, **metadata` | frozen Graph | O(V+E) |
+| `without_node` | `name` | frozen Graph | O(V+E) |
+| `without_edge` | `from, to` | frozen Graph | O(V+E) |
+| `node?` | `name` | Boolean | O(1) |
+| `edge?` | `from, to` | Boolean | O(1) |
+| `edges` | -- | Set[Edge] | O(E) |
+| `incoming_edges` | `node` | Array[Edge] | O(deg) |
+| `edge_metadata` | `from, to` | Hash | O(1) |
+| `successors` | `name` | Set | O(1) |
+| `predecessors` | `name` | Set | O(1) |
+| `roots` | -- | Array | O(V) / cached |
+| `leaves` | -- | Array | O(V) / cached |
+| `ancestors` | `name` | Set | O(V+E) |
+| `descendants` | `name` | Set | O(V+E) |
+| `path?` | `from, to` | Boolean | O(V+E) |
+| `topological_layers` | -- | Array[Array] | O(V+E) / cached |
+| `topological_sort` | -- | Array | O(V+E) / cached |
+| `shortest_path` | `from, to` | Hash or nil | O(V+E) |
+| `longest_path` | `from, to` | Hash or nil | O(V+E) |
+| `critical_path` | -- | Hash or nil | O(V+E) |
+| `subgraph` | `node_names` | Graph | O(V+E) |
+| `to_dot` | `name:` | String | O(V+E) |
+| `to_h` | -- | Hash | O(V+E) |
+
+"cached" means the result is computed once at `freeze` and returned on subsequent calls.
+
 ## Development
 
 ```bash
 bundle exec rake          # test + lint
 bundle exec rake test     # tests only
-bundle exec rake coverage # tests with coverage report
 bundle exec standardrb    # lint
 bundle exec standardrb --fix  # auto-fix
 ```
 
 ## License
 
-[AGPLv3](LICENSE)
+[MIT](LICENSE)
