@@ -19,19 +19,19 @@ class GraphTest < Minitest::Test
   end
 
   def test_rejects_duplicate_node
-    assert_raises(ArgumentError) do
+    assert_raises(DAG::DuplicateNodeError) do
       DAG::Graph.new.add_node(:a).add_node(:a)
     end
   end
 
   def test_rejects_edge_to_unknown_node
-    assert_raises(ArgumentError) do
+    assert_raises(DAG::UnknownNodeError) do
       DAG::Graph.new.add_node(:a).add_edge(:a, :missing)
     end
   end
 
   def test_rejects_edge_from_unknown_node
-    assert_raises(ArgumentError) do
+    assert_raises(DAG::UnknownNodeError) do
       DAG::Graph.new.add_node(:a).add_edge(:missing, :a)
     end
   end
@@ -469,7 +469,7 @@ class GraphTest < Minitest::Test
 
   def test_remove_node_unknown_raises
     graph = build_graph([:a], [])
-    assert_raises(ArgumentError) { graph.remove_node(:missing) }
+    assert_raises(DAG::UnknownNodeError) { graph.remove_node(:missing) }
   end
 
   def test_remove_edge_keeps_both_nodes
@@ -483,7 +483,7 @@ class GraphTest < Minitest::Test
 
   def test_remove_edge_unknown_raises
     graph = build_graph([:a, :b], [])
-    assert_raises(ArgumentError) { graph.remove_edge(:a, :b) }
+    assert_raises(DAG::UnknownNodeError) { graph.remove_edge(:a, :b) }
   end
 
   def test_frozen_graph_rejects_remove_node
@@ -537,7 +537,7 @@ class GraphTest < Minitest::Test
 
   def test_without_node_unknown_raises
     graph = build_graph([:a], [])
-    assert_raises(ArgumentError) { graph.without_node(:missing) }
+    assert_raises(DAG::UnknownNodeError) { graph.without_node(:missing) }
   end
 
   def test_without_edge_returns_new_frozen_graph
@@ -560,7 +560,7 @@ class GraphTest < Minitest::Test
 
   def test_without_edge_unknown_raises
     graph = build_graph([:a, :b], [])
-    assert_raises(ArgumentError) { graph.without_edge(:a, :b) }
+    assert_raises(DAG::UnknownNodeError) { graph.without_edge(:a, :b) }
   end
 
   # --- Empty graph ---

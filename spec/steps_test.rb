@@ -185,7 +185,7 @@ class StepsTest < Minitest::Test
 
   def test_step_with_non_shareable_config_raises
     io = StringIO.new
-    error = assert_raises(ArgumentError) do
+    error = assert_raises(DAG::ParallelSafetyError) do
       DAG::Workflow::Step.new(name: :test, type: :exec, command: io)
     end
     assert_match(/non-shareable/, error.message)

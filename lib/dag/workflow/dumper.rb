@@ -26,7 +26,7 @@ module DAG
         data = {}
         @graph.topological_sort.each do |name|
           step = @registry[name]
-          raise ArgumentError, "Step #{name} (type: #{step.type}) is not YAML-serializable" if NON_SERIALIZABLE_TYPES.include?(step.type)
+          raise SerializationError, "Step #{name} (type: #{step.type}) is not YAML-serializable" if NON_SERIALIZABLE_TYPES.include?(step.type)
 
           data[name.to_s] = build_step(name, step)
         end

@@ -48,7 +48,7 @@ class DumperTest < Minitest::Test
   def test_raises_on_ruby_type
     defn = build_test_workflow(bad: {type: :ruby, callable: -> { "nope" }})
 
-    assert_raises(ArgumentError) { DAG::Workflow::Dumper.to_yaml(defn) }
+    assert_raises(DAG::SerializationError) { DAG::Workflow::Dumper.to_yaml(defn) }
   end
 
   def test_round_trip

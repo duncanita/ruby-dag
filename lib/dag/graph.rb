@@ -29,7 +29,7 @@ module DAG
     def add_node(name)
       check_frozen!
       sym = name.to_sym
-      raise ArgumentError, "Duplicate node: #{sym}" if @nodes.include?(sym)
+      raise DuplicateNodeError, "Duplicate node: #{sym}" if @nodes.include?(sym)
 
       @nodes << sym
       self
@@ -57,7 +57,7 @@ module DAG
     def remove_node(name)
       check_frozen!
       sym = name.to_sym
-      raise ArgumentError, "Unknown node: #{sym}" unless @nodes.include?(sym)
+      raise UnknownNodeError, "Unknown node: #{sym}" unless @nodes.include?(sym)
 
       fetch_set(@adjacency, sym).dup.each { |to| remove_edge_internal(sym, to) }
       fetch_set(@reverse, sym).dup.each { |from| remove_edge_internal(from, sym) }
@@ -72,7 +72,7 @@ module DAG
       check_frozen!
       from_sym = from.to_sym
       to_sym = to.to_sym
-      raise ArgumentError, "Unknown edge: #{from_sym} → #{to_sym}" unless @edges.include?(Edge.new(from: from_sym, to: to_sym))
+      raise UnknownNodeError, "Unknown edge: #{from_sym} → #{to_sym}" unless @edges.include?(Edge.new(from: from_sym, to: to_sym))
 
       remove_edge_internal(from_sym, to_sym)
       self
@@ -272,8 +272,8 @@ module DAG
     end
 
     def validate_edge_nodes!(from, to)
-      raise ArgumentError, "Unknown node: #{from}" unless @nodes.include?(from)
-      raise ArgumentError, "Unknown node: #{to}" unless @nodes.include?(to)
+      raise UnknownNodeError, "Unknown node: #{from}" unless @nodes.include?(from)
+      raise UnknownNodeError, "Unknown node: #{to}" unless @nodes.include?(to)
     end
 
     def reachable?(from, to)

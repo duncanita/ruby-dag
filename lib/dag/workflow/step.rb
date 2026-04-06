@@ -19,7 +19,7 @@ module DAG
 
         Ractor.make_shareable(self)
       rescue Ractor::Error => e
-        raise ArgumentError, "Step #{name} contains non-shareable values: #{e.message}. Parallel execution requires JSON-like config values."
+        raise ParallelSafetyError, "Step #{name} contains non-shareable values: #{e.message}. Parallel execution requires JSON-like config values."
       end
 
       def to_s = "Step(#{name}:#{type})"

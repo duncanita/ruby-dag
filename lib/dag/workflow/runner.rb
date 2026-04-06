@@ -151,7 +151,7 @@ module DAG
         missing = graph.nodes.reject { |node| registry.key?(node) }
         return if missing.empty?
 
-        raise ArgumentError, "Missing steps for graph nodes: #{missing.sort.join(", ")}"
+        raise ValidationError, "Missing steps for graph nodes: #{missing.sort.join(", ")}"
       end
 
       def build_failure(name, result, outputs, trace)

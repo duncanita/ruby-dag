@@ -39,7 +39,7 @@ class GraphBuilderTest < Minitest::Test
   # --- Validation errors during build ---
 
   def test_rejects_duplicate_node
-    assert_raises(ArgumentError) do
+    assert_raises(DAG::DuplicateNodeError) do
       DAG::Graph::Builder.new
         .add_node(:a)
         .add_node(:a)
@@ -65,7 +65,7 @@ class GraphBuilderTest < Minitest::Test
   end
 
   def test_rejects_unknown_edge_node
-    assert_raises(ArgumentError) do
+    assert_raises(DAG::UnknownNodeError) do
       DAG::Graph::Builder.new
         .add_node(:a)
         .add_edge(:a, :missing)

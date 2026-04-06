@@ -218,7 +218,7 @@ class RunnerTest < Minitest::Test
     registry = DAG::Workflow::Registry.new
     registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo a"))
 
-    error = assert_raises(ArgumentError) do
+    error = assert_raises(DAG::ValidationError) do
       DAG::Workflow::Runner.new(graph, registry, parallel: false)
     end
     assert_match(/b/, error.message)
