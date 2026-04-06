@@ -23,16 +23,11 @@ class StepsTest < Minitest::Test
   end
 
   def test_exec_returns_structured_failure_on_timeout
-    # capture3 IO threads warn on stderr when killed mid-read by timeout
-    old_report = Thread.report_on_exception
-    Thread.report_on_exception = false
     result = run_step(:exec, command: "sleep 10", timeout: 1)
     assert result.failure?
     assert_equal :exec_timeout, result.error[:code]
     assert_equal "sleep 10", result.error[:command]
     assert_equal 1, result.error[:timeout_seconds]
-  ensure
-    Thread.report_on_exception = old_report
   end
 
   def test_exec_returns_failure_on_nil_command

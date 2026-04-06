@@ -4,6 +4,11 @@ module DAG
   class Graph
     include Enumerable
 
+    COMPARATORS = {
+      :< => ->(a, b) { a < b },
+      :> => ->(a, b) { a > b }
+    }.freeze
+
     attr_reader :nodes
 
     def initialize
@@ -287,7 +292,7 @@ module DAG
 
         fetch_set(@adjacency, u).each do |v|
           w = edge_metadata(u, v).fetch(:weight, 1)
-          if (dist[u] + w).send(cmp, dist[v])
+          if COMPARATORS[cmp].call(dist[u] + w, dist[v])
             dist[v] = dist[u] + w
             pred[v] = u
           end

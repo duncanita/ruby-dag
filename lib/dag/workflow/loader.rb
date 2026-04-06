@@ -19,7 +19,7 @@ module DAG
       end
 
       def self.from_yaml(yaml_string)
-        data = YAML.safe_load(yaml_string, permitted_classes: [Symbol])
+        data = YAML.safe_load(yaml_string)
         raise ArgumentError, "YAML must contain 'nodes' key" unless data&.key?("nodes")
 
         entries = data["nodes"].map do |name, config|
