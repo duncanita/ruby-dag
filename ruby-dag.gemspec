@@ -5,7 +5,7 @@ require_relative "lib/dag/version"
 Gem::Specification.new do |spec|
   spec.name = "ruby-dag"
   spec.version = DAG::VERSION
-  spec.authors = ["Riccardo Lucatuorto"]
+  spec.authors = ["Riccardo Lucatuorto (GnuDuncan)"]
   spec.summary = "Lightweight DAG workflow runner in pure Ruby"
   spec.description = "Define multi-step workflows as YAML or build them programmatically. Automatic dependency resolution and parallel execution via Ractors. Zero runtime dependencies."
   spec.homepage = "https://github.com/duncanita/ruby-dag"
