@@ -4,11 +4,6 @@ module DAG
   class Graph
     include Enumerable
 
-    COMPARATORS = {
-      :< => ->(a, b) { a < b },
-      :> => ->(a, b) { a > b }
-    }.freeze
-
     attr_reader :nodes
 
     def initialize
@@ -271,6 +266,12 @@ module DAG
     alias_method :to_s, :inspect
 
     private
+
+    COMPARATORS = {
+      :< => ->(a, b) { a < b },
+      :> => ->(a, b) { a > b }
+    }.freeze
+    private_constant :COMPARATORS
 
     def nodes_with_no(hash) = @nodes.select { |n| fetch_set(hash, n).empty? }
 

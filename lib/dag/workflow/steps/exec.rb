@@ -54,10 +54,7 @@ module DAG
 
           until readers.empty?
             remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            if remaining <= 0
-              readers.each(&:close)
-              return nil
-            end
+            return nil if remaining <= 0
 
             ready = IO.select(readers, nil, nil, remaining)
             next unless ready
@@ -69,7 +66,6 @@ module DAG
                 next
               when nil
                 readers.delete(io)
-                io.close
               else
                 ((io == rd_out) ? stdout_buf : stderr_buf) << chunk
               end
@@ -81,15 +77,12 @@ module DAG
 
         def kill_process(pid)
           Process.kill("TERM", pid)
+          Process.waitpid(pid, Process::WNOHANG) && return
           sleep(0.1)
-          begin
-            Process.kill("KILL", pid)
-          rescue Errno::ESRCH # already exited
-          end
-          begin
-            Process.waitpid(pid)
-          rescue Errno::ECHILD # already reaped
-          end
+          Process.kill("KILL", pid)
+          Process.waitpid(pid)
+        rescue Errno::ESRCH, Errno::ECHILD
+          # process already exited or reaped
         end
 
         def build_result(command, stdout, stderr, status)
