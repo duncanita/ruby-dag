@@ -111,6 +111,15 @@ module DAG
         deps = @graph.predecessors(name).to_a
         input = resolve_dependencies(deps, previous_outputs)
 
+        run_if = step.config[:run_if]
+        if run_if && !run_if.call(input)
+          result = Success.new(value: nil)
+          trace << build_trace_entry(name, layer_index, result,
+            duration_ms: 0, input_keys: deps.sort, status: :skipped)
+          @callbacks.finish(name, result)
+          return result
+        end
+
         @callbacks.start(name, step)
 
         started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
@@ -126,13 +135,13 @@ module DAG
         result
       end
 
-      def build_trace_entry(name, layer_index, result, duration_ms:, started_at: nil, finished_at: nil, input_keys: nil)
+      def build_trace_entry(name, layer_index, result, duration_ms:, started_at: nil, finished_at: nil, input_keys: nil, status: nil)
         input_keys ||= @graph.predecessors(name).to_a.sort
         TraceEntry.new(
           name: name, layer: layer_index,
           started_at: started_at, finished_at: finished_at,
           duration_ms: duration_ms,
-          status: result.success? ? :success : :failure,
+          status: status || (result.success? ? :success : :failure),
           input_keys: input_keys
         )
       end

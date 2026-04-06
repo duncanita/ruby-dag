@@ -236,6 +236,55 @@ class RunnerTest < Minitest::Test
     assert_equal "from ruby", result.value[:outputs][:b].value
   end
 
+  # --- Conditional execution ---
+
+  def test_skipped_step_when_condition_false
+    graph = DAG::Graph.new.add_node(:a).add_node(:b).add_edge(:a, :b)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo hello"))
+    registry.register(DAG::Workflow::Step.new(name: :b, type: :ruby,
+      callable: ->(input) { DAG::Success.new(value: "ran") },
+      run_if: ->(input) { false }))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
+    assert result.success?
+    assert_nil result.value[:outputs][:b].value
+  end
+
+  def test_step_runs_when_condition_true
+    graph = DAG::Graph.new.add_node(:a)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :ruby,
+      callable: ->(input) { DAG::Success.new(value: "ran") },
+      run_if: ->(input) { true }))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
+    assert result.success?
+    assert_equal "ran", result.value[:outputs][:a].value
+  end
+
+  def test_skipped_step_trace_has_skipped_status
+    graph = DAG::Graph.new.add_node(:a)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :ruby,
+      callable: ->(input) { DAG::Success.new(value: "ran") },
+      run_if: ->(input) { false }))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
+    trace = result.value[:trace]
+    assert_equal :skipped, trace.first.status
+  end
+
+  def test_step_without_condition_always_runs
+    graph = DAG::Graph.new.add_node(:a)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo always"))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
+    assert result.success?
+    assert_equal "always", result.value[:outputs][:a].value
+  end
+
   def test_empty_graph_succeeds
     graph = DAG::Graph.new
     registry = DAG::Workflow::Registry.new
