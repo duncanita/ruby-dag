@@ -15,13 +15,12 @@ module DAG
   #   graph.descendants(:fetch) # => Set[:parse]
 
   class Graph
-    attr_reader :nodes, :edges
+    attr_reader :nodes
 
     def initialize
       @nodes = Set.new
       @adjacency = Hash.new { |h, k| h[k] = Set.new }   # from → Set[to]
       @reverse = Hash.new { |h, k| h[k] = Set.new }      # to → Set[from]
-      @edges = Set.new
     end
 
     # --- Mutation ---
@@ -42,15 +41,12 @@ module DAG
 
       validate_edge_nodes!(from_sym, to_sym)
       raise ArgumentError, "Self-referencing edge: #{from_sym}" if from_sym == to_sym
-
-      edge = Edge.new(from: from_sym, to: to_sym)
-      return self if @edges.include?(edge)
+      return self if fetch_set(@adjacency, from_sym).include?(to_sym)
 
       raise CycleError, "Edge #{from_sym} → #{to_sym} would create a cycle" if would_create_cycle?(from_sym, to_sym)
 
       @adjacency[from_sym] << to_sym
       @reverse[to_sym] << from_sym
-      @edges << edge
       self
     end
 
@@ -72,7 +68,7 @@ module DAG
       check_frozen!
       from_sym = from.to_sym
       to_sym = to.to_sym
-      raise UnknownNodeError, "Unknown edge: #{from_sym} → #{to_sym}" unless @edges.include?(Edge.new(from: from_sym, to: to_sym))
+      raise UnknownNodeError, "Unknown edge: #{from_sym} → #{to_sym}" unless fetch_set(@adjacency, from_sym).include?(to_sym)
 
       remove_edge_internal(from_sym, to_sym)
       self
@@ -100,7 +96,6 @@ module DAG
 
     def freeze
       @nodes.freeze
-      @edges.freeze
       @adjacency.each_value(&:freeze)
       @adjacency.freeze
       @reverse.each_value(&:freeze)
@@ -113,10 +108,21 @@ module DAG
     def size = @nodes.size
     def empty? = @nodes.empty?
     def node?(name) = @nodes.include?(name.to_sym)
-    def edge?(from, to) = @edges.include?(Edge.new(from: from, to: to))
+
+    def edge?(from, to)
+      fetch_set(@adjacency, from.to_sym).include?(to.to_sym)
+    end
 
     def indegree(name) = fetch_set(@reverse, name.to_sym).size
     def outdegree(name) = fetch_set(@adjacency, name.to_sym).size
+
+    # --- Edge objects (lazy) ---
+
+    def edges
+      @adjacency.each_with_object(Set.new) do |(from, tos), set|
+        tos.each { |to| set << Edge.new(from: from, to: to) }
+      end
+    end
 
     # --- Neighbor queries ---
 
@@ -190,7 +196,7 @@ module DAG
 
     def each_edge(&block)
       return enum_for(:each_edge) unless block
-      @edges.each(&block)
+      edges.each(&block)
     end
 
     # --- Subgraph ---
@@ -204,8 +210,10 @@ module DAG
       keep.each_with_object(Graph.new) do |n, g|
         g.add_node(n)
       end.then do |g|
-        @edges.each do |edge|
-          g.add_edge(edge.from, edge.to) if keep.include?(edge.from) && keep.include?(edge.to)
+        keep.each do |from|
+          fetch_set(@adjacency, from).each do |to|
+            g.add_edge(from, to) if keep.include?(to)
+          end
         end
         g
       end
@@ -214,21 +222,21 @@ module DAG
     def to_h
       {
         nodes: @nodes.to_a.sort,
-        edges: @edges.map { |e| {from: e.from, to: e.to} }
+        edges: edges.map { |e| {from: e.from, to: e.to} }
       }
     end
 
     def ==(other)
-      other.is_a?(Graph) && @nodes == other.nodes && @edges == other.edges
+      other.is_a?(Graph) && @nodes == other.nodes && edges == other.edges
     end
     alias_method :eql?, :==
 
     def hash
-      [@nodes, @edges].hash
+      [@nodes, edges].hash
     end
 
     def inspect
-      "#<DAG::Graph nodes=#{@nodes.to_a} edges=#{@edges.size}>"
+      "#<DAG::Graph nodes=#{@nodes.to_a} edges=#{edges.size}>"
     end
     alias_method :to_s, :inspect
 
@@ -237,7 +245,6 @@ module DAG
     def initialize_dup(orig)
       super
       @nodes = @nodes.dup
-      @edges = @edges.dup
       @adjacency = deep_dup_hash_of_sets(@adjacency)
       @reverse = deep_dup_hash_of_sets(@reverse)
     end
@@ -255,7 +262,6 @@ module DAG
     def remove_edge_internal(from, to)
       @adjacency[from]&.delete(to)
       @reverse[to]&.delete(from)
-      @edges.delete(Edge.new(from: from, to: to))
     end
 
     # Safe hash lookup that doesn't trigger the default block on frozen hashes.
