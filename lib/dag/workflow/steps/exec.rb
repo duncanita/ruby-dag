@@ -21,20 +21,16 @@ module DAG
         private
 
         def run_command(command, timeout, env: {})
-          stdin, stdout, stderr, wait_thread = Open3.popen3(env, command)
-          stdin.close
-
-          Timeout.timeout(timeout) { wait_thread.value }
-            .then { |status| build_result(command, stdout.read, stderr.read, status) }
+          stdout, stderr, status = Timeout.timeout(timeout) {
+            Open3.capture3(env, command)
+          }
+          build_result(command, stdout, stderr, status)
         rescue Timeout::Error
-          kill_process(wait_thread)
           Failure.new(error: {
             code: :exec_timeout,
             command: command,
             timeout_seconds: timeout
           })
-        ensure
-          close_streams(stdout, stderr)
         end
 
         def build_result(command, stdout, stderr, status)
@@ -49,20 +45,6 @@ module DAG
               stderr: stderr.strip
             })
           end
-        end
-
-        def kill_process(wait_thread)
-          Process.kill("TERM", wait_thread.pid)
-          Timeout.timeout(3) { wait_thread.value }
-        rescue Errno::ESRCH, Errno::EPERM
-          nil
-        rescue Timeout::Error
-          Process.kill("KILL", wait_thread.pid) rescue nil # rubocop:disable Style/RescueModifier
-          wait_thread.value rescue nil # rubocop:disable Style/RescueModifier
-        end
-
-        def close_streams(*streams)
-          streams.compact.each { |io| io.close unless io.closed? }
         end
       end
     end

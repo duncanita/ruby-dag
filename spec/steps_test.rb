@@ -36,6 +36,12 @@ class StepsTest < Minitest::Test
     assert_match(/No command/, result.error)
   end
 
+  def test_exec_handles_large_output_without_deadlock
+    result = run_step(:exec, command: "ruby -e 'print \"x\" * 100_000'", timeout: 10)
+    assert result.success?
+    assert_equal 100_000, result.value.length
+  end
+
   # --- RubyScript ---
 
   def test_ruby_script_runs_ruby_file
