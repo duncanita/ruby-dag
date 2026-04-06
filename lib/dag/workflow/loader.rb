@@ -11,7 +11,6 @@ module DAG
     #   definition.registry  # => DAG::Workflow::Registry
 
     class Loader
-
       def self.from_file(path)
         raise ArgumentError, "File not found: #{path}" unless File.exist?(path)
 
