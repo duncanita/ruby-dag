@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require_relative "../lib/dag"
+require "dag"
 
 if ARGV.empty?
   puts "Usage: dag <workflow.yml> [--dry-run] [--no-parallel] [--verbose]"
