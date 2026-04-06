@@ -297,6 +297,25 @@ module DAG
       end
     end
 
+    def to_dot(name: "dag")
+      lines = ["digraph #{name} {"]
+      topological_sort.each { |n| lines << "  #{n};" }
+      # Include isolated nodes not in topo sort (none in a valid DAG, but defensive)
+      topological_sort.each do |from|
+        fetch_set(@adjacency, from).sort.each do |to|
+          meta = edge_metadata(from, to)
+          if meta.empty?
+            lines << "  #{from} -> #{to};"
+          else
+            label = meta.map { |k, v| "#{k}=#{v}" }.join(", ")
+            lines << "  #{from} -> #{to} [label=\"#{label}\"];"
+          end
+        end
+      end
+      lines << "}"
+      lines.join("\n")
+    end
+
     def to_h
       {
         nodes: @nodes.to_a.sort,

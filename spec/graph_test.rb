@@ -768,6 +768,36 @@ class GraphTest < Minitest::Test
     assert_equal [:a, :b, :d], result[:path]
   end
 
+  # --- to_dot ---
+
+  def test_to_dot_simple_graph
+    graph = build_graph([:a, :b], [[:a, :b]])
+    expected = <<~DOT.chomp
+      digraph dag {
+        a;
+        b;
+        a -> b;
+      }
+    DOT
+    assert_equal expected, graph.to_dot
+  end
+
+  def test_to_dot_with_custom_name
+    graph = build_graph([:a], [])
+    assert_match(/digraph my_dag \{/, graph.to_dot(name: "my_dag"))
+  end
+
+  def test_to_dot_empty_graph
+    graph = DAG::Graph.new
+    assert_equal "digraph dag {\n}", graph.to_dot
+  end
+
+  def test_to_dot_with_edge_metadata
+    graph = build_graph([:a, :b], [])
+    graph.add_edge(:a, :b, weight: 3)
+    assert_match(/a -> b \[label="weight=3"\]/, graph.to_dot)
+  end
+
   # --- Empty graph ---
 
   def test_empty_graph
