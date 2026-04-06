@@ -8,7 +8,6 @@ class ErrorsTest < Minitest::Test
       DAG::CycleError,
       DAG::DuplicateNodeError,
       DAG::UnknownNodeError,
-      DAG::DuplicateEdgeError,
       DAG::ValidationError,
       DAG::SerializationError,
       DAG::ParallelSafetyError

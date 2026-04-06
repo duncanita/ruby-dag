@@ -6,7 +6,6 @@ module DAG
   class CycleError < Error; end
   class DuplicateNodeError < Error; end
   class UnknownNodeError < Error; end
-  class DuplicateEdgeError < Error; end
   class SerializationError < Error; end
   class ParallelSafetyError < Error; end
 

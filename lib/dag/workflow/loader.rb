@@ -91,7 +91,7 @@ module DAG
           when String, Symbol
             {from: dep.to_sym}
           else
-            {from: dep.to_sym}
+            raise ArgumentError, "Invalid depends_on entry: #{dep.inspect}"
           end
         end
       end

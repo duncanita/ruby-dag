@@ -52,10 +52,13 @@ All errors inherit from `DAG::Error < StandardError`:
 - `CycleError` -- adding edge would create cycle
 - `DuplicateNodeError` -- adding node that already exists
 - `UnknownNodeError` -- referencing non-existent node/edge
-- `DuplicateEdgeError` -- adding duplicate edge
 - `ValidationError` -- structural validation failure (has `.errors` array)
 - `SerializationError` -- non-serializable step in Dumper
 - `ParallelSafetyError` -- Ractor shareability violation
+
+## Style preferences
+
+- Prefer `.then` chains for linear data transformations over intermediate variables. See `lib/dag/workflow/steps/script.rb` for the pattern.
 
 ## Conventions
 

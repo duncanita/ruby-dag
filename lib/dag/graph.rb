@@ -108,6 +108,7 @@ module DAG
       @cached_layers = compute_topological_layers.freeze
       @cached_roots = compute_roots.freeze
       @cached_leaves = compute_leaves.freeze
+      @cached_edges = compute_edges.freeze
       super
     end
 
@@ -127,9 +128,9 @@ module DAG
     # --- Edge objects (lazy) ---
 
     def edges
-      @adjacency.each_with_object(Set.new) do |(from, tos), set|
-        tos.each { |to| set << Edge.new(from: from, to: to, metadata: edge_metadata(from, to)) }
-      end
+      return @cached_edges if frozen?
+
+      compute_edges
     end
 
     def incoming_edges(node)
@@ -345,6 +346,12 @@ module DAG
 
     def compute_roots = @nodes.select { |n| fetch_set(@reverse, n).empty? }
     def compute_leaves = @nodes.select { |n| fetch_set(@adjacency, n).empty? }
+
+    def compute_edges
+      @adjacency.each_with_object(Set.new) do |(from, tos), set|
+        tos.each { |to| set << Edge.new(from: from, to: to, metadata: edge_metadata(from, to)) }
+      end
+    end
 
     def reconstruct_path(pred, from, to)
       path = [to]
