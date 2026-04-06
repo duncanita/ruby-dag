@@ -294,6 +294,110 @@ class RunnerTest < Minitest::Test
     assert_equal([], result.value[:trace])
   end
 
+  # --- Registry mutations ---
+
+  def test_registry_replace_updates_step
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo old"))
+    registry.replace(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo new"))
+
+    assert_equal "echo new", registry[:a].config[:command]
+  end
+
+  def test_registry_replace_unknown_raises
+    registry = DAG::Workflow::Registry.new
+    assert_raises(ArgumentError) do
+      registry.replace(DAG::Workflow::Step.new(name: :missing, type: :exec, command: "echo x"))
+    end
+  end
+
+  def test_registry_remove_drops_step
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo a"))
+    registry.remove(:a)
+
+    refute registry.key?(:a)
+  end
+
+  def test_registry_remove_unknown_raises
+    registry = DAG::Workflow::Registry.new
+    assert_raises(ArgumentError) { registry.remove(:missing) }
+  end
+
+  def test_registry_dup_is_independent
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo old"))
+    duped = registry.dup
+    duped.replace(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo new"))
+
+    assert_equal "echo old", registry[:a].config[:command]
+    assert_equal "echo new", duped[:a].config[:command]
+  end
+
+  # --- Definition#replace_step ---
+
+  def test_definition_replace_step_same_name_keeps_graph
+    defn = build_test_workflow(a: {}, b: {depends_on: [:a]})
+    new_step = DAG::Workflow::Step.new(name: :b, type: :exec, command: "echo updated")
+    new_defn = defn.replace_step(:b, new_step)
+
+    assert_equal "echo updated", new_defn.step(:b).config[:command]
+    assert_equal defn.graph, new_defn.graph
+  end
+
+  def test_definition_replace_step_different_name_renames_graph
+    defn = build_test_workflow(a: {}, b: {depends_on: [:a]}, c: {depends_on: [:b]})
+    new_step = DAG::Workflow::Step.new(name: :x, type: :exec, command: "echo x")
+    new_defn = defn.replace_step(:b, new_step)
+
+    assert new_defn.graph.node?(:x)
+    refute new_defn.graph.node?(:b)
+    assert new_defn.graph.edge?(:a, :x)
+    assert new_defn.graph.edge?(:x, :c)
+    assert_equal :x, new_defn.step(:x).name
+  end
+
+  def test_definition_replace_step_preserves_edge_metadata
+    graph = DAG::Graph.new.add_node(:a).add_node(:b).add_node(:c)
+    graph.add_edge(:a, :b, weight: 4)
+    graph.add_edge(:b, :c, weight: 6)
+    registry = DAG::Workflow::Registry.new
+    [:a, :b, :c].each { |n| registry.register(DAG::Workflow::Step.new(name: n, type: :exec, command: "echo #{n}")) }
+    defn = DAG::Workflow::Definition.new(graph: graph, registry: registry)
+
+    new_step = DAG::Workflow::Step.new(name: :x, type: :exec, command: "echo x")
+    new_defn = defn.replace_step(:b, new_step)
+
+    assert_equal({weight: 4}, new_defn.graph.edge_metadata(:a, :x))
+    assert_equal({weight: 6}, new_defn.graph.edge_metadata(:x, :c))
+  end
+
+  def test_definition_replace_step_original_unchanged
+    defn = build_test_workflow(a: {}, b: {depends_on: [:a]})
+    new_step = DAG::Workflow::Step.new(name: :x, type: :exec, command: "echo x")
+    defn.replace_step(:b, new_step)
+
+    assert defn.graph.node?(:b)
+    refute defn.graph.node?(:x)
+    assert_equal :b, defn.step(:b).name
+  end
+
+  def test_definition_replace_step_unknown_raises
+    defn = build_test_workflow(a: {})
+    new_step = DAG::Workflow::Step.new(name: :x, type: :exec, command: "echo x")
+    assert_raises(DAG::UnknownNodeError) { defn.replace_step(:missing, new_step) }
+  end
+
+  def test_definition_replace_step_runs_correctly
+    defn = build_test_workflow(a: {}, b: {depends_on: [:a]})
+    new_step = DAG::Workflow::Step.new(name: :b, type: :exec, command: "echo replaced")
+    new_defn = defn.replace_step(:b, new_step)
+
+    result = DAG::Workflow::Runner.new(new_defn.graph, new_defn.registry, parallel: false).call
+    assert result.success?
+    assert_equal "replaced", result.value[:outputs][:b].value
+  end
+
   private
 
   def run_workflow(node_defs = {}, parallel: false)

@@ -563,6 +563,123 @@ class GraphTest < Minitest::Test
     assert_raises(DAG::UnknownNodeError) { graph.without_edge(:a, :b) }
   end
 
+  # --- replace_node / with_node_replaced ---
+
+  def test_replace_node_renames_and_rewires_chain
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+    graph.replace_node(:b, :x)
+
+    assert graph.node?(:x)
+    refute graph.node?(:b)
+    assert graph.edge?(:a, :x)
+    assert graph.edge?(:x, :c)
+    assert_equal 3, graph.size
+    assert_equal 2, graph.edges.size
+  end
+
+  def test_replace_node_renames_root
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.replace_node(:a, :x)
+
+    assert graph.node?(:x)
+    refute graph.node?(:a)
+    assert graph.edge?(:x, :b)
+  end
+
+  def test_replace_node_renames_leaf
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.replace_node(:b, :x)
+
+    assert graph.node?(:x)
+    refute graph.node?(:b)
+    assert graph.edge?(:a, :x)
+  end
+
+  def test_replace_node_isolated
+    graph = build_graph([:a], [])
+    graph.replace_node(:a, :x)
+
+    assert graph.node?(:x)
+    refute graph.node?(:a)
+    assert_equal 1, graph.size
+  end
+
+  def test_replace_node_diamond
+    graph = build_graph([:a, :b, :c, :d], [[:a, :b], [:a, :c], [:b, :d], [:c, :d]])
+    graph.replace_node(:b, :x)
+
+    assert graph.edge?(:a, :x)
+    assert graph.edge?(:x, :d)
+    assert graph.edge?(:a, :c)
+    assert graph.edge?(:c, :d)
+    assert_equal 4, graph.edges.size
+  end
+
+  def test_replace_node_same_name_is_noop
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.replace_node(:a, :a)
+
+    assert graph.node?(:a)
+    assert graph.edge?(:a, :b)
+    assert_equal 2, graph.size
+  end
+
+  def test_replace_node_preserves_edge_metadata
+    graph = build_graph([:a, :b, :c], [])
+    graph.add_edge(:a, :b, weight: 5)
+    graph.add_edge(:b, :c, weight: 3)
+    graph.replace_node(:b, :x)
+
+    assert_equal({weight: 5}, graph.edge_metadata(:a, :x))
+    assert_equal({weight: 3}, graph.edge_metadata(:x, :c))
+  end
+
+  def test_replace_node_unknown_raises
+    graph = build_graph([:a], [])
+    assert_raises(DAG::UnknownNodeError) { graph.replace_node(:missing, :x) }
+  end
+
+  def test_replace_node_duplicate_raises
+    graph = build_graph([:a, :b], [])
+    assert_raises(DAG::DuplicateNodeError) { graph.replace_node(:a, :b) }
+  end
+
+  def test_frozen_graph_rejects_replace_node
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.freeze
+    assert_raises(FrozenError) { graph.replace_node(:a, :x) }
+  end
+
+  def test_with_node_replaced_returns_new_frozen_graph
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+    graph.freeze
+    new_graph = graph.with_node_replaced(:b, :x)
+
+    assert new_graph.frozen?
+    assert new_graph.node?(:x)
+    refute new_graph.node?(:b)
+    assert new_graph.edge?(:a, :x)
+    assert new_graph.edge?(:x, :c)
+  end
+
+  def test_with_node_replaced_original_unchanged
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.with_node_replaced(:b, :x)
+
+    assert graph.node?(:b)
+    refute graph.node?(:x)
+  end
+
+  def test_with_node_replaced_preserves_edge_metadata
+    graph = build_graph([:a, :b, :c], [])
+    graph.add_edge(:a, :b, weight: 7)
+    graph.add_edge(:b, :c, weight: 2)
+    new_graph = graph.with_node_replaced(:b, :x)
+
+    assert_equal({weight: 7}, new_graph.edge_metadata(:a, :x))
+    assert_equal({weight: 2}, new_graph.edge_metadata(:x, :c))
+  end
+
   # --- Enumerable ---
 
   def test_enumerable_map

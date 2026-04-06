@@ -20,6 +20,21 @@ module DAG
         self
       end
 
+      def replace(step)
+        raise ArgumentError, "Unknown step: #{step.name}" unless @steps.key?(step.name)
+
+        @steps[step.name] = step
+        self
+      end
+
+      def remove(name)
+        sym = name.to_sym
+        raise ArgumentError, "Unknown step: #{sym}" unless @steps.key?(sym)
+
+        @steps.delete(sym)
+        self
+      end
+
       def [](name)
         @steps.fetch(name.to_sym) { raise ArgumentError, "Unknown step: #{name}" }
       end
@@ -33,6 +48,13 @@ module DAG
         "#<DAG::Workflow::Registry steps=#{@steps.keys}>"
       end
       alias_method :to_s, :inspect
+
+      private
+
+      def initialize_dup(orig)
+        super
+        @steps = @steps.dup
+      end
     end
   end
 end
