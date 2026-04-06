@@ -39,7 +39,16 @@ module DAG
         node = {"type" => step.type.to_s}
         step.config.each { |k, v| node[k.to_s] = v }
         deps = @graph.predecessors(name).to_a.sort
-        node["depends_on"] = deps.map(&:to_s) unless deps.empty?
+        unless deps.empty?
+          node["depends_on"] = deps.map { |dep|
+            meta = @graph.edge_metadata(dep, name)
+            if meta.empty?
+              dep.to_s
+            else
+              {"from" => dep.to_s}.merge(meta.transform_keys(&:to_s))
+            end
+          }
+        end
         node
       end
     end

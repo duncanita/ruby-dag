@@ -603,6 +603,54 @@ class GraphTest < Minitest::Test
     assert_equal [:a, :b], edges.map(&:from).sort
   end
 
+  # --- Edge metadata ---
+
+  def test_add_edge_with_metadata
+    graph = build_graph([:a, :b], [])
+    graph.add_edge(:a, :b, weight: 5)
+    assert_equal({weight: 5}, graph.edge_metadata(:a, :b))
+  end
+
+  def test_edge_metadata_default_empty
+    graph = build_graph([:a, :b], [[:a, :b]])
+    assert_equal({}, graph.edge_metadata(:a, :b))
+  end
+
+  def test_edge_weight_convenience
+    graph = build_graph([:a, :b], [])
+    graph.add_edge(:a, :b, weight: 3)
+    edge = graph.edges.first
+    assert_equal 3, edge.weight
+  end
+
+  def test_edge_weight_default
+    graph = build_graph([:a, :b], [[:a, :b]])
+    edge = graph.edges.first
+    assert_equal 1, edge.weight
+  end
+
+  def test_edge_metadata_preserved_in_dup
+    graph = build_graph([:a, :b], [])
+    graph.add_edge(:a, :b, weight: 7)
+    duped = graph.dup
+    assert_equal({weight: 7}, duped.edge_metadata(:a, :b))
+  end
+
+  def test_edge_metadata_in_subgraph
+    graph = build_graph([:a, :b, :c], [])
+    graph.add_edge(:a, :b, weight: 2)
+    graph.add_edge(:b, :c, weight: 3)
+    sub = graph.subgraph([:a, :b])
+    assert_equal({weight: 2}, sub.edge_metadata(:a, :b))
+  end
+
+  def test_edge_metadata_removed_on_remove_edge
+    graph = build_graph([:a, :b], [])
+    graph.add_edge(:a, :b, weight: 5)
+    graph.remove_edge(:a, :b)
+    assert_equal({}, graph.edge_metadata(:a, :b))
+  end
+
   # --- Empty graph ---
 
   def test_empty_graph

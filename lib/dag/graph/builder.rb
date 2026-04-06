@@ -28,8 +28,8 @@ module DAG
         self
       end
 
-      def add_edge(from, to)
-        @graph.add_edge(from, to)
+      def add_edge(from, to, **metadata)
+        @graph.add_edge(from, to, **metadata)
         self
       end
 

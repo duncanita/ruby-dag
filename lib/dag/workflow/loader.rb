@@ -28,7 +28,7 @@ module DAG
           type = config.delete("type") || raise(ArgumentError, "Node '#{name}' missing 'type'")
           validate_type!(name, type.to_sym, valid_types: Steps.yaml_types)
 
-          depends_on = Array(config.delete("depends_on")).map { |d| d.to_sym }
+          depends_on = parse_depends_on(config.delete("depends_on"))
           [name.to_sym, {type: type.to_sym, depends_on: depends_on, **config.transform_keys(&:to_sym)}]
         end
 
@@ -41,7 +41,7 @@ module DAG
           type = opts.delete(:type) || raise(ArgumentError, "Node '#{name}' missing 'type'")
           validate_type!(name, type.to_sym)
 
-          depends_on = Array(opts.delete(:depends_on)).map { |d| d.to_sym }
+          depends_on = parse_depends_on(opts.delete(:depends_on))
           [name.to_sym, {type: type.to_sym, depends_on: depends_on, **opts}]
         end
 
@@ -60,12 +60,15 @@ module DAG
 
           graph.add_node(name)
           registry.register(Step.new(name: name, type: type, **opts))
-          depends_on.each { |dep| deferred_edges << [dep, name] }
+          depends_on.each { |dep| deferred_edges << dep.merge(to: name) }
         end
 
-        deferred_edges.each do |from, to|
+        deferred_edges.each do |edge|
+          from = edge[:from]
+          to = edge[:to]
+          metadata = edge.except(:from, :to)
           raise ArgumentError, "Node #{to} depends on unknown node #{from}" unless graph.node?(from)
-          graph.add_edge(from, to)
+          graph.add_edge(from, to, **metadata)
         end
 
         Definition.new(graph: graph, registry: registry)
@@ -81,7 +84,20 @@ module DAG
         raise ArgumentError, "Node '#{name}' has invalid type '#{type}'. Valid: #{valid_types.join(", ")}"
       end
 
-      private_class_method :build_definition, :validate_type!
+      def self.parse_depends_on(raw)
+        Array(raw).map do |dep|
+          case dep
+          when Hash
+            dep.transform_keys(&:to_sym).tap { |h| h[:from] = h[:from].to_sym }
+          when String, Symbol
+            {from: dep.to_sym}
+          else
+            {from: dep.to_sym}
+          end
+        end
+      end
+
+      private_class_method :build_definition, :validate_type!, :parse_depends_on
     end
   end
 end

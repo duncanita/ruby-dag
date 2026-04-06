@@ -23,6 +23,7 @@ module DAG
       @nodes = Set.new
       @adjacency = Hash.new { |h, k| h[k] = Set.new }   # from → Set[to]
       @reverse = Hash.new { |h, k| h[k] = Set.new }      # to → Set[from]
+      @edge_metadata = {}                                  # [from, to] → Hash
     end
 
     # --- Mutation ---
@@ -36,7 +37,7 @@ module DAG
       self
     end
 
-    def add_edge(from, to)
+    def add_edge(from, to, **metadata)
       check_frozen!
       from_sym = from.to_sym
       to_sym = to.to_sym
@@ -49,6 +50,7 @@ module DAG
 
       @adjacency[from_sym] << to_sym
       @reverse[to_sym] << from_sym
+      @edge_metadata[[from_sym, to_sym]] = metadata.freeze unless metadata.empty?
       self
     end
 
@@ -82,8 +84,8 @@ module DAG
       dup.add_node(name).freeze
     end
 
-    def with_edge(from, to)
-      dup.add_edge(from, to).freeze
+    def with_edge(from, to, **metadata)
+      dup.add_edge(from, to, **metadata).freeze
     end
 
     def without_node(name)
@@ -102,6 +104,7 @@ module DAG
       @adjacency.freeze
       @reverse.each_value(&:freeze)
       @reverse.freeze
+      @edge_metadata.freeze
       super
     end
 
@@ -122,13 +125,17 @@ module DAG
 
     def edges
       @adjacency.each_with_object(Set.new) do |(from, tos), set|
-        tos.each { |to| set << Edge.new(from: from, to: to) }
+        tos.each { |to| set << Edge.new(from: from, to: to, metadata: edge_metadata(from, to)) }
       end
     end
 
     def incoming_edges(node)
       sym = node.to_sym
-      fetch_set(@reverse, sym).map { |from| Edge.new(from: from, to: sym) }
+      fetch_set(@reverse, sym).map { |from| Edge.new(from: from, to: sym, metadata: edge_metadata(from, sym)) }
+    end
+
+    def edge_metadata(from, to)
+      @edge_metadata.fetch([from.to_sym, to.to_sym], {})
     end
 
     # --- Neighbor queries ---
@@ -221,7 +228,7 @@ module DAG
       end.then do |g|
         keep.each do |from|
           fetch_set(@adjacency, from).each do |to|
-            g.add_edge(from, to) if keep.include?(to)
+            g.add_edge(from, to, **edge_metadata(from, to)) if keep.include?(to)
           end
         end
         g
@@ -231,7 +238,11 @@ module DAG
     def to_h
       {
         nodes: @nodes.to_a.sort,
-        edges: edges.map { |e| {from: e.from, to: e.to} }
+        edges: edges.map { |e|
+          h = {from: e.from, to: e.to}
+          h[:metadata] = e.metadata unless e.metadata.empty?
+          h
+        }
       }
     end
 
@@ -256,6 +267,7 @@ module DAG
       @nodes = @nodes.dup
       @adjacency = deep_dup_hash_of_sets(@adjacency)
       @reverse = deep_dup_hash_of_sets(@reverse)
+      @edge_metadata = @edge_metadata.dup
     end
 
     def deep_dup_hash_of_sets(hash)
@@ -271,6 +283,7 @@ module DAG
     def remove_edge_internal(from, to)
       @adjacency[from]&.delete(to)
       @reverse[to]&.delete(from)
+      @edge_metadata.delete([from, to])
     end
 
     # Safe hash lookup that doesn't trigger the default block on frozen hashes.

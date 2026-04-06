@@ -101,6 +101,28 @@ class DumperTest < Minitest::Test
     end
   end
 
+  def test_round_trip_with_edge_metadata
+    yaml = <<~YAML
+      nodes:
+        fetch:
+          type: exec
+          command: "echo data"
+        parse:
+          type: exec
+          command: "echo parsed"
+          depends_on:
+            - from: fetch
+              weight: 3
+    YAML
+
+    defn1 = DAG::Workflow::Loader.from_yaml(yaml)
+    assert_equal({weight: 3}, defn1.graph.edge_metadata(:fetch, :parse))
+
+    dumped = DAG::Workflow::Dumper.to_yaml(defn1)
+    defn2 = DAG::Workflow::Loader.from_yaml(dumped)
+    assert_equal({weight: 3}, defn2.graph.edge_metadata(:fetch, :parse))
+  end
+
   def test_empty_workflow
     graph = DAG::Graph.new
     registry = DAG::Workflow::Registry.new
