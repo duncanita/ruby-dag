@@ -676,6 +676,57 @@ class GraphTest < Minitest::Test
     assert_equal({}, graph.edge_metadata(:a, :b))
   end
 
+  # --- Shortest / longest path ---
+
+  def test_shortest_path_linear_chain
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+    result = graph.shortest_path(:a, :c)
+    assert_equal({cost: 2, path: [:a, :b, :c]}, result)
+  end
+
+  def test_shortest_path_diamond_with_weights
+    graph = build_graph([:a, :b, :c, :d], [])
+    graph.add_edge(:a, :b, weight: 1)
+    graph.add_edge(:a, :c, weight: 10)
+    graph.add_edge(:b, :d, weight: 1)
+    graph.add_edge(:c, :d, weight: 1)
+    result = graph.shortest_path(:a, :d)
+    assert_equal 2, result[:cost]
+    assert_equal [:a, :b, :d], result[:path]
+  end
+
+  def test_shortest_path_unreachable
+    graph = build_graph([:a, :b], [])
+    assert_nil graph.shortest_path(:a, :b)
+  end
+
+  def test_shortest_path_same_node
+    graph = build_graph([:a], [])
+    assert_equal({cost: 0, path: [:a]}, graph.shortest_path(:a, :a))
+  end
+
+  def test_longest_path_linear_chain
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+    result = graph.longest_path(:a, :c)
+    assert_equal({cost: 2, path: [:a, :b, :c]}, result)
+  end
+
+  def test_longest_path_diamond_picks_longer
+    graph = build_graph([:a, :b, :c, :d], [])
+    graph.add_edge(:a, :b, weight: 1)
+    graph.add_edge(:a, :c, weight: 10)
+    graph.add_edge(:b, :d, weight: 1)
+    graph.add_edge(:c, :d, weight: 1)
+    result = graph.longest_path(:a, :d)
+    assert_equal 11, result[:cost]
+    assert_equal [:a, :c, :d], result[:path]
+  end
+
+  def test_longest_path_unreachable
+    graph = build_graph([:a, :b], [])
+    assert_nil graph.longest_path(:a, :b)
+  end
+
   # --- Empty graph ---
 
   def test_empty_graph

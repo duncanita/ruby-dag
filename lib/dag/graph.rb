@@ -184,6 +184,62 @@ module DAG
       topological_layers.flatten
     end
 
+    # Shortest path (by weight sum) from source to target. O(V+E).
+    # Returns {cost:, path:} or nil if unreachable.
+    def shortest_path(from, to)
+      from_sym = from.to_sym
+      to_sym = to.to_sym
+      return {cost: 0, path: [from_sym]} if from_sym == to_sym
+
+      dist = Hash.new(Float::INFINITY)
+      pred = {}
+      dist[from_sym] = 0
+
+      topological_sort.each do |u|
+        next if dist[u] == Float::INFINITY
+
+        fetch_set(@adjacency, u).each do |v|
+          w = edge_metadata(u, v).fetch(:weight, 1)
+          if dist[u] + w < dist[v]
+            dist[v] = dist[u] + w
+            pred[v] = u
+          end
+        end
+      end
+
+      return nil if dist[to_sym] == Float::INFINITY
+
+      {cost: dist[to_sym], path: reconstruct_path(pred, from_sym, to_sym)}
+    end
+
+    # Longest path (by weight sum) from source to target. O(V+E).
+    # Returns {cost:, path:} or nil if unreachable.
+    def longest_path(from, to)
+      from_sym = from.to_sym
+      to_sym = to.to_sym
+      return {cost: 0, path: [from_sym]} if from_sym == to_sym
+
+      dist = Hash.new(-Float::INFINITY)
+      pred = {}
+      dist[from_sym] = 0
+
+      topological_sort.each do |u|
+        next if dist[u] == -Float::INFINITY
+
+        fetch_set(@adjacency, u).each do |v|
+          w = edge_metadata(u, v).fetch(:weight, 1)
+          if dist[u] + w > dist[v]
+            dist[v] = dist[u] + w
+            pred[v] = u
+          end
+        end
+      end
+
+      return nil if dist[to_sym] == -Float::INFINITY
+
+      {cost: dist[to_sym], path: reconstruct_path(pred, from_sym, to_sym)}
+    end
+
     # --- Iteration ---
 
     def each(&block)
@@ -247,6 +303,16 @@ module DAG
 
     def compute_roots = @nodes.select { |n| fetch_set(@reverse, n).empty? }
     def compute_leaves = @nodes.select { |n| fetch_set(@adjacency, n).empty? }
+
+    def reconstruct_path(pred, from, to)
+      path = [to]
+      current = to
+      while pred.key?(current)
+        current = pred[current]
+        path.unshift(current)
+      end
+      path
+    end
 
     def compute_topological_layers
       in_degree = Hash.new(0)
