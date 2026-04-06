@@ -563,6 +563,46 @@ class GraphTest < Minitest::Test
     assert_raises(DAG::UnknownNodeError) { graph.without_edge(:a, :b) }
   end
 
+  # --- Enumerable ---
+
+  def test_enumerable_map
+    graph = build_graph([:a, :b, :c], [])
+    assert_equal [:a, :b, :c], graph.map { |n| n }.sort
+  end
+
+  def test_enumerable_select
+    graph = build_graph([:a, :b, :c], [[:a, :b]])
+    roots = graph.select { |n| graph.indegree(n) == 0 }
+    assert_includes roots, :a
+    assert_includes roots, :c
+  end
+
+  def test_enumerable_count
+    graph = build_graph([:a, :b, :c], [])
+    assert_equal 3, graph.count
+  end
+
+  def test_enumerable_include
+    graph = build_graph([:a, :b], [])
+    assert graph.include?(:a)
+    refute graph.include?(:z)
+  end
+
+  # --- incoming_edges ---
+
+  def test_incoming_edges_on_root
+    graph = build_graph([:a, :b], [[:a, :b]])
+    assert_empty graph.incoming_edges(:a)
+  end
+
+  def test_incoming_edges_on_sink
+    graph = build_graph([:a, :b, :c], [[:a, :c], [:b, :c]])
+    edges = graph.incoming_edges(:c)
+    assert_equal 2, edges.size
+    assert edges.all? { |e| e.to == :c }
+    assert_equal [:a, :b], edges.map(&:from).sort
+  end
+
   # --- Empty graph ---
 
   def test_empty_graph

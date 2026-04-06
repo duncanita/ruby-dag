@@ -15,6 +15,8 @@ module DAG
   #   graph.descendants(:fetch) # => Set[:parse]
 
   class Graph
+    include Enumerable
+
     attr_reader :nodes
 
     def initialize
@@ -124,6 +126,11 @@ module DAG
       end
     end
 
+    def incoming_edges(node)
+      sym = node.to_sym
+      fetch_set(@reverse, sym).map { |from| Edge.new(from: from, to: sym) }
+    end
+
     # --- Neighbor queries ---
 
     def successors(name) = fetch_set(@adjacency, name.to_sym).dup
@@ -189,10 +196,12 @@ module DAG
 
     # --- Iteration ---
 
-    def each_node(&block)
-      return enum_for(:each_node) unless block
+    def each(&block)
+      return enum_for(:each) unless block
       @nodes.each(&block)
     end
+
+    alias_method :each_node, :each
 
     def each_edge(&block)
       return enum_for(:each_edge) unless block
