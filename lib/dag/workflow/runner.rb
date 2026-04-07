@@ -128,14 +128,26 @@ module DAG
         {outputs: outputs, trace: trace, error: step_error}
       end
 
-      # Callback ordering: every :start in a layer fires before any :finish
-      # in that layer, so a consumer logging "layer begins" on the first
-      # :start sees a coherent sequence. Strategy is picked before any
-      # callback fires, so a consumer querying the real strategy from
-      # inside :start sees the chosen one.
+      # Callback ordering contract: every runnable :start in a layer fires
+      # before any :finish in that layer, so a consumer logging "layer
+      # begins" on the first :start sees a coherent sequence. Skipped
+      # steps have no :start — they finish immediately after the runnable
+      # :start batch. Strategy is picked before any callback fires, so a
+      # consumer querying strategy identity from inside :start sees the
+      # one actually running.
       def execute_layer(layer, layer_index, previous_outputs, trace)
+        runnable, skipped = partition_layer(layer, previous_outputs)
         results = {}
-        runnable_tasks = []
+
+        runnable.each { |t| @callbacks.start(t.name, t.step) }
+        record_skipped(skipped, results, layer_index, trace)
+        run_tasks(runnable, layer_index, trace, results)
+
+        results
+      end
+
+      def partition_layer(layer, previous_outputs)
+        runnable = []
         skipped = []
 
         layer.each do |name|
@@ -146,7 +158,7 @@ module DAG
           if skip?(step, input)
             skipped << [name, step, input_keys]
           else
-            runnable_tasks << Parallel::Task.new(
+            runnable << Parallel::Task.new(
               name: name, step: step, input: input,
               executor_class: executor(step.type).class,
               input_keys: input_keys
@@ -154,29 +166,25 @@ module DAG
           end
         end
 
-        # Fully-skipped layer: no :start events exist, so skip-finish order
-        # is unconstrained and we can short-circuit before touching the
-        # strategy (avoids an unused `Ractor::Port` under `:ractors`).
-        if runnable_tasks.empty?
-          record_skipped(skipped, results, layer_index, trace)
-          return results
-        end
+        [runnable, skipped]
+      end
 
-        strategy = pick_strategy(runnable_tasks.map(&:step))
-        input_keys_by_name = runnable_tasks.to_h { |t| [t.name, t.input_keys] }
+      # Short-circuits on an empty task list: a fully-skipped layer must
+      # never touch the strategy, because touching `:ractors` allocates a
+      # `Ractor::Port` that nothing will ever receive on.
+      def run_tasks(tasks, layer_index, trace, results)
+        return if tasks.empty?
 
-        runnable_tasks.each { |t| @callbacks.start(t.name, t.step) }
-        record_skipped(skipped, results, layer_index, trace)
+        strategy = pick_strategy(tasks.map(&:step))
+        input_keys_by_name = tasks.to_h { |t| [t.name, t.input_keys] }
 
-        strategy.execute(runnable_tasks) do |name, result, started_at, finished_at, duration_ms|
+        strategy.execute(tasks) do |name, result, started_at, finished_at, duration_ms|
           trace << build_trace_entry(name, layer_index, result,
             started_at: started_at, finished_at: finished_at, duration_ms: duration_ms,
             input_keys: input_keys_by_name.fetch(name))
           @callbacks.finish(name, result)
           results[name] = result
         end
-
-        results
       end
 
       def skip?(step, input)
