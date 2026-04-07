@@ -33,7 +33,6 @@ module DAG
         @registry = registry
         @timeout = timeout
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
-        @executors = {}
         @strategy = build_strategy(parallel, max_parallelism)
         validate_coverage!(graph, registry)
       end
@@ -70,9 +69,7 @@ module DAG
         end
       end
 
-      def executor(type)
-        @executors[type] ||= Steps.build(type)
-      end
+      def executor_class(type) = Steps.class_for(type)
 
       def execute_layers(layers, deadline)
         outputs = {}
@@ -148,7 +145,7 @@ module DAG
           else
             runnable << Parallel::Task.new(
               name: name, step: step, input: input,
-              executor_class: executor(step.type).class,
+              executor_class: executor_class(step.type),
               input_keys: input_keys
             )
           end

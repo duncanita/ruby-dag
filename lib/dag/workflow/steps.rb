@@ -17,8 +17,15 @@ module DAG
         end
 
         def build(type)
+          class_for(type).new
+        end
+
+        # Returns the registered Class for `type` without instantiating it.
+        # Used by the Runner so it can build a `Parallel::Task` carrying the
+        # executor class without paying for a throwaway instance.
+        def class_for(type)
           entry = @registry.fetch(type.to_sym) { raise ArgumentError, "Unknown step type: #{type}" }
-          entry[:klass].new
+          entry[:klass]
         end
 
         def registered?(type)
