@@ -254,20 +254,11 @@ class StepsTest < Minitest::Test
 
   # --- Step is pure data ---
   #
-  # Step does not know about Ractors. Construction is always cheap and silent.
-  # Ractor preflight (and any "is this shareable?" warning) belongs to the
-  # Ractors strategy — see parallel_test.rb for those.
+  # Construction is always cheap and silent, regardless of config shape.
 
   def test_step_construction_is_silent_for_simple_config
     _, stderr = capture_io do
       DAG::Workflow::Step.new(name: :test, type: :exec, command: "echo hi", timeout: 30)
-    end
-    assert_empty stderr
-  end
-
-  def test_step_construction_is_silent_for_unshareable_config
-    _, stderr = capture_io do
-      DAG::Workflow::Step.new(name: :test, type: :exec, command: StringIO.new)
     end
     assert_empty stderr
   end
@@ -277,11 +268,6 @@ class StepsTest < Minitest::Test
       DAG::Workflow::Step.new(name: :test, type: :ruby, callable: -> { "hi" })
     end
     assert_empty stderr
-  end
-
-  def test_step_does_not_expose_ractor_safe_predicate
-    step = DAG::Workflow::Step.new(name: :test, type: :exec, command: "echo hi")
-    refute_respond_to step, :ractor_safe?
   end
 
   # --- Unknown type ---

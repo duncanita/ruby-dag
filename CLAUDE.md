@@ -2,7 +2,7 @@
 
 ## What this is
 
-Ruby PORO DAG library for openclaw. An agent builds a workflow as a DAG, runs it with pluggable parallel execution (Threads / Processes / Ractors / Sequential strategies). Zero runtime dependencies.
+Ruby PORO DAG library for openclaw. An agent builds a workflow as a DAG, runs it with pluggable parallel execution (Threads / Processes / Sequential strategies). Zero runtime dependencies.
 
 ## Commands
 
@@ -17,7 +17,7 @@ ruby -Ilib -Ispec -e 'Dir["spec/**/*_test.rb"].each { |f| require_relative f }' 
 Two layers:
 
 - **Graph** (`lib/dag/graph.rb`) -- pure DAG. Nodes are symbols, edges are `Data.define(:from, :to, :metadata)`. Enforces acyclicity on every `add_edge`. Supports `freeze` for immutability with cached derived properties (layers, sort, roots, leaves, edges all eagerly cached on `freeze`). Iteration: `each_node` and `each_edge` are the ONLY entry points — `Graph` intentionally does NOT include `Enumerable` and has no top-level `each`, so `graph.map` / `graph.count` / `graph.include?` don't exist. Use `graph.each_node.map { ... }` / `graph.each_edge.count` / `graph.node?(name)` instead. Key methods: `each_node`, `each_edge`, `topological_layers`, `topological_sort`, `shortest_path`, `longest_path`, `critical_path`, `path?`, `ancestors`, `descendants`, `subgraph`, `incoming_edges`, `edge_metadata`, `to_dot`, `with_node`, `with_edge`, `without_node`, `without_edge`, `with_node_replaced`, `remove_node`, `remove_edge`, `replace_node`.
-- **Workflow** (`lib/dag/workflow/`) -- steps with types (exec, ruby_script, file_read, file_write, ruby), a Registry mapping names to Steps (with `register`/`replace`/`remove`), a Definition bundling Graph + Registry (with `replace_step` returning a new Definition), a Loader (YAML/Hash -> Definition), a Dumper (Definition -> YAML), a Parallel::Strategy hierarchy with four adapters (Sequential, Threads, Ractors, Processes), and a Runner that delegates per-layer execution to the configured strategy with per-layer fallback to Sequential when constraints aren't met.
+- **Workflow** (`lib/dag/workflow/`) -- steps with types (exec, ruby_script, file_read, file_write, ruby), a Registry mapping names to Steps (with `register`/`replace`/`remove`), a Definition bundling Graph + Registry (with `replace_step` returning a new Definition), a Loader (YAML/Hash -> Definition), a Dumper (Definition -> YAML), a Parallel::Strategy hierarchy with three adapters (Sequential, Threads, Processes), and a Runner that hands each layer to the configured strategy.
 
 Graph knows nothing about workflows. Workflow depends on Graph.
 
@@ -25,23 +25,22 @@ Graph knows nothing about workflows. Workflow depends on Graph.
 
 ```
 lib/dag.rb                       # require entry point
-lib/dag/version.rb               # DAG::VERSION constant (0.2.0)
+lib/dag/version.rb               # DAG::VERSION constant (0.3.0)
 lib/dag/errors.rb                # Exception hierarchy (DAG::Error base)
 lib/dag/edge.rb                  # Edge = Data.define(:from, :to, :metadata)
 lib/dag/graph.rb                 # Graph class. Adjacency + reverse adjacency Sets. each_node / each_edge are the only iteration entry points; no Enumerable mixin, no top-level each.
 lib/dag/graph/builder.rb         # Builder.build { |b| ... } -> frozen Graph
 lib/dag/graph/validator.rb       # Structural validation. DEFAULT_RULES = [:no_isolated].freeze (on by default; opt out with defaults: []). AVAILABLE_RULES lists built-ins. Returns Validator::Report (named to avoid clash with DAG::Result).
-lib/dag/workflow/step.rb         # Step = Data.define(:name, :type, :config). Pure data — knows nothing about Ractors.
+lib/dag/workflow/step.rb         # Step = Data.define(:name, :type, :config). Pure data — knows nothing about strategies.
 lib/dag/workflow/registry.rb     # name -> Step mapping
 lib/dag/workflow/definition.rb   # Definition = Data.define(:graph, :registry)
 lib/dag/workflow/loader.rb       # YAML -> Definition (supports edge metadata in depends_on)
 lib/dag/workflow/dumper.rb       # Definition -> YAML (inverse of Loader)
 lib/dag/workflow/runner.rb       # Coordinator: builds Tasks per layer, delegates to Parallel::Strategy, writes trace + fires callbacks. Handles run_if skipping. Builds {outputs:, trace:, error:} payload.
 lib/dag/workflow/parallel.rb     # Parallel module + Task = Data.define(:name, :step, :input, :executor_class, :input_keys)
-lib/dag/workflow/parallel/strategy.rb    # Abstract Strategy base. #execute(tasks) yielding [name, result, started_at, finished_at, duration_ms] in completion order. #supports?(steps) for per-layer fallback. Class method .experimental? (default false) for marking strategies as not-production-ready.
+lib/dag/workflow/parallel/strategy.rb    # Abstract Strategy base. #execute(tasks) yielding [name, result, started_at, finished_at, duration_ms] in completion order. Class method .run_task(task) is the single place that stamps timings and rescues step errors into a Failure.
 lib/dag/workflow/parallel/sequential.rb  # Default for parallel: false. Single-threaded loop. max_parallelism ignored.
 lib/dag/workflow/parallel/threads.rb     # Default for parallel: true. Queue-based windowed Thread pool. No constraints on step results.
-lib/dag/workflow/parallel/ractors.rb     # parallel: :ractors. MARKED EXPERIMENTAL (.experimental? => true). Emits a one-time "EXPERIMENTAL strategy" warning on first instantiation per process (dedup'd via class-level @warned_experimental + warn_mutex). Spawns all Ractors at once (windowed approach deadlocked Ruby 4.0). Lazily preflights Ractor.make_shareable per step (cached by Step). Cannot host steps that call Process.spawn (per-Ractor deadlock detector trips).
 lib/dag/workflow/parallel/processes.rb   # parallel: :processes. Forks one child per task, ships result back via Marshal over IO.pipe with IO.select windowing. Results must be Marshal-able. Not on Windows.
 lib/dag/workflow/steps.rb        # Plugin registry (register/build/freeze_registry!)
 lib/dag/workflow/steps/          # Step type implementations (exec, ruby_script, etc.)
@@ -71,8 +70,8 @@ Adding a duplicate edge is **not** an error — `add_edge` is idempotent and ret
 - The `ruby` step type carries a lambda and is not YAML-serializable; Dumper raises `SerializationError`
 - Step inputs are always hashes keyed by dependency name; zero-dep steps receive {}
 - Runner result has the same shape on both Success and Failure branches: `{outputs:, trace:, error:}`. On Success: `result.value[:outputs]` / `result.value[:trace]` / `result.value[:error] == nil`. On Failure: `result.error[:outputs]` / `result.error[:trace]` / `result.error[:error] == {failed_node:, step_error:}`. Top-level keys are identical so callers can read trace/outputs without branching first.
-- Runner accepts `parallel:` as bool or symbol: `true`/`:threads` (default, Threads strategy), `false`/`:sequential`, `:processes`, `:ractors`. Backwards compat: `parallel: true` was Ractors before; it is now Threads. Threads is more reliable for the dominant exec workload.
-- `max_parallelism:` defaults to `[Etc.nprocessors, 8].min`. Honored as a hard cap by Threads and Processes; ignored (with one-time warning) by Ractors and always-1 for Sequential.
+- Runner accepts `parallel:` as bool or symbol: `true`/`:threads` (default, Threads strategy), `false`/`:sequential`, `:processes`. Anything else (including the long-removed `:ractors`) raises `ArgumentError`.
+- `max_parallelism:` defaults to `[Etc.nprocessors, 8].min`. Honored as a hard cap by Threads and Processes; always-1 for Sequential.
 - TraceEntry has `started_at`, `finished_at`, `duration_ms`, `status`, `input_keys` populated identically in parallel and sequential modes (skipped steps record `nil` timestamps). In sequential mode the trace is in layer order; in parallel mode entries within a layer arrive in completion order, not submission order. Cross-layer order is preserved either way.
 - `@adjacency` and `@reverse` are plain hashes (no default block); writes use `(hash[k] ||= Set.new) << v`, reads use `fetch_set` which returns a shared frozen `EMPTY_SET` on miss. Prevents auto-vivification on frozen hashes.
 - `Data.define` used for immutable value types: Edge, Step, Definition, Success, Failure, TraceEntry
@@ -82,11 +81,8 @@ Adding a duplicate edge is **not** an error — `add_edge` is idempotent and ret
 - Cycle detection via the private `reachable?(from, to)` walker (shared by `add_edge`'s pre-insert check and `path?`)
 - Topological sort uses Kahn's algorithm with O(V+E) queue, produces deterministic sorted layers
 - `shortest_path`, `longest_path`, and `critical_path` all share a single private `relax(sources, sentinel, &better)` helper that supports single- or multi-source relaxation in topological order
-- Step is pure data — does not call `Ractor.make_shareable` or know about Ractors at all. All Ractor concerns live in `Parallel::Ractors`.
-- `Parallel::Ractors#supports?` lazily preflights each step via `Ractor.make_shareable(step)`, caches the answer keyed by the Step value itself (field-based hash/eql?, no GC-reuse footgun), and warns once per `(name, type)` via class-level state guarded by a Mutex. `:ruby` steps are always treated as unsafe (Proc callable can't be shared).
-- `Parallel::Ractors.experimental? = true`; all other built-in strategies inherit `Strategy.experimental? = false`. `Parallel::Ractors#initialize` calls `warn_experimental_once` which prints a single stderr warning the first time the class is instantiated per process (dedup'd through class-level `@warned_experimental` under `@warn_mutex`). `spec/test_helper.rb` pre-marks `warned_experimental = true` so the normal test run stays silent; the dedicated `test_ractors_emits_experimental_warning_once_per_process` test resets the flag inside `capture_io` and verifies the warning fires exactly once.
-- **Ractors is kept as an experimental strategy on purpose, not as dead code.** Reasons to keep it shipped rather than deleted: (a) it exercises the per-layer `supports?` / Sequential-fallback path in `Runner#pick_strategy`, which is the only non-trivial strategy-selection code we have — deleting Ractors would make that path unreachable and it would silently bit-rot before any future constrained backend (Fibers, WASI, etc.) arrived to re-exercise it; (b) it is the reference for what a Ractor-based runner looks like once Ruby's per-Ractor deadlock detector stops tripping on `Process.spawn` — keeping it in `lib/` means the next Ruby upgrade just needs a green test run, not an archaeological dig through git history; (c) it documents — in living code — the exact shareability / payload constraints a user's pure-Ruby steps would have to satisfy to run on Ractors, which nobody would read if it lived only in an `examples/` file. **Production callers must not use `:ractors`.** The opt-in (`DAG_ENABLE_RACTORS=1`) + experimental warning + explicit `supports?` fallback are all there to make that impossible to trip into by accident. Do not add new Ractor-specific knobs to the core Runner or Strategy interface without gating them behind `DAG_ENABLE_RACTORS`, and do not promote Ractors to a default or to non-experimental status without also fixing the Ruby 4.0 deadlock detector interaction upstream.
-- Per-layer fallback: if the configured strategy's `supports?(steps)` returns false for the runnable steps in a layer, the Runner falls back to the Sequential strategy for just that layer (`@fallback_strategy`). Only the Ractors strategy overrides `supports?`.
+- Step is pure data — does not know about strategies. Strategies see only `Parallel::Task` values built by the Runner.
+- **Ractors strategy was removed in 0.3.0.** It used to ship as an experimental opt-in (`DAG_ENABLE_RACTORS=1`), but Ruby 4.0's per-Ractor deadlock detector trips on `Process.spawn`, which broke `:exec` and `:ruby_script` — the dominant step types. Keeping it gated behind a flag forced a `Strategy#supports?` / `@fallback_strategy` machinery in Runner that existed solely to support Ractors. Both the strategy and the fallback path are gone. If a future constrained backend (Fibers, WASI) needs the same shape, resurrect from git history (the last commit on `main` carrying ractors.rb) and reintroduce `supports?` then. **Do not add it back without that real driver.**
 - Conditional execution via `run_if:` lambda in step config; skipped steps get `:skipped` trace status
 - Exec step uses raw `Process.spawn` + `IO.pipe` + `IO.select` draining (not `Open3.capture3`) so a wall-clock `timeout` can interrupt long-running commands; `Exec.run_command(command, timeout:)` is the shared spawn helper used by both `exec` and `ruby_script` steps. `command` may be a String (interpreted by /bin/sh when it contains shell metacharacters) or an Array (passed as argv directly to execve, no shell). **Use the Array form for any value that did not come from a hard-coded literal in the source — period.** Do not try to escape input. `RubyScript` always passes an argv Array.
 - Exec failures return structured hashes with `:code`, `:command`, `:timeout_seconds` (or `:exit_status`, `:stdout`, `:stderr`) keys

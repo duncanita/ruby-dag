@@ -2,9 +2,9 @@
 
 Lightweight DAG workflow runner in pure Ruby. Zero runtime dependencies.
 
-Define multi-step workflows as YAML or build them programmatically. Automatic dependency resolution and parallel execution via a pluggable Strategy (Threads, Processes, Ractors, or Sequential).
+Define multi-step workflows as YAML or build them programmatically. Automatic dependency resolution and parallel execution via a pluggable Strategy (Threads, Processes, or Sequential).
 
-**Version:** 0.2.0 | **License:** MIT | **Ruby:** >= 4.0
+**Version:** 0.3.0 | **License:** MIT | **Ruby:** >= 4.0
 
 ## Install
 
@@ -19,7 +19,7 @@ bundle install
 Two layers, loosely coupled:
 
 - **Graph** (`DAG::Graph`) -- pure DAG data structure. Nodes are symbols, edges carry optional metadata. Enforces acyclicity. Iteration is via `each_node` / `each_edge` only — `Graph` intentionally does **not** include `Enumerable`, so `graph.map` / `graph.count` / `graph.include?` do not exist. Call `graph.each_node.map { ... }` / `graph.each_edge.count` / `graph.node?(name)` instead. No workflow concepts.
-- **Workflow** (`DAG::Workflow::*`) -- steps, types, YAML loading/dumping, and a pluggable `Parallel::Strategy` hierarchy (`Sequential`, `Threads`, `Ractors`, `Processes`). The `Runner` is a thin coordinator: it builds Tasks per topological layer and delegates execution to the configured strategy, falling back to `Sequential` per-layer when the strategy can't handle the steps in that layer. Built on top of Graph.
+- **Workflow** (`DAG::Workflow::*`) -- steps, types, YAML loading/dumping, and a pluggable `Parallel::Strategy` hierarchy (`Sequential`, `Threads`, `Processes`). The `Runner` is a thin coordinator: it builds Tasks per topological layer and delegates execution to the configured strategy. Built on top of Graph.
 
 You can use the Graph layer alone if you just need a DAG.
 
@@ -368,23 +368,14 @@ process lifetime if you'd rather.
 ## Parallel Execution
 
 Steps in the same topological layer run in parallel. The runner uses a
-**Strategy** pattern with four pluggable modes — pick one with the `parallel:`
+**Strategy** pattern with three pluggable modes — pick one with the `parallel:`
 keyword on `Runner.new`.
 
-| `parallel:` value | Strategy class | Stability | Default? | Hard concurrency cap | Step constraints |
-|---|---|---|---|---|---|
-| `true` / `:threads` | `Parallel::Threads` | stable | yes | yes (`max_parallelism`) | none |
-| `false` / `:sequential` | `Parallel::Sequential` | stable | — | n/a (always 1) | none |
-| `:processes` | `Parallel::Processes` | stable | — | yes (`max_parallelism`) | result must be Marshal-able |
-| `:ractors` | `Parallel::Ractors` | **experimental, opt-in** | — | no (best-effort, see below) | strategy lazily preflights `Ractor.make_shareable(step)` |
-
-Each strategy class answers `Strategy.experimental?` (`true` only for
-`Parallel::Ractors`). Selecting `parallel: :ractors` on a Runner raises
-unless the `DAG_ENABLE_RACTORS` env var is set — the stable strategies
-(`:threads`, `:processes`, `:sequential`) are always available. Even with
-the env var set, the first time a `Parallel::Ractors` is instantiated in a
-process the library prints a one-line warning to stderr summarising the
-limitations and pointing at `:threads` / `:processes` as stable alternatives.
+| `parallel:` value | Strategy class | Default? | Hard concurrency cap | Step constraints |
+|---|---|---|---|---|
+| `true` / `:threads` | `Parallel::Threads` | yes | yes (`max_parallelism`) | none |
+| `false` / `:sequential` | `Parallel::Sequential` | — | n/a (always 1) | none |
+| `:processes` | `Parallel::Processes` | — | yes (`max_parallelism`) | result must be Marshal-able |
 
 `max_parallelism:` defaults to `[Etc.nprocessors, 8].min`.
 
@@ -411,8 +402,7 @@ Forks one child per task and ships the result back through a pipe via Marshal.
 Windowed at `max_parallelism`. Use this when:
 
 - A step might crash the interpreter (segfault, OOM) and you want isolation.
-- You need true parallelism for CPU-bound pure-Ruby work without depending on
-  the experimental Ractor runtime.
+- You need true parallelism for CPU-bound pure-Ruby work (bypasses the GVL).
 
 Constraints:
 - Step results must be Marshal-able. Procs, lambdas, IO objects, and anonymous
@@ -422,53 +412,12 @@ Constraints:
 - Result payloads should fit comfortably in one pipe buffer (~64 KB) to avoid
   the child blocking on write.
 
-### Ractors (experimental, opt-in)
-
-> ⚠️  **EXPERIMENTAL, opt-in.** This strategy ships because it's useful
-> for pure-Ruby Ractor-safe steps, but it carries hard limitations on
-> Ruby 4.0 (see below) and should not be used as a default. The Runner
-> refuses `parallel: :ractors` unless `DAG_ENABLE_RACTORS=1` is set in the
-> environment — a deliberate speed bump so you cannot reach it by accident.
-> `Parallel::Ractors.experimental?` returns `true`, and even with the env
-> var set the library prints a one-time warning to stderr the first time
-> you instantiate it. For production workloads use `:threads` (the default)
-> or `:processes`.
-
-Runs each task inside its own Ractor, with results returning via `Ractor::Port`.
-The Ractors strategy lazily calls `Ractor.make_shareable(step)` the first time
-it sees a step (caching the answer by step identity). If any step in a layer
-can't be made shareable — most commonly the `:ruby` type whose Proc callable
-isn't shareable — the runner falls back to Sequential for that layer.
-
-`Step` itself is pure data and knows nothing about Ractors. The cost of
-preflight is paid only when you actually pick `parallel: :ractors`.
-
-**Known limitation on Ruby 4.0:** the per-Ractor deadlock detector cannot see
-threads in other Ractors or in the parent process. If a step's body blocks
-inside `Process.spawn` (or any blocking syscall), the detector trips with a
-fatal "No live threads left. Deadlock?" error. **This affects the built-in
-`:exec` and `:ruby_script` types.** In practice the Ractors strategy is only
-reliable for steps whose bodies are pure Ruby and never shell out — for
-everything else, use `:threads` or `:processes`.
-
-The Ractors strategy spawns ALL tasks in a layer at once and does not honor
-`max_parallelism` as a hard cap. A one-time warning is emitted when a layer
-exceeds the configured cap.
-
 ### Step result constraints by strategy
 
 | Strategy | Result constraint |
 |---|---|
 | `:sequential`, `:threads` | None — any Ruby object |
 | `:processes` | Must be Marshal-able. Payload is drained incrementally with `read_nonblock` inside an `IO.select` loop, so children writing more than one pipe buffer (~64 KB) do not deadlock. |
-| `:ractors` | The Ractors strategy lazily calls `Ractor.make_shareable(step)` per step (caching by step identity); a layer where any step can't be made shareable falls back to Sequential. Step results are also `make_shareable`'d before transit, and non-shareable values surface as a clean Failure. `Step` itself knows nothing about Ractors. |
-
-### Backwards compatibility
-
-`parallel: true` used to mean Ractors. It now means `:threads`. The Threads
-strategy is more robust for the dominant workload and the only mode I'd
-recommend by default. To opt into the previous behaviour, pass `parallel: :ractors`
-explicitly — but mind the Ruby 4.0 limitations above.
 
 ## Conditional Execution
 
@@ -492,17 +441,16 @@ Nodes declare dependencies with `depends_on`. The runner:
 1. Computes execution layers via Kahn's topological sort (O(V+E))
 2. For each layer, checks `run_if` and records `:skipped` trace entries for filtered steps
 3. Builds `Parallel::Task`s for the runnable steps and hands them to the configured Strategy
-4. If the Strategy's `supports?(steps)` returns false for that layer (e.g. the Ractors strategy with a non-Ractor-safe step), falls back to the Sequential strategy for just that layer
-5. Receives results from the Strategy in completion order, builds trace entries, fires `on_step_finish` callbacks
-6. Stops the workflow on the first failure
-7. Returns a single `{outputs:, trace:, error:}` payload (wrapped in `Success` or `Failure`)
+4. Receives results from the Strategy in completion order, builds trace entries, fires `on_step_finish` callbacks
+5. Stops the workflow on the first failure
+6. Returns a single `{outputs:, trace:, error:}` payload (wrapped in `Success` or `Failure`)
 
 Step inputs are **always** hashes keyed by dependency step name (e.g., `{ fetch: "data" }`). Zero-dependency steps receive `{}`.
 
 ## Execution Contract
 
 - Step inputs are always hashes keyed by dependency step name. Zero-dependency steps receive `{}`.
-- Step output constraints depend on which Strategy you pick (see [Step result constraints by strategy](#step-result-constraints-by-strategy)). Default `:threads` has none; `:processes` requires Marshal-able results; `:ractors` calls `Ractor.make_shareable` on each result before transit and surfaces non-shareable values as a clean Failure.
+- Step output constraints depend on which Strategy you pick (see [Step result constraints by strategy](#step-result-constraints-by-strategy)). Default `:threads` has none; `:processes` requires Marshal-able results.
 - Callback ordering is per-step but not globally deterministic across nodes in the same parallel layer. `on_step_start` fires when the runner submits a step to the strategy (before actual execution begins); `on_step_finish` fires when the strategy yields back the completed result.
 - On first step failure the workflow halts. Already-completed outputs from earlier layers (and from sibling steps in the same layer that finished before the failure was observed) are still returned.
 - The runner result has the same shape on both branches: `{outputs:, trace:, error:}`. On success it lives in `result.value` with `error: nil`; on failure it lives in `result.error` with `error: {failed_node:, step_error:}`. Trace and outputs are always at the top level — you never need to branch on success/failure to read them.
@@ -647,7 +595,7 @@ runner = DAG::Workflow::Runner.new(graph, registry,
 DAG::Workflow::Runner.new(
   graph,                                    # DAG::Graph (frozen or not)
   registry,                                 # DAG::Workflow::Registry
-  parallel:        true,                    # true/:threads (default), false/:sequential, :processes, :ractors
+  parallel:        true,                    # true/:threads (default), false/:sequential, :processes
   max_parallelism: DEFAULT_MAX_PARALLELISM, # [Etc.nprocessors, 8].min
   timeout:         nil,                     # wall-clock seconds, checked between layers; nil = no cap
   on_step_start:   nil,                     # ->(name, step) { ... }
@@ -687,8 +635,8 @@ particular it does **not** offer:
   process crashes mid-run, all state is lost. There is no checkpoint store,
   no on-disk journal, and no "resume from step X".
 - **Distributed execution.** Everything runs in one Ruby process (and its
-  forked / Ractor children for `:processes` / `:ractors`). There is no
-  network protocol, no scheduler, no worker pool across machines.
+  forked children for `:processes`). There is no network protocol, no
+  scheduler, no worker pool across machines.
 - **A scheduling/cron layer.** The runner runs once when you call it.
 - **Cancellation of a running step.** The workflow-level `timeout:` halts
   *between* layers, not inside one. Per-step timeouts are only available
@@ -703,14 +651,13 @@ building block, not the platform.
 
 ### Parallel strategies
 
-| Class | `parallel:` | Stability | Hard cap | Step constraints |
-|---|---|---|---|---|
-| `DAG::Workflow::Parallel::Sequential` | `false` / `:sequential` | stable | n/a (always 1) | none |
-| `DAG::Workflow::Parallel::Threads` | `true` / `:threads` (default) | stable | yes | none |
-| `DAG::Workflow::Parallel::Processes` | `:processes` | stable | yes | result must be Marshal-able; requires `Process.fork` |
-| `DAG::Workflow::Parallel::Ractors` | `:ractors` | **experimental** | no (best-effort, see Parallel Execution above) | strategy lazily preflights `Ractor.make_shareable(step)` per layer |
+| Class | `parallel:` | Hard cap | Step constraints |
+|---|---|---|---|
+| `DAG::Workflow::Parallel::Sequential` | `false` / `:sequential` | n/a (always 1) | none |
+| `DAG::Workflow::Parallel::Threads` | `true` / `:threads` (default) | yes | none |
+| `DAG::Workflow::Parallel::Processes` | `:processes` | yes | result must be Marshal-able; requires `Process.fork` |
 
-All four implement `#execute(tasks) { |name, result, started_at, finished_at, duration_ms| ... }` and `#supports?(steps)`. Each class answers `Strategy.experimental?` (default `false`; overridden to `true` only by `Parallel::Ractors`). Custom strategies can subclass `DAG::Workflow::Parallel::Strategy`.
+All three implement `#execute(tasks) { |name, result, started_at, finished_at, duration_ms| ... }`. Custom strategies can subclass `DAG::Workflow::Parallel::Strategy`.
 
 ## Development
 

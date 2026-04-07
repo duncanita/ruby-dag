@@ -16,8 +16,6 @@ module DAG
       #   true / :threads     -> Thread pool (default)
       #   false / :sequential -> single-threaded loop
       #   :processes          -> fork/pipe with hard concurrency cap
-      #   :ractors            -> Ractors (experimental, opt-in via
-      #                          DAG_ENABLE_RACTORS=1; see ractors.rb)
       #
       # timeout: optional wall-clock cap (seconds, Numeric) on the entire run.
       # Checked between layers — a layer that is already running will not be
@@ -37,7 +35,6 @@ module DAG
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
         @executors = {}
         @strategy = build_strategy(parallel, max_parallelism)
-        @fallback_strategy = Parallel::Sequential.new
         validate_coverage!(graph, registry)
       end
 
@@ -54,15 +51,6 @@ module DAG
           Parallel::Sequential.new
         when true, :threads
           Parallel::Threads.new(max_parallelism: max_parallelism)
-        when :ractors
-          unless ENV["DAG_ENABLE_RACTORS"]
-            raise ArgumentError,
-              "The :ractors strategy is experimental and disabled by default. " \
-              "Ruby 4.0's per-Ractor deadlock detector trips on :exec / :ruby_script, " \
-              "and the strategy does not honor max_parallelism as a hard cap. " \
-              "Set DAG_ENABLE_RACTORS=1 to opt in, or use :threads / :processes."
-          end
-          Parallel::Ractors.new(max_parallelism: max_parallelism)
         when :processes
           Parallel::Processes.new(max_parallelism: max_parallelism)
         else
@@ -169,16 +157,15 @@ module DAG
         [runnable, skipped]
       end
 
-      # Short-circuits on an empty task list: a fully-skipped layer must
-      # never touch the strategy, because touching `:ractors` allocates a
-      # `Ractor::Port` that nothing will ever receive on.
+      # Short-circuits on an empty task list (a layer in which every step
+      # was filtered by `run_if`): no point handing an empty array to the
+      # strategy, and it keeps the trace ordering tidy.
       def run_tasks(tasks, layer_index, trace, results)
         return if tasks.empty?
 
-        strategy = pick_strategy(tasks.map(&:step))
         input_keys_by_name = tasks.to_h { |t| [t.name, t.input_keys] }
 
-        strategy.execute(tasks) do |name, result, started_at, finished_at, duration_ms|
+        @strategy.execute(tasks) do |name, result, started_at, finished_at, duration_ms|
           trace << build_trace_entry(name, layer_index, result,
             started_at: started_at, finished_at: finished_at, duration_ms: duration_ms,
             input_keys: input_keys_by_name.fetch(name))
@@ -205,13 +192,6 @@ module DAG
           input_keys: input_keys, status: :skipped)
         @callbacks.finish(name, result)
         result
-      end
-
-      # All-or-nothing per-layer fallback. A partial split (shareable
-      # steps on the primary, rest on Sequential) would muddy callback
-      # and trace ordering; revisit if a real workload needs it.
-      def pick_strategy(steps)
-        @strategy.supports?(steps) ? @strategy : @fallback_strategy
       end
 
       def build_trace_entry(name, layer_index, result, started_at:, finished_at:, duration_ms:, input_keys:, status: nil)

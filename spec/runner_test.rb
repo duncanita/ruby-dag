@@ -315,9 +315,8 @@ class RunnerTest < Minitest::Test
   end
 
   def test_threads_strategy_handles_mixed_step_types
-    # Threads (the default for parallel: true) has no shareability constraint,
-    # so a layer mixing :exec and :ruby steps just runs in the pool directly.
-    # See parallel_test.rb for the analogous Ractors-strategy degradation test.
+    # Threads (the default for parallel: true) shares memory, so a layer
+    # mixing :exec and :ruby steps just runs in the pool directly.
     graph = DAG::Graph.new.add_node(:a).add_node(:b)
     registry = DAG::Workflow::Registry.new
     registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo safe"))

@@ -103,7 +103,7 @@ class ParallelTest < Minitest::Test
     assert_equal seq.value[:outputs][:z].value, par.value[:outputs][:z].value
   end
 
-  # 7. max_parallelism caps the in-flight Ractor count but still completes all steps
+  # 7. max_parallelism caps the in-flight worker count but still completes all steps
   def test_max_parallelism_caps_window_but_completes_all
     defn = build_test_workflow(
       a: {command: "echo a"},
@@ -123,7 +123,7 @@ class ParallelTest < Minitest::Test
     end
   end
 
-  # 8. max_parallelism: 1 still uses the Ractor path but is effectively serial
+  # 8. max_parallelism: 1 still uses the threaded path but is effectively serial
   def test_max_parallelism_one_completes_correctly
     defn = build_test_workflow(
       a: {command: "echo a"},
@@ -152,28 +152,6 @@ class ParallelTest < Minitest::Test
     assert DAG::Workflow::Runner::DEFAULT_MAX_PARALLELISM <= 8
   end
 
-  # 11. A step that returns a non-shareable value is reported as a clean Failure
-  #     rather than crashing the Ractor send.
-  def test_non_shareable_result_surfaces_as_failure
-    klass = Class.new do
-      def call(_step, _input)
-        DAG::Success.new(value: [+"mutable", +"strings"])
-      end
-    end
-    type = :"_test_unshareable_#{object_id}"
-    DAG::Workflow::Steps.register(type, klass, yaml_safe: false)
-
-    graph = DAG::Graph.new.add_node(:a).add_node(:b)
-    registry = DAG::Workflow::Registry.new
-    registry.register(DAG::Workflow::Step.new(name: :a, type: type))
-    registry.register(DAG::Workflow::Step.new(name: :b, type: type))
-
-    # Threads strategy (the default) has no shareability constraint — should
-    # always succeed.
-    result = DAG::Workflow::Runner.new(graph, registry, parallel: :threads).call
-    assert result.success?
-  end
-
   # =====================================================================
   # Strategy-explicit tests
   # =====================================================================
@@ -197,8 +175,7 @@ class ParallelTest < Minitest::Test
     {
       sequential: DAG::Workflow::Parallel::Sequential,
       threads: DAG::Workflow::Parallel::Threads,
-      processes: DAG::Workflow::Parallel::Processes,
-      ractors: DAG::Workflow::Parallel::Ractors
+      processes: DAG::Workflow::Parallel::Processes
     }.each do |sym, klass|
       runner = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: sym)
       assert_kind_of klass, runner.instance_variable_get(:@strategy), "expected #{sym} -> #{klass}"
@@ -212,23 +189,12 @@ class ParallelTest < Minitest::Test
     end
   end
 
-  # Ractors is gated behind DAG_ENABLE_RACTORS. With the var unset, asking
-  # for `:ractors` must raise with a clear message; the other strategies
-  # remain selectable.
-  def test_ractors_requires_env_var_opt_in
+  def test_parallel_ractors_mode_is_no_longer_recognized
     defn = build_test_workflow(a: {command: "echo a"})
-    original = ENV.delete("DAG_ENABLE_RACTORS")
-    begin
-      error = assert_raises(ArgumentError) do
-        DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: :ractors)
-      end
-      assert_match(/DAG_ENABLE_RACTORS/, error.message)
-
-      # Other strategies still work with the var unset.
-      assert DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: :threads).call.success?
-    ensure
-      ENV["DAG_ENABLE_RACTORS"] = original if original
+    error = assert_raises(ArgumentError) do
+      DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: :ractors)
     end
+    assert_match(/Unknown parallel mode/, error.message)
   end
 
   # --- Sequential strategy ---
@@ -386,115 +352,6 @@ class ParallelTest < Minitest::Test
     # Must complete well under the 30-second sleep the late children were
     # doing; the cleanup ladder should bring them down in ~100ms.
     assert elapsed < 3.0, "expected fast cleanup, took #{elapsed.round(2)}s"
-  end
-
-  # --- Ractors strategy ---
-  #
-  # The Ractors strategy on Ruby 4.0 cannot reliably host steps that call
-  # Process.spawn (the per-Ractor deadlock detector trips). These tests use
-  # only fast `echo` commands which finish before any concurrency can build up.
-
-  def test_ractors_strategy_runs_fast_steps
-    defn = build_test_workflow(
-      a: {command: "echo a"},
-      b: {command: "echo b"},
-      c: {command: "echo c"}
-    )
-    result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: :ractors).call
-    assert result.success?
-    %i[a b c].each { |n| assert_equal n.to_s, result.value[:outputs][n].value }
-  end
-
-  def test_ractors_degrades_unsafe_layer_to_sequential
-    graph = DAG::Graph.new.add_node(:a).add_node(:b)
-    registry = DAG::Workflow::Registry.new
-    registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo safe"))
-    registry.register(DAG::Workflow::Step.new(name: :b, type: :ruby, callable: ->(_) { DAG::Success.new(value: "from ruby") }))
-
-    result = DAG::Workflow::Runner.new(graph, registry, parallel: :ractors).call
-    assert result.success?
-    assert_equal "safe", result.value[:outputs][:a].value
-    assert_equal "from ruby", result.value[:outputs][:b].value
-  end
-
-  # The Ractors strategy is the only place that asks "is this step shareable?".
-  # Step is pure data; it does not know about Ractors. supports? does the
-  # preflight, caches by step identity, and warns once per (name, type).
-  def test_ractors_supports_returns_true_for_safe_steps
-    strategy = DAG::Workflow::Parallel::Ractors.new(max_parallelism: 2)
-    safe = DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo hi")
-    assert strategy.supports?([safe])
-  end
-
-  def test_ractors_supports_returns_false_for_ruby_steps
-    strategy = DAG::Workflow::Parallel::Ractors.new(max_parallelism: 2)
-    unsafe = DAG::Workflow::Step.new(name: :b, type: :ruby, callable: ->(_) { DAG::Success.new(value: 1) })
-    refute strategy.supports?([unsafe])
-  end
-
-  def test_ractors_supports_warns_only_once_for_same_unshareable_step
-    name = :"warn_once_#{object_id}"
-    DAG::Workflow::Parallel::Ractors.warned_unshareable.delete([name, :exec])
-    strategy = DAG::Workflow::Parallel::Ractors.new(max_parallelism: 2)
-    # StringIO is mutable and not Ractor-shareable, so make_shareable raises.
-    step = DAG::Workflow::Step.new(name: name, type: :exec, command: StringIO.new)
-
-    _, stderr1 = capture_io { strategy.supports?([step]) }
-    _, stderr2 = capture_io { strategy.supports?([step]) }
-
-    assert_match(/not Ractor-shareable/, stderr1)
-    assert_empty stderr2
-  end
-
-  # --- Experimental flag + warning ---
-
-  def test_ractors_is_marked_experimental
-    assert DAG::Workflow::Parallel::Ractors.experimental?
-  end
-
-  def test_stable_strategies_are_not_experimental
-    refute DAG::Workflow::Parallel::Sequential.experimental?
-    refute DAG::Workflow::Parallel::Threads.experimental?
-    refute DAG::Workflow::Parallel::Processes.experimental?
-  end
-
-  def test_ractors_emits_experimental_warning_once_per_process
-    DAG::Workflow::Parallel::Ractors.warned_experimental = false
-
-    _, stderr1 = capture_io { DAG::Workflow::Parallel::Ractors.new(max_parallelism: 2) }
-    _, stderr2 = capture_io { DAG::Workflow::Parallel::Ractors.new(max_parallelism: 2) }
-
-    assert_match(/EXPERIMENTAL strategy/, stderr1)
-    assert_match(/parallel: :threads or :processes/, stderr1)
-    assert_empty stderr2
-  ensure
-    DAG::Workflow::Parallel::Ractors.warned_experimental = true
-  end
-
-  # If the caller's yield block raises mid-receive-loop, execute must still
-  # reap every spawned Ractor (via the ensure clause) and propagate the
-  # original exception. A missing ensure would either silently orphan
-  # Ractors or leave the test hanging.
-  def test_ractors_strategy_joins_all_ractors_when_yield_raises
-    strategy = DAG::Workflow::Parallel::Ractors.new(max_parallelism: 3)
-    tasks = (1..3).map do |i|
-      step = DAG::Workflow::Step.new(name: :"r#{i}", type: :exec, command: "echo #{i}")
-      DAG::Workflow::Parallel::Task.new(
-        name: :"r#{i}", step: step, input: {},
-        executor_class: DAG::Workflow::Steps::Exec, input_keys: []
-      )
-    end
-
-    boom = Class.new(StandardError)
-    error = Timeout.timeout(5) do
-      assert_raises(boom) do
-        strategy.execute(tasks) do |_name, _result, _start, _finish, _dur|
-          raise boom, "yield exploded"
-        end
-      end
-    end
-
-    assert_equal "yield exploded", error.message
   end
 
   private

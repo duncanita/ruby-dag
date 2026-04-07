@@ -5,7 +5,7 @@ module DAG
     # Strategy-based parallel execution. The Runner builds Tasks for the
     # runnable steps in a layer (after run_if filtering) and hands them to a
     # Strategy. Each strategy decides how to run them concurrently — on the
-    # main thread, in a Thread pool, in Ractors, or in forked child processes.
+    # main thread, in a Thread pool, or in forked child processes.
     #
     # The Runner stays out of concurrency concerns; the Strategy stays out of
     # graph + trace concerns. Strategies only see Tasks and yield results.

@@ -11,8 +11,7 @@ module DAG
       # Why use this over Threads?
       #   - Memory isolation: a step that crashes the interpreter (segfault,
       #     out of memory) only kills its own child.
-      #   - True parallelism for CPU-bound pure-Ruby work without depending on
-      #     the experimental Ractor runtime.
+      #   - True parallelism for CPU-bound pure-Ruby work (bypasses the GVL).
       #
       # Constraints:
       #   - Step results must be Marshal-able. Procs, lambdas, IO objects, and

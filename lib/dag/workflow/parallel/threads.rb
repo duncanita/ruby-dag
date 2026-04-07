@@ -12,8 +12,8 @@ module DAG
       # `:ruby` step still serializes through the GVL, but is not the typical
       # case for this library.
       #
-      # Threads share memory, so step results don't need to be Ractor-shareable
-      # or Marshal-able. Any object the step returns is fine.
+      # Threads share memory, so step results don't need to be Marshal-able.
+      # Any object the step returns is fine.
       class Threads < Strategy
         def execute(tasks)
           queue = Queue.new
