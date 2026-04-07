@@ -9,17 +9,18 @@ module DAG
   #   value / error          -- payload accessors (one is always nil)
   #   and_then { |v| ... }   -- chain on success; passes through on failure
   #   map { |v| ... }        -- transform value on success; passes through on failure
-  #   map_error { |e| ... }  -- transform error on failure; passes through on success
-  #   tap { |v| ... }        -- side-effect on success, returns self
-  #   tap_error { |e| ... }  -- side-effect on failure, returns self
   #   recover { |e| ... }    -- failure → result (lets you turn failure back into success)
   #   unwrap!                -- value on success, raises on failure
-  #   value_or(default)      -- value on success, default on failure
   #   to_h                   -- {status:, value:|error:}
   #
   # `and_then` and `recover` MUST return a Result. The block result is checked
   # and a clean error is raised if not — this catches the most common monad
   # programming mistake (forgetting to wrap the return value).
+  #
+  # Methods deliberately NOT included: `tap`, `tap_error`, `map_error`,
+  # `value_or`. Each was either trivially expressible in two lines of caller
+  # code or never used in this library; the smaller surface is the long-term
+  # commitment we want to live with.
   module Result
     # Run `block` and return Success(its return value), or Failure(the exception
     # message) if it raises a StandardError. Use this to integrate with code

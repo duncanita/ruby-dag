@@ -46,8 +46,8 @@ lib/dag/workflow/parallel/processes.rb   # parallel: :processes. Forks one child
 lib/dag/workflow/steps.rb        # Plugin registry (register/build/freeze_registry!)
 lib/dag/workflow/steps/          # Step type implementations (exec, ruby_script, etc.)
 lib/dag/result.rb                # DAG::Result marker module included by Success/Failure. Also exposes Result.try { ... } to convert exception-throwing code into a Success/Failure, and Result.assert_result! used internally by and_then/recover to enforce the contract.
-lib/dag/success.rb               # Success(value:) with and_then, map, tap, tap_error (noop), recover (noop)
-lib/dag/failure.rb               # Failure(error:) with and_then (noop), map (noop), map_error, tap (noop), tap_error, recover
+lib/dag/success.rb               # Success(value:) with and_then, map, recover (noop), unwrap!, to_h
+lib/dag/failure.rb               # Failure(error:) with and_then (noop), map (noop), recover, unwrap! (raises), to_h
 ```
 
 ## Error hierarchy
@@ -78,7 +78,7 @@ Adding a duplicate edge is **not** an error — `add_edge` is idempotent and ret
 - `Data.define` used for immutable value types: Edge, Step, Definition, Success, Failure, TraceEntry
 - Data.define objects are frozen after construction -- cannot add instance variables
 - `DAG::Result` is a marker module included by Success/Failure, plus two module-level helpers: `Result.try { ... }` runs a block and returns `Success(return)` or `Failure("ExceptionClass: message")` (default `error_class: StandardError`, narrowable), and `Result.assert_result!(value, source)` is the internal guard that enforces `and_then` / `recover` blocks return a `Result`. `is_a?(DAG::Result)` is the type check. There is no `DAG.Success(...)` factory — call `Success.new(value: ...)` / `Failure.new(error: ...)`.
-- Monad API (symmetric across Success/Failure): `success?` / `failure?`, `value` / `error`, `and_then { |v| ... }` (success-side chain; MUST return Result; Failure passes through), `map { |v| ... }` (Success only; Failure passes through), `map_error { |e| ... }` (Failure only; Success passes through), `tap { |v| ... }` (Success side-effect, returns self), `tap_error { |e| ... }` (Failure side-effect, returns self), `recover { |e| ... }` (Failure-side chain; MUST return Result; Success passes through), `unwrap!`, `value_or(default)`, `to_h`. `and_then` and `recover` raise `TypeError` if the block returns a non-Result — this is intentional, it catches the most common monad bug.
+- Monad API (symmetric across Success/Failure): `success?` / `failure?`, `value` / `error`, `and_then { |v| ... }` (success-side chain; MUST return Result; Failure passes through), `map { |v| ... }` (Success only; Failure passes through), `recover { |e| ... }` (Failure-side chain; MUST return Result; Success passes through), `unwrap!`, `to_h`. `and_then` and `recover` raise `TypeError` if the block returns a non-Result — this is intentional, it catches the most common monad bug. Methods deliberately NOT shipped: `tap`, `tap_error`, `map_error`, `value_or`. Each was either trivially expressible in two lines of caller code or never used internally; the smaller surface is the long-term commitment.
 - Cycle detection via the private `reachable?(from, to)` walker (shared by `add_edge`'s pre-insert check and `path?`)
 - Topological sort uses Kahn's algorithm with O(V+E) queue, produces deterministic sorted layers
 - `shortest_path`, `longest_path`, and `critical_path` all share a single private `relax(sources, sentinel, &better)` helper that supports single- or multi-source relaxation in topological order

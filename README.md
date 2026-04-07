@@ -550,12 +550,8 @@ DAG::Success.new(value: 10)
 | `value` / `error` | value / nil | nil / error |
 | `and_then { \|v\| ... }` | calls block; **block must return a Result** | passes through |
 | `map { \|v\| ... }` | wraps block result in `Success` | passes through |
-| `map_error { \|e\| ... }` | passes through | wraps block result in `Failure` |
-| `tap { \|v\| ... }` | runs block for side effect, returns self | passes through |
-| `tap_error { \|e\| ... }` | passes through | runs block for side effect, returns self |
 | `recover { \|e\| ... }` | passes through | calls block; **block must return a Result** (lets you turn failure into success) |
 | `unwrap!` | returns value | raises |
-| `value_or(default)` | returns value | returns default |
 | `to_h` | `{status: :success, value:}` | `{status: :failure, error:}` |
 
 `and_then` and `recover` raise `TypeError` if the block returns a non-Result.
@@ -574,15 +570,6 @@ DAG::Result.try { JSON.parse(input) }
 
 DAG::Result.try(error_class: Errno::ENOENT) { File.read(path) }
 # Only Errno::ENOENT becomes a Failure; other exceptions still propagate.
-```
-
-### `tap` / `tap_error` — side effects without leaving the chain
-
-```ruby
-fetch(url)
-  .tap       { |body| metrics.increment("fetch.ok") }
-  .tap_error { |err|  logger.warn("fetch failed: #{err}") }
-  .and_then  { |body| parse(body) }
 ```
 
 ### `recover` — failure to success

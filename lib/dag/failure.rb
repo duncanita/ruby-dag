@@ -11,17 +11,6 @@ module DAG
     def and_then = self
     def map = self
 
-    def map_error
-      Failure.new(error: yield(error))
-    end
-
-    def tap = self
-
-    def tap_error
-      yield(error)
-      self
-    end
-
     # Failure-side counterpart of and_then. Block must return a Result, which
     # lets you turn a failure back into a success (or into a different failure):
     #
@@ -32,7 +21,6 @@ module DAG
     end
 
     def unwrap! = raise("Unwrap called on Failure: #{error}")
-    def value_or(default) = default
     def to_h = {status: :failure, error: error}
     def inspect = "Failure(#{error.inspect})"
     alias_method :to_s, :inspect

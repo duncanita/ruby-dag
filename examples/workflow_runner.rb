@@ -158,14 +158,13 @@ puts "and_then:       #{chained.inspect}"
 puts "and_then fail:  #{failure.and_then { |v| DAG::Success.new(value: "#{v} world") }.inspect}"
 puts
 
-# map_error transforms the error inside a Failure
-puts "map_error:       #{failure.map_error { |e| "wrapped: #{e}" }.inspect}"
-puts "map_error ok:    #{success.map_error { |e| "wrapped: #{e}" }.inspect}"
+# recover lets a Failure produce a fresh Result on the failure side
+recovered = failure.recover { |_e| DAG::Success.new(value: "default") }
+puts "recover:    #{recovered.inspect}"
 puts
 
-# unwrap! and value_or
+# unwrap! returns the value on Success and raises on Failure
 puts "unwrap!:    #{success.unwrap!}"
-puts "value_or:   #{failure.value_or("default")}"
 puts
 
 # to_h for serialization

@@ -30,17 +30,8 @@ class ResultTest < Minitest::Test
     assert_equal 15, DAG::Success.new(value: 5).map { |v| v * 3 }.value
   end
 
-  def test_success_ignores_map_error
-    result = DAG::Success.new(value: 42).map_error { |e| "wrapped: #{e}" }
-    assert_equal 42, result.value
-  end
-
   def test_success_unwraps
     assert_equal 42, DAG::Success.new(value: 42).unwrap!
-  end
-
-  def test_success_value_or_returns_value
-    assert_equal 42, DAG::Success.new(value: 42).value_or(0)
   end
 
   def test_success_to_h
@@ -84,17 +75,8 @@ class ResultTest < Minitest::Test
     assert_equal "err", result.error
   end
 
-  def test_failure_transforms_with_map_error
-    result = DAG::Failure.new(error: "err").map_error { |e| "wrapped: #{e}" }
-    assert_equal "wrapped: err", result.error
-  end
-
   def test_failure_unwrap_raises
     assert_raises(RuntimeError) { DAG::Failure.new(error: "nope").unwrap! }
-  end
-
-  def test_failure_value_or_returns_default
-    assert_equal 0, DAG::Failure.new(error: "err").value_or(0)
   end
 
   def test_failure_to_h
@@ -141,36 +123,6 @@ class ResultTest < Minitest::Test
     end
     assert_includes error.message, "and_then"
     assert_includes error.message, "Integer"
-  end
-
-  # --- tap / tap_error ---
-
-  def test_success_tap_runs_block_and_returns_self
-    seen = nil
-    result = DAG::Success.new(value: 42).tap { |v| seen = v }
-    assert_equal 42, seen
-    assert_equal 42, result.value
-  end
-
-  def test_success_tap_error_is_noop
-    seen = nil
-    result = DAG::Success.new(value: 42).tap_error { |e| seen = e }
-    assert_nil seen
-    assert_equal 42, result.value
-  end
-
-  def test_failure_tap_is_noop
-    seen = nil
-    result = DAG::Failure.new(error: "boom").tap { |v| seen = v }
-    assert_nil seen
-    assert_equal "boom", result.error
-  end
-
-  def test_failure_tap_error_runs_block_and_returns_self
-    seen = nil
-    result = DAG::Failure.new(error: "boom").tap_error { |e| seen = e }
-    assert_equal "boom", seen
-    assert_equal "boom", result.error
   end
 
   # --- recover ---
