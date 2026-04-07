@@ -162,8 +162,9 @@ class ResultTest < Minitest::Test
   def test_try_failure_on_standard_error
     result = DAG::Result.try { raise ArgumentError, "bad" }
     assert result.failure?
-    assert_includes result.error, "ArgumentError"
-    assert_includes result.error, "bad"
+    assert_equal :try_raised, result.error[:code]
+    assert_includes result.error[:message], "bad"
+    assert_equal "ArgumentError", result.error[:error_class]
   end
 
   def test_try_does_not_catch_outside_default

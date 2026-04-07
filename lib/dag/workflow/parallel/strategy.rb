@@ -11,6 +11,10 @@ module DAG
       # present even on failure (use the wall-clock at failure time and
       # duration_ms = 0 if you don't have real timings).
       #
+      # Subclasses MUST also declare a `STRATEGY_SYM` constant (`:threads` /
+      # `:sequential` / `:processes`) so `run_task` can stamp it into error
+      # payloads without re-deriving it from the class name on every call.
+      #
       # `max_parallelism` is a soft cap — most strategies window the in-flight
       # set down to that number; Sequential ignores it (it's always 1).
       class Strategy
@@ -26,29 +30,36 @@ module DAG
           raise NotImplementedError, "#{self.class} must implement #execute"
         end
 
-        # Strategy display name for warnings and trace metadata.
-        def name
-          self.class.name.split("::").last.downcase.to_sym
-        end
+        def name = self.class::STRATEGY_SYM
 
-        # Runs one task and returns the 5-tuple `[name, result, started_at,
-        # finished_at, duration_ms]` that `#execute` is contracted to yield.
-        # This is the ONE place that stamps the monotonic clock and rescues
-        # step errors into a `Failure`, so every strategy produces identical
-        # trace shape and identical error-message prefixes.
-        #
-        # Inherited dispatch carries the subclass identity: when a `Threads`
-        # instance calls `self.class.run_task(task)`, the inherited class
-        # method runs with `self == Threads`, so the error prefix says
-        # "Threads strategy: ..." with no parameter passing required.
+        # The single place that stamps timings, rescues step errors into a
+        # Failure, and enforces the executor return contract — so every
+        # strategy produces identical trace shape and identical error shape.
+        # Inherited dispatch carries the subclass identity: a `Threads`
+        # instance calling `self.class.run_task(task)` runs the inherited
+        # class method with `self == Threads`, so `STRATEGY_SYM` resolves to
+        # `:threads` without parameter passing.
         def self.run_task(task)
-          label = name.split("::").last
+          strategy_sym = const_get(:STRATEGY_SYM)
           started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           result =
             begin
-              task.executor_class.new.call(task.step, task.input)
+              raw = task.executor_class.new.call(task.step, task.input)
+              if raw.is_a?(Result)
+                raw
+              else
+                Failure.new(error: {
+                  code: :step_bad_return,
+                  message: "step #{task.name} returned #{raw.class} instead of a DAG::Result. " \
+                           "Wrap the value in DAG::Success.new(value: ...) or DAG::Failure.new(error: ...).",
+                  returned_class: raw.class.name,
+                  strategy: strategy_sym
+                })
+              end
             rescue => e
-              Failure.new(error: "#{label} strategy: step #{task.name} raised #{e.class}: #{e.message}")
+              Result.exception_failure(:step_raised, e,
+                message: "step #{task.name} raised: #{e.message}",
+                strategy: strategy_sym)
             end
           finished_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
           duration_ms = ((finished_at - started_at) * 1000).round(2)

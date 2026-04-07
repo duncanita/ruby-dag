@@ -26,8 +26,9 @@ module DAG
       # The child writes the whole payload then closes its write end; the
       # parent only treats the child as done when the read returns EOF.
       class Processes < Strategy
+        STRATEGY_SYM = :processes
         READ_CHUNK = 16_384
-        KILL_GRACE_SECONDS = 0.1
+        KILL_GRACE_SECONDS = Steps::Exec::KILL_GRACE_SECONDS
 
         def initialize(max_parallelism:)
           super
@@ -100,7 +101,9 @@ module DAG
           # fails, the parent will see an empty pipe and report a generic
           # crash message.
           begin
-            crash = Failure.new(error: "Processes strategy: child for #{task.name} crashed: #{e.class}: #{e.message}")
+            crash = Result.exception_failure(:child_crashed, e,
+              message: "child for #{task.name} crashed: #{e.message}",
+              strategy: STRATEGY_SYM)
             wr.write(Marshal.dump([task.name, crash, 0.0, 0.0, 0.0]))
             wr.close
           rescue
@@ -116,21 +119,31 @@ module DAG
           Marshal.dump(tuple)
         rescue TypeError => e
           name, _, started_at, finished_at, duration_ms = tuple
-          fallback = Failure.new(error: "Processes strategy: step #{name} returned non-marshalable value: #{e.message}")
+          fallback = Failure.new(error: {
+            code: :non_marshalable_result,
+            message: "step #{name} returned a non-marshalable value: #{e.message}",
+            strategy: STRATEGY_SYM
+          })
           Marshal.dump([name, fallback, started_at, finished_at, duration_ms])
         end
 
         def decode_payload(task, payload)
           if payload.empty?
             now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            result = Failure.new(error: "Processes strategy: child for #{task.name} exited without payload")
+            result = Failure.new(error: {
+              code: :empty_child_payload,
+              message: "child for #{task.name} exited without writing a payload",
+              strategy: STRATEGY_SYM
+            })
             return [task.name, result, now, now, 0.0]
           end
 
           Marshal.load(payload)
         rescue => e
           now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          result = Failure.new(error: "Processes strategy: failed to decode payload from #{task.name}: #{e.class}: #{e.message}")
+          result = Result.exception_failure(:decode_failed, e,
+            message: "failed to decode payload from #{task.name}: #{e.message}",
+            strategy: STRATEGY_SYM)
           [task.name, result, now, now, 0.0]
         end
 

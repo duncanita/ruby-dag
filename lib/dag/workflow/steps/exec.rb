@@ -5,12 +5,19 @@ module DAG
     module Steps
       class Exec
         DEFAULT_TIMEOUT = 30
+        # Shared with `Parallel::Processes`, which references it as
+        # `Steps::Exec::KILL_GRACE_SECONDS` — single source of truth.
         KILL_GRACE_SECONDS = 0.1
         READ_CHUNK = 16_384
 
         def call(step, _input)
           command = step.config[:command]
-          return Failure.new(error: "No command for exec step #{step.name}") unless command
+          unless command
+            return Failure.new(error: {
+              code: :exec_no_command,
+              message: "exec step #{step.name} has no :command config"
+            })
+          end
 
           self.class.run_command(command, timeout: step.config.fetch(:timeout, DEFAULT_TIMEOUT))
         end
@@ -42,6 +49,7 @@ module DAG
             pid = nil
             return Failure.new(error: {
               code: :exec_timeout,
+              message: "exec command exceeded #{timeout}s timeout",
               command: command,
               timeout_seconds: timeout
             })
@@ -117,6 +125,7 @@ module DAG
             else
               Failure.new(error: {
                 code: :exec_failed,
+                message: "exec command exited with status #{status.exitstatus}",
                 exit_status: status.exitstatus,
                 command: command,
                 stdout: stdout.strip,

@@ -22,17 +22,31 @@ module DAG
   # code or never used in this library; the smaller surface is the long-term
   # commitment we want to live with.
   module Result
-    # Run `block` and return Success(its return value), or Failure(the exception
-    # message) if it raises a StandardError. Use this to integrate with code
-    # that throws instead of returning a Result.
+    # Run `block` and return Success(its return value), or a structured
+    # Failure if it raises. Defaults to catching StandardError; narrow with
+    # `error_class:`.
     #
-    #   DAG::Result.try { JSON.parse(input) }   # => Success(...) or Failure("...")
-    #
-    # `error_class:` lets you narrow what is caught (defaults to StandardError).
+    #   DAG::Result.try { JSON.parse(input) }
     def self.try(error_class: StandardError)
       Success.new(value: yield)
     rescue error_class => e
-      Failure.new(error: "#{e.class}: #{e.message}")
+      exception_failure(:try_raised, e)
+    end
+
+    # Builds a `Failure` from a rescued exception with the standard library
+    # error shape: `{code:, message:, error_class:, **extras}`. Used by
+    # `Result.try` and by every rescue site that turns an exception into a
+    # `Failure` (file IO, ruby callable raises, child crashes, decode
+    # failures, the strategy-level rescue). Centralizes the contract so the
+    # `error_class:` field is never forgotten and the message phrasing stays
+    # consistent.
+    def self.exception_failure(code, exception, message: nil, **extras)
+      Failure.new(error: {
+        code: code,
+        message: message || exception.message,
+        error_class: exception.class.name,
+        **extras
+      })
     end
 
     # Internal helper used by `and_then` / `recover` to enforce the contract.

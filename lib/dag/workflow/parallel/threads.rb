@@ -18,6 +18,8 @@ module DAG
       # Threads share memory, so step results don't need to be Marshal-able.
       # Any object the step returns is fine.
       class Threads < Strategy
+        STRATEGY_SYM = :threads
+
         def execute(tasks)
           queue = Queue.new
           pending = tasks.dup
@@ -59,7 +61,11 @@ module DAG
           ensure
             unless pushed
               now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-              failure = Failure.new(error: "Threads strategy: worker for #{task.name} died without producing a result")
+              failure = Failure.new(error: {
+                code: :worker_died,
+                message: "worker for #{task.name} died without producing a result",
+                strategy: STRATEGY_SYM
+              })
               queue.push([task.name, failure, now, now, 0.0])
             end
           end

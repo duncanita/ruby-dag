@@ -8,8 +8,19 @@ module DAG
 
         def call(step, _input)
           path = step.config[:path]
-          return Failure.new(error: "No path for ruby_script step #{step.name}") unless path
-          return Failure.new(error: "Script not found: #{path}") unless File.exist?(path)
+          unless path
+            return Failure.new(error: {
+              code: :ruby_script_no_path,
+              message: "ruby_script step #{step.name} has no :path config"
+            })
+          end
+          unless File.exist?(path)
+            return Failure.new(error: {
+              code: :ruby_script_not_found,
+              message: "ruby_script step #{step.name}: script not found at #{path}",
+              path: path
+            })
+          end
 
           argv = ["ruby", path, *Array(step.config[:args]).map(&:to_s)]
           Exec.run_command(argv, timeout: step.config.fetch(:timeout, DEFAULT_TIMEOUT))

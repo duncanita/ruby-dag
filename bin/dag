@@ -48,10 +48,15 @@ if dry_run
   exit 0
 end
 
+def humanize_error(err)
+  return err[:message] if err.is_a?(Hash) && err[:message]
+  err.inspect
+end
+
 on_start = ->(name, _step) { puts "▶ #{name}" if verbose }
 on_finish = ->(name, result) {
   status = result.success? ? "✓" : "✗"
-  detail = result.failure? ? " — #{result.error}" : ""
+  detail = result.failure? ? " — #{humanize_error(result.error)}" : ""
   puts "  #{status} #{name}#{detail}"
 }
 
@@ -64,6 +69,6 @@ if result.success?
   exit 0
 else
   failure = result.error[:error]
-  warn "\n✗ Failed at '#{failure[:failed_node]}': #{failure[:step_error]}"
+  warn "\n✗ Failed at '#{failure[:failed_node]}': #{humanize_error(failure[:step_error])}"
   exit 1
 end

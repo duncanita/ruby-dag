@@ -33,7 +33,8 @@ class StepsTest < Minitest::Test
   def test_exec_returns_failure_on_nil_command
     result = run_step(:exec)
     assert result.failure?
-    assert_match(/No command/, result.error)
+    assert_equal :exec_no_command, result.error[:code]
+    assert_match(/no :command/, result.error[:message])
   end
 
   def test_exec_handles_large_output_without_deadlock
@@ -69,7 +70,9 @@ class StepsTest < Minitest::Test
   def test_ruby_script_returns_failure_for_missing_file
     result = run_step(:ruby_script, path: "/nonexistent/script.rb")
     assert result.failure?
-    assert_match(/not found/, result.error)
+    assert_equal :ruby_script_not_found, result.error[:code]
+    assert_match(/not found/, result.error[:message])
+    assert_equal "/nonexistent/script.rb", result.error[:path]
   end
 
   def test_ruby_script_escapes_path_safely
@@ -113,13 +116,16 @@ class StepsTest < Minitest::Test
   def test_file_read_fails_for_missing_file
     result = run_step(:file_read, path: "/nonexistent/file.txt")
     assert result.failure?
-    assert_match(/not found/, result.error)
+    assert_equal :file_read_not_found, result.error[:code]
+    assert_match(/not found/, result.error[:message])
+    assert_equal "/nonexistent/file.txt", result.error[:path]
   end
 
   def test_file_read_fails_without_path
     result = run_step(:file_read)
     assert result.failure?
-    assert_match(/No path/, result.error)
+    assert_equal :file_read_no_path, result.error[:code]
+    assert_match(/no :path/, result.error[:message])
   end
 
   # --- FileWrite ---
@@ -160,7 +166,8 @@ class StepsTest < Minitest::Test
   def test_file_write_fails_without_path
     result = run_step(:file_write, content: "hello")
     assert result.failure?
-    assert_match(/No path/, result.error)
+    assert_equal :file_write_no_path, result.error[:code]
+    assert_match(/no :path/, result.error[:message])
   end
 
   def test_file_write_multi_dep_without_from_returns_failure
@@ -169,7 +176,9 @@ class StepsTest < Minitest::Test
     result = DAG::Workflow::Steps.build(:file_write).call(step, {a: "foo", b: "bar"})
 
     assert result.failure?
-    assert_match(/multiple upstream deps/, result.error)
+    assert_equal :file_write_ambiguous_input, result.error[:code]
+    assert_match(/multiple upstream deps/, result.error[:message])
+    assert_equal [:a, :b], result.error[:input_keys]
     refute File.exist?(path), "should not have written anything"
   ensure
     File.delete(path) if File.exist?(path)
@@ -192,7 +201,9 @@ class StepsTest < Minitest::Test
     result = DAG::Workflow::Steps.build(:file_write).call(step, {a: "foo"})
 
     assert result.failure?
-    assert_match(/no such input/, result.error)
+    assert_equal :file_write_missing_from_input, result.error[:code]
+    assert_match(/no such input/, result.error[:message])
+    assert_equal :missing, result.error[:from]
   ensure
     File.delete(path) if File.exist?(path)
   end
@@ -214,7 +225,8 @@ class StepsTest < Minitest::Test
     result = DAG::Workflow::Steps.build(:file_write).call(step, {})
 
     assert result.failure?
-    assert_match(/no content/, result.error)
+    assert_equal :file_write_no_content, result.error[:code]
+    assert_match(/no content/, result.error[:message])
   ensure
     File.delete(path) if File.exist?(path)
   end
@@ -243,13 +255,16 @@ class StepsTest < Minitest::Test
     result = run_step(:ruby, callable: callable)
 
     assert result.failure?
-    assert_match(/boom/, result.error)
+    assert_equal :ruby_callable_raised, result.error[:code]
+    assert_match(/boom/, result.error[:message])
+    assert_equal "RuntimeError", result.error[:error_class]
   end
 
   def test_ruby_fails_without_callable
     result = run_step(:ruby)
     assert result.failure?
-    assert_match(/No callable/, result.error)
+    assert_equal :ruby_no_callable, result.error[:code]
+    assert_match(/no :callable/, result.error[:message])
   end
 
   # --- Step is pure data ---

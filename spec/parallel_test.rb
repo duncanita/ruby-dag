@@ -240,6 +240,57 @@ class ParallelTest < Minitest::Test
   # Worker boundary: if anything below StandardError reaches the bottom of the
   # worker thread, the parent must not deadlock on queue.pop. The strategy
   # catches Exception and pushes a synthetic Failure so the runner keeps going.
+  # Boundary check: a step executor that returns anything other than a
+  # DAG::Result must be wrapped in a clean Failure by Strategy.run_task,
+  # not propagated and crashed on later when Runner#resolve_input calls
+  # `.value` on it. This is the safety net for the most common :ruby
+  # footgun (callable returning a plain value instead of a Result).
+  def test_strategy_wraps_non_result_executor_return_into_failure
+    # A custom executor that violates the contract on purpose.
+    klass = Class.new do
+      def call(_step, _input) = "raw string, not a Result"
+    end
+    type = :"_test_bad_return_#{object_id}"
+    DAG::Workflow::Steps.register(type, klass, yaml_safe: false)
+
+    graph = DAG::Graph.new.add_node(:bad)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :bad, type: type))
+
+    %i[sequential threads processes].each do |mode|
+      next if mode == :processes && !Process.respond_to?(:fork)
+      result = DAG::Workflow::Runner.new(graph, registry, parallel: mode).call
+
+      assert result.failure?, "expected failure on #{mode}"
+      assert_equal :bad, result.error[:error][:failed_node]
+      step_error = result.error[:error][:step_error]
+      assert_equal :step_bad_return, step_error[:code], "wrong code on #{mode}"
+      assert_equal "String", step_error[:returned_class]
+      assert_equal mode, step_error[:strategy]
+      assert_match(/instead of a DAG::Result/, step_error[:message])
+    end
+  end
+
+  # Plain :ruby step with a callable that returns a String instead of a
+  # Result is the most common form of the contract violation. Verifies the
+  # downstream Runner does not crash later in resolve_input.
+  def test_ruby_callable_returning_non_result_does_not_cascade_into_crash
+    graph = DAG::Graph.new.add_node(:producer).add_node(:consumer).add_edge(:producer, :consumer)
+    registry = DAG::Workflow::Registry.new
+    # Forgot to wrap in Success — this used to cause a NoMethodError on
+    # String when the consumer's input got resolved.
+    registry.register(DAG::Workflow::Step.new(name: :producer, type: :ruby,
+      callable: ->(_input) { "I forgot to wrap" }))
+    registry.register(DAG::Workflow::Step.new(name: :consumer, type: :ruby,
+      callable: ->(input) { DAG::Success.new(value: input) }))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
+    assert result.failure?
+    assert_equal :producer, result.error[:error][:failed_node]
+    assert_equal :step_bad_return, result.error[:error][:step_error][:code]
+    refute result.error[:outputs].key?(:consumer), "consumer must not have run"
+  end
+
   def test_threads_strategy_does_not_deadlock_when_worker_raises_below_standard_error
     klass = Class.new do
       def call(_step, _input)
@@ -259,7 +310,10 @@ class ParallelTest < Minitest::Test
 
     assert result.failure?
     assert_equal :dies, result.error[:error][:failed_node]
-    assert_match(/worker for dies died/, result.error[:error][:step_error])
+    step_error = result.error[:error][:step_error]
+    assert_equal :worker_died, step_error[:code]
+    assert_match(/worker for dies died/, step_error[:message])
+    assert_equal :threads, step_error[:strategy]
   end
 
   # --- Processes strategy ---

@@ -82,7 +82,11 @@ module DAG
 
           if deadline_passed?(deadline)
             failed_name = :workflow_timeout
-            failed_result = Failure.new(error: {code: :workflow_timeout, timeout_seconds: @timeout})
+            failed_result = Failure.new(error: {
+              code: :workflow_timeout,
+              message: "workflow exceeded #{@timeout}s wall-clock deadline",
+              timeout_seconds: @timeout
+            })
             break
           end
 

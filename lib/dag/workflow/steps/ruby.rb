@@ -6,11 +6,17 @@ module DAG
       class Ruby
         def call(step, input)
           callable = step.config[:callable]
-          return Failure.new(error: "No callable for ruby step #{step.name}") unless callable
+          unless callable
+            return Failure.new(error: {
+              code: :ruby_no_callable,
+              message: "ruby step #{step.name} has no :callable config"
+            })
+          end
 
           callable.call(input)
         rescue => e
-          Failure.new(error: "Ruby error: #{e.class}: #{e.message}")
+          Result.exception_failure(:ruby_callable_raised, e,
+            message: "ruby step #{step.name} callable raised: #{e.message}")
         end
       end
     end

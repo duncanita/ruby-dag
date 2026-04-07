@@ -6,13 +6,24 @@ module DAG
       class FileRead
         def call(step, _input)
           path = step.config[:path]
-          return Failure.new(error: "No path for file_read step #{step.name}") unless path
+          unless path
+            return Failure.new(error: {
+              code: :file_read_no_path,
+              message: "file_read step #{step.name} has no :path config"
+            })
+          end
 
           Success.new(value: File.read(path))
         rescue Errno::ENOENT
-          Failure.new(error: "File not found: #{path}")
+          Failure.new(error: {
+            code: :file_read_not_found,
+            message: "file_read step #{step.name}: file not found at #{path}",
+            path: path
+          })
         rescue SystemCallError, IOError => e
-          Failure.new(error: "Read error: #{e.message}")
+          Result.exception_failure(:file_read_io_error, e,
+            message: "file_read step #{step.name}: #{e.message}",
+            path: path)
         end
       end
     end

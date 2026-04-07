@@ -9,6 +9,8 @@ module DAG
       #
       # `max_parallelism` is ignored — sequential is always 1.
       class Sequential < Strategy
+        STRATEGY_SYM = :sequential
+
         def initialize(max_parallelism: 1)
           super(max_parallelism: 1)
         end
