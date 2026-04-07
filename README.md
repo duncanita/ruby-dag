@@ -4,7 +4,7 @@ Lightweight DAG workflow runner in pure Ruby. Zero runtime dependencies.
 
 Define multi-step workflows as YAML or build them programmatically. Automatic dependency resolution and parallel execution via a pluggable Strategy (Threads, Processes, or Sequential).
 
-**Version:** 0.3.0 | **License:** MIT | **Ruby:** >= 4.0
+**Version:** 0.3.0 | **License:** MIT | **Ruby:** >= 3.2
 
 ## Install
 
@@ -63,10 +63,12 @@ nodes:
 
 ### YAML schema
 
-The YAML loader uses `YAML.safe_load` and accepts only **string keys and
-scalar values** (strings, integers, floats, booleans, arrays, hashes). It
-does not deserialize Ruby Symbols, Procs, Time, Date, or arbitrary Ruby
-objects — those are not safe to load from untrusted YAML.
+The YAML loader uses `YAML.safe_load` and accepts only **string keys**,
+scalar values (strings, integers, floats, booleans, arrays, hashes), and
+**Ruby Symbols** so step configs that use symbol values (e.g. `mode: :w`)
+round-trip cleanly through `Dumper`. It does **not** deserialize Procs,
+Time, Date, or arbitrary Ruby objects — those are not safe to load from
+untrusted YAML.
 
 | Key | Where | Type | Required | Notes |
 |---|---|---|---|---|
