@@ -52,6 +52,38 @@ module DAG
         def name
           self.class.name.split("::").last.downcase.to_sym
         end
+
+        # Runs one task and returns the 5-tuple `[name, result, started_at,
+        # finished_at, duration_ms]` that `#execute` is contracted to yield.
+        # This is the ONE place that stamps the monotonic clock and rescues
+        # step errors into a `Failure`, so every strategy produces identical
+        # trace shape and identical error-message prefixes.
+        #
+        # Inherited dispatch carries the subclass identity: when a `Threads`
+        # instance calls `self.class.run_task(task)`, the inherited class
+        # method runs with `self == Threads`, so `name` returns the subclass
+        # name and the error prefix says "Threads strategy: ..." with no
+        # parameter passing required. The Ractors strategy uses the same
+        # mechanism — it cannot reach `self` from inside its isolated Ractor
+        # body, so it passes its own class in as a Ractor argument and
+        # calls `klass.run_task(task)`.
+        def self.run_task(task)
+          label = name.split("::").last
+          started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          result =
+            begin
+              task.executor_class.new.call(task.step, task.input)
+            rescue => e
+              Failure.new(error: "#{label} strategy: step #{task.name} raised #{e.class}: #{e.message}")
+            end
+          finished_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          duration_ms = ((finished_at - started_at) * 1000).round(2)
+          [task.name, result, started_at, finished_at, duration_ms]
+        end
+
+        def run_task(task)
+          self.class.run_task(task)
+        end
       end
     end
   end

@@ -39,13 +39,11 @@ module DAG
         # Runs `task` in a fresh Thread and pushes exactly one result tuple to
         # `queue` — no matter what. The structure is:
         #
-        #   begin:    run the step, catch StandardError → Failure
-        #   ensure:   if we never pushed (step raised below StandardError, or
+        #   begin:    delegate to Strategy#run_task (which rescues StandardError
+        #             into a Failure and stamps timings).
+        #   ensure:   if we never pushed (thread died below StandardError, or
         #             something exploded in our bookkeeping) push a synthetic
         #             failure so the parent's `queue.pop` cannot deadlock.
-        #
-        # This replaces an earlier `rescue Exception` boundary — same contract
-        # (push exactly once, never leave the parent hanging), less rescue.
         def spawn_worker(task, queue)
           Thread.new do
             # The strategy itself surfaces worker death as a Failure (see the
@@ -53,17 +51,7 @@ module DAG
             # redundant double reporting.
             Thread.current.report_on_exception = false
             pushed = false
-            started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            result =
-              begin
-                task.executor_class.new.call(task.step, task.input)
-              rescue => e
-                Failure.new(error: "Threads strategy: step #{task.name} raised #{e.class}: #{e.message}")
-              end
-            finished_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            duration_ms = ((finished_at - started_at) * 1000).round(2)
-
-            queue.push([task.name, result, started_at, finished_at, duration_ms])
+            queue.push(run_task(task))
             pushed = true
           ensure
             unless pushed

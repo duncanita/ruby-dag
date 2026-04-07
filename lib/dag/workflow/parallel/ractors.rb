@@ -166,16 +166,13 @@ module DAG
         end
 
         def spawn_ractor(task, results_port)
-          Ractor.new(task.name, task.step, task.input, results_port, task.executor_class) do |n, s, inp, out, klass|
-            started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            result =
-              begin
-                klass.new.call(s, inp)
-              rescue => e
-                Failure.new(error: "Ractors strategy: step #{n} raised #{e.class}: #{e.message}")
-              end
-            finished_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            duration_ms = ((finished_at - started_at) * 1000).round(2)
+          # The Ractor body is an isolated scope — no `self`, no access to
+          # enclosing instance methods. We pass our own class (Classes are
+          # trivially Ractor-shareable) so the inherited `run_task` runs
+          # with `self == Ractors` and derives its label the same way every
+          # other strategy does.
+          Ractor.new(task, results_port, self.class) do |t, out, klass|
+            name, result, started_at, finished_at, duration_ms = klass.run_task(t)
 
             # Make the payload explicitly shareable. If the step returned a
             # value containing non-shareable objects (mutable IO, sockets, etc.)
@@ -185,10 +182,10 @@ module DAG
               begin
                 Ractor.make_shareable(result.to_h)
               rescue => e
-                {status: :failure, error: "step #{n} returned non-shareable value: #{e.class}: #{e.message}"}
+                {status: :failure, error: "step #{name} returned non-shareable value: #{e.class}: #{e.message}"}
               end
 
-            out.send([n, result_hash, started_at, finished_at, duration_ms])
+            out.send([name, result_hash, started_at, finished_at, duration_ms])
           end
         end
 

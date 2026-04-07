@@ -93,25 +93,7 @@ module DAG
         end
 
         def run_in_child(task, wr)
-          started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          result =
-            begin
-              task.executor_class.new.call(task.step, task.input)
-            rescue => e
-              Failure.new(error: "Processes strategy: step #{task.name} raised #{e.class}: #{e.message}")
-            end
-          finished_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          duration_ms = ((finished_at - started_at) * 1000).round(2)
-
-          payload =
-            begin
-              Marshal.dump([task.name, result, started_at, finished_at, duration_ms])
-            rescue TypeError => e
-              fallback = Failure.new(error: "Processes strategy: step #{task.name} returned non-marshalable value: #{e.message}")
-              Marshal.dump([task.name, fallback, started_at, finished_at, duration_ms])
-            end
-
-          wr.write(payload)
+          wr.write(marshal_tuple(run_task(task)))
           wr.close
           exit!(0)
         rescue => e
@@ -126,6 +108,17 @@ module DAG
             # ignore — parent will handle empty payload
           end
           exit!(1)
+        end
+
+        # On a non-marshalable step return, the fallback Failure carries
+        # the original timing — the step really did run for that long, the
+        # only thing that failed was shipping the value back to the parent.
+        def marshal_tuple(tuple)
+          Marshal.dump(tuple)
+        rescue TypeError => e
+          name, _, started_at, finished_at, duration_ms = tuple
+          fallback = Failure.new(error: "Processes strategy: step #{name} returned non-marshalable value: #{e.message}")
+          Marshal.dump([name, fallback, started_at, finished_at, duration_ms])
         end
 
         def decode_payload(task, payload)
