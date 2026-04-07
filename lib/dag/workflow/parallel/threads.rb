@@ -3,8 +3,11 @@
 module DAG
   module Workflow
     module Parallel
-      # Thread-pool strategy. Runs tasks on `Thread`s with a windowed pool
-      # capped at `max_parallelism`.
+      # Thread-windowed strategy. Spawns one fresh `Thread` per task and
+      # caps the in-flight set at `max_parallelism` via admission control on
+      # the producer side. There is no thread reuse (this is a windowed
+      # spawner, not a reusable pool — Thread creation is cheap enough at the
+      # tens-to-hundreds-of-tasks scale this library targets).
       #
       # Thread parallelism is the right default for the dominant ruby-dag
       # workload (`exec` / `ruby_script` / `file_*` steps), all of which

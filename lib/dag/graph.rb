@@ -183,10 +183,8 @@ module DAG
 
     # --- Scalar queries ---
 
-    # Prefer `node_count` / `edge_count` over `size` / `count` in code that
-    # cares which it's measuring. `size` is the node count (kept for symmetry
-    # with collection types); `count` comes from `Enumerable` and also iterates
-    # nodes via `each = each_node`.
+    # Prefer `node_count` / `edge_count` in code that cares which it's
+    # measuring. `size` aliases `node_count` for symmetry with collection types.
     def node_count = @nodes.size
 
     def edge_count
