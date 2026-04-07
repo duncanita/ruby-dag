@@ -516,7 +516,8 @@ if you want a different scope.
 
 ```ruby
 DAG::Result.try { JSON.parse(input) }
-# => Success(...)  or  Failure("JSON::ParserError: ...")
+# => Success(...) or
+#    Failure({code: :try_raised, message: "JSON::ParserError: ...", error_class: "JSON::ParserError"})
 
 DAG::Result.try(error_class: Errno::ENOENT) { File.read(path) }
 # Only Errno::ENOENT becomes a Failure; other exceptions still propagate.
@@ -529,14 +530,62 @@ parse_config(path)
   .recover { |_| DAG::Success.new(value: DEFAULT_CONFIG) }
 ```
 
-### Exec step failure shapes
+### Failure error shape
 
-Exec-style step failures return structured error hashes:
+**Every `Failure` the library produces carries a `Hash` error with at least
+`:code` (a `Symbol`) and `:message` (a `String`)**, plus optional fields
+specific to the failure mode. This is the long-term contract — programmatic
+consumers can branch on `error[:code]` without sniffing the value type, and
+log lines can pull `error[:message]` for human-readable context.
 
 ```ruby
-# { code: :exec_failed,  exit_status: 1, command: "...", stdout: "...", stderr: "..." }
-# { code: :exec_timeout, command: "...", timeout_seconds: 30 }
+# Common shapes:
+
+# exec failures
+{ code: :exec_failed,        message: "...", exit_status: 1, command: "...", stdout: "...", stderr: "..." }
+{ code: :exec_timeout,       message: "...", command: "...", timeout_seconds: 30 }
+{ code: :exec_no_command,    message: "..." }
+
+# file_read / file_write failures
+{ code: :file_read_not_found,         message: "...", path: "..." }
+{ code: :file_read_io_error,          message: "...", path: "...", error_class: "Errno::EACCES" }
+{ code: :file_read_no_path,           message: "..." }
+{ code: :file_write_no_path,          message: "..." }
+{ code: :file_write_invalid_mode,     message: "...", mode: "x", valid_modes: ["w", "a"] }
+{ code: :file_write_missing_from_input, message: "...", from: :upstream }
+{ code: :file_write_no_content,       message: "..." }
+{ code: :file_write_ambiguous_input,  message: "...", input_keys: [:a, :b] }
+{ code: :file_write_io_error,         message: "...", path: "...", error_class: "Errno::ENOSPC" }
+
+# ruby_script failures
+{ code: :ruby_script_no_path,   message: "..." }
+{ code: :ruby_script_not_found, message: "...", path: "..." }
+
+# ruby callable failures
+{ code: :ruby_no_callable,      message: "..." }
+{ code: :ruby_callable_raised,  message: "...", error_class: "RuntimeError" }
+
+# strategy / runner level
+# (no :step field — the Runner wrapper already carries `failed_node`)
+{ code: :step_raised,            message: "...", error_class: "...", strategy: :threads }
+{ code: :step_bad_return,        message: "...", returned_class: "String", strategy: :threads }
+{ code: :worker_died,            message: "...", strategy: :threads }
+{ code: :child_crashed,          message: "...", error_class: "...", strategy: :processes }
+{ code: :non_marshalable_result, message: "...", strategy: :processes }
+{ code: :empty_child_payload,    message: "...", strategy: :processes }
+{ code: :decode_failed,          message: "...", error_class: "...", strategy: :processes }
+{ code: :workflow_timeout,       message: "...", timeout_seconds: 30 }
+
+# Result.try
+{ code: :try_raised,         message: "...", error_class: "..." }
 ```
+
+The `:step_bad_return` code is the safety net for the most common `:ruby`
+footgun — a callable that returns a plain value instead of a
+`DAG::Success` / `DAG::Failure`. The boundary check lives in
+`Strategy.run_task`, so any executor (built-in or custom) that violates the
+contract surfaces as a clean Failure on the failing step rather than
+crashing in `Runner#resolve_input` on the next layer.
 
 ## Callbacks
 
@@ -617,7 +666,7 @@ but no further layers start once the deadline passes. Per-step timeouts on
 If the deadline trips, the runner returns a `Failure` with the standard
 `{outputs:, trace:, error:}` shape; `error[:failed_node]` is
 `:workflow_timeout` and `error[:step_error]` is
-`{code: :workflow_timeout, timeout_seconds: <n>}`.
+`{code: :workflow_timeout, message: "...", timeout_seconds: <n>}`.
 
 A long pure-Ruby `:ruby` callable inside a single layer cannot be interrupted
 by this library — there is no safe way to do that without the kind of
@@ -661,7 +710,7 @@ building block, not the platform.
 
 All three implement `#execute(tasks) { |name, result, started_at, finished_at, duration_ms| ... }`. Custom strategies can subclass `DAG::Workflow::Parallel::Strategy`.
 
-## Benchmarks
+## Performance
 
 A small benchmark harness lives at `script/benchmark.rb`. It runs three
 synthetic shapes (`fan_out`, `chain`, `mixed`) at two sizes (16 and 64 steps)
@@ -678,9 +727,98 @@ ruby script/benchmark.rb --quick                        # smaller matrix (~15s)
 Each cell is the median of 3 wall-clock runs. Numbers are not portable
 across machines — re-run on the target before drawing conclusions.
 
-The most recent baseline lives at
-[`benchmarks/0.3.0-baseline.md`](benchmarks/0.3.0-baseline.md). Generate a
-fresh report and check it in alongside every release.
+### Headline numbers
+
+Apple Silicon (`arm64-darwin25`, 14 logical cores, `max_parallelism = 8`),
+medians of 3 runs. Numbers below are pulled directly from the per-Ruby
+baseline reports under [`benchmarks/`](benchmarks/) — re-run on your own
+hardware before drawing conclusions.
+
+#### `fan_out` — 64 IO-bound steps in one layer (`sleep 20ms` × 64)
+
+This is the case where parallelism wins biggest: 64 independent
+syscall-bound steps that all release the GVL.
+
+| Ruby   | `:sequential` | `:threads` | `:processes` | Best speedup |
+|---|---|---|---|---|
+| 3.2.11 | 1.90s | 228.2ms | 236.1ms | **8.33×** (`:threads`) |
+| 3.3.11 | 1.93s | 228.7ms | 235.3ms | **8.42×** (`:threads`) |
+| 3.4.9  | 1.92s | 227.3ms | 236.4ms | **8.46×** (`:threads`) |
+| 4.0.2  | 1.92s | 230.3ms | 233.9ms | **8.32×** (`:threads`) |
+
+Threads scale right up to `max_parallelism` here because every step is
+blocked on a syscall and the GVL is released. `:processes` matches within
+noise; the fork cost is amortized across 64 long-ish steps.
+
+#### `fan_out` — 64 CPU-bound steps in one layer (naive `fib(22)` × 64)
+
+Pure-Ruby CPU work: threads can't beat the GVL, processes can.
+
+| Ruby   | `:sequential` | `:threads`        | `:processes`           |
+|---|---|---|---|
+| 3.2.11 | 67.8ms        | 69.6ms (0.97×)    | **37.7ms (1.80×)**     |
+| 3.3.11 | 76.3ms        | 74.6ms (1.02×)    | **35.8ms (2.13×)**     |
+| 3.4.9  | 78.8ms        | 77.4ms (1.02×)    | **40.5ms (1.95×)**     |
+| 4.0.2  | 65.2ms        | 67.5ms (0.97×)    | **35.9ms (1.81×)**     |
+
+`:threads` adds essentially zero — GVL serializes the work. `:processes`
+roughly doubles throughput because the fork/Marshal cost amortizes across
+64 steps and each child runs on a real core.
+
+#### `chain` — 64 sequential layers (no parallelism possible)
+
+This isolates the per-layer scheduling overhead. With nothing to parallelize,
+the strategies should converge on `:sequential`'s number, plus their fixed
+overhead. Numbers from Ruby 3.4.9.
+
+| Workload | `:sequential` | `:threads` | `:processes` |
+|---|---|---|---|
+| IO-bound (`sleep 20ms` × 64)  | 1.93s  | 1.92s (1.01×) | 2.02s (0.96×) |
+| CPU-bound (`fib(22)` × 64)    | 77.8ms | 79.3ms (0.98×) | 139.5ms (0.56×) |
+
+`:threads` overhead is invisible — within ±1% of sequential on both
+workloads. `:processes` pays a per-layer `fork()` on every step: ~5% slower
+on IO (where the syscall dominates) but **~80% slower on CPU**, where the
+fork cost is large compared to a single `fib(22)` call. That's the
+empirical argument for *not* defaulting to `:processes`.
+
+#### `mixed` — 64 steps in 16 layers of width 4 (Ruby 3.4.9)
+
+The realistic middle ground: a moderate fan-out in each layer.
+
+| Workload | `:sequential` | `:threads` | `:processes` |
+|---|---|---|---|
+| IO-bound  | 1.96s  | 492.9ms (3.97×) | 502.9ms (3.89×) |
+| CPU-bound | 78.1ms | 77.4ms (1.01×)  | 64.2ms (1.22×)  |
+
+IO-bound speedup tracks the per-layer width (4×). CPU-bound `:processes`
+still wins, but its margin shrinks because the per-layer fork cost gets
+hit 16 times instead of once.
+
+### When to pick which strategy
+
+| If your workload is… | Pick |
+|---|---|
+| Mostly `exec` / `ruby_script` / `file_*` (default) | `:threads` (the default) |
+| CPU-bound pure-Ruby `:ruby` steps you want to scale | `:processes` |
+| Steps that might segfault / OOM and you need isolation | `:processes` |
+| Tiny graphs (<8 steps) where startup dominates | `:sequential` is often fastest |
+| You're debugging a race | `:sequential` |
+
+The benchmark numbers are not a substitute for measuring your real workflow.
+They're a sanity check that says: when you can use threads, use them; when
+you can't, processes still beat sequential at scale; and the per-step
+scheduling overhead is small enough that you don't need to think about it
+unless your steps are sub-millisecond.
+
+### Reproducing
+
+```bash
+ruby script/benchmark.rb --out benchmarks/$(date +%Y-%m-%d).md
+```
+
+Per-Ruby baselines for 3.2 / 3.3 / 3.4 / 4.0 are checked in under
+[`benchmarks/`](benchmarks/) and regenerated before every release.
 
 ## Development
 
