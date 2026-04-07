@@ -37,9 +37,9 @@ module DAG
         end
 
         def execute(tasks)
-          pending = tasks.dup
           in_flight = {}    # pid => task
           pipes = {}        # IO  => {pid:, buffer:}
+          pending = tasks.dup
           completed = 0
 
           while completed < tasks.size
@@ -71,8 +71,8 @@ module DAG
             end
           end
         ensure
-          pipes&.each_key { |rd| rd.close unless rd.closed? }
-          drain_orphans(in_flight) if in_flight
+          pipes.each_key { |rd| rd.close unless rd.closed? }
+          drain_orphans(in_flight)
         end
 
         private

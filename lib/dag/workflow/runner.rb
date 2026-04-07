@@ -204,8 +204,10 @@ module DAG
         )
       end
 
+      # Predecessors always have a Result in `outputs` by the time we
+      # resolve a downstream layer — skipped steps still record Success(nil).
       def resolve_input(name, outputs)
-        @graph.each_predecessor(name).to_h { |dep| [dep, outputs[dep]&.value] }
+        @graph.each_predecessor(name).to_h { |dep| [dep, outputs[dep].value] }
       end
 
       def validate_coverage!(graph, registry)
