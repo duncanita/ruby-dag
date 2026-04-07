@@ -38,7 +38,7 @@ module DAG
       @nodes = Set.new
       @adjacency = {}        # from → Set[to]
       @reverse = {}          # to → Set[from]
-      @edge_metadata = {}    # [from, to] → Hash
+      @edge_metadata = {}    # from → {to → frozen Hash}
     end
 
     # --- Mutation ---
@@ -82,17 +82,18 @@ module DAG
       sym = name.to_sym
       raise UnknownNodeError, "Unknown node: #{sym}" unless @nodes.include?(sym)
 
-      fetch_set(@adjacency, sym).each do |to|
-        @reverse[to]&.delete(sym)
-        @edge_metadata.delete([sym, to])
-      end
+      fetch_set(@adjacency, sym).each { |to| @reverse[to]&.delete(sym) }
       fetch_set(@reverse, sym).each do |from|
         @adjacency[from]&.delete(sym)
-        @edge_metadata.delete([from, sym])
+        delete_metadata(from, sym)
       end
 
       @adjacency.delete(sym)
       @reverse.delete(sym)
+      # Outgoing edges from `sym` all live under the single key
+      # `@edge_metadata[sym]`, so the whole row drops in one shot — that's
+      # the payoff over the old flat `[from, to]` keying.
+      @edge_metadata.delete(sym)
       @nodes.delete(sym)
       self
     end
@@ -163,6 +164,7 @@ module DAG
       @adjacency.freeze
       @reverse.each_value(&:freeze)
       @reverse.freeze
+      @edge_metadata.each_value(&:freeze)
       @edge_metadata.freeze
       @cached_layers = compute_topological_layers.freeze
       @cached_sort = @cached_layers.flatten.freeze
@@ -212,7 +214,7 @@ module DAG
     end
 
     def edge_metadata(from, to)
-      @edge_metadata.fetch([from.to_sym, to.to_sym], {})
+      @edge_metadata.dig(from.to_sym, to.to_sym) || {}
     end
 
     # --- Neighbor queries ---
@@ -481,7 +483,7 @@ module DAG
       @nodes = @nodes.dup
       @adjacency = @adjacency.transform_values(&:dup)
       @reverse = @reverse.transform_values(&:dup)
-      @edge_metadata = @edge_metadata.dup
+      @edge_metadata = @edge_metadata.transform_values(&:dup)
     end
 
     def check_frozen!
@@ -491,7 +493,7 @@ module DAG
     def remove_edge_internal(from, to)
       @adjacency[from]&.delete(to)
       @reverse[to]&.delete(from)
-      @edge_metadata.delete([from, to])
+      delete_metadata(from, to)
     end
 
     # Inserts an edge into the adjacency hashes WITHOUT cycle detection or
@@ -501,7 +503,19 @@ module DAG
     def insert_edge(from, to, metadata)
       (@adjacency[from] ||= Set.new) << to
       (@reverse[to] ||= Set.new) << from
-      @edge_metadata[[from, to]] = metadata.freeze unless metadata.empty?
+      return if metadata.empty?
+      (@edge_metadata[from] ||= {})[to] = metadata.freeze
+    end
+
+    # Drops a single (from, to) entry from the nested @edge_metadata hash
+    # and compacts the parent row when it becomes empty. Both edge-removal
+    # paths (single edge, node removal's incoming-edge sweep) need exactly
+    # this dance — keep them in sync by routing through here.
+    def delete_metadata(from, to)
+      inner = @edge_metadata[from]
+      return unless inner
+      inner.delete(to)
+      @edge_metadata.delete(from) if inner.empty?
     end
 
     DOT_BARE_ID = /\A[A-Za-z_][A-Za-z0-9_]*\z/
