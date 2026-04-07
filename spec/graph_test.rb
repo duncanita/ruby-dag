@@ -121,12 +121,14 @@ class GraphTest < Minitest::Test
 
   def test_roots
     graph = build_graph([:a, :b, :c], [[:a, :c], [:b, :c]])
-    assert_equal [:a, :b].to_set, graph.roots.to_set
+    assert_equal [:a, :b].to_set, graph.roots
+    assert_kind_of Set, graph.roots
   end
 
   def test_leaves
     graph = build_graph([:a, :b, :c], [[:a, :b], [:a, :c]])
-    assert_equal [:b, :c].to_set, graph.leaves.to_set
+    assert_equal [:b, :c].to_set, graph.leaves
+    assert_kind_of Set, graph.leaves
   end
 
   def test_successors
@@ -182,6 +184,29 @@ class GraphTest < Minitest::Test
   def test_subgraph_rejects_unknown_nodes
     graph = build_graph([:a], [])
     assert_raises(ArgumentError) { graph.subgraph([:a, :missing]) }
+  end
+
+  def test_subgraph_preserves_edge_metadata
+    graph = DAG::Graph.new.add_node(:a).add_node(:b).add_node(:c)
+      .add_edge(:a, :b, weight: 5)
+      .add_edge(:b, :c, weight: 9)
+    sub = graph.subgraph([:a, :b])
+    assert_equal({weight: 5}, sub.edge_metadata(:a, :b))
+  end
+
+  # Smoke test that subgraph scales linearly, not O(V·(V+E)).
+  def test_subgraph_of_large_chain_is_fast
+    g = DAG::Graph.new
+    500.times { |i| g.add_node(:"n#{i}") }
+    499.times { |i| g.add_edge(:"n#{i}", :"n#{i + 1}") }
+
+    started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    sub = g.subgraph((0...500).map { |i| :"n#{i}" })
+    elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at
+
+    assert_equal 500, sub.size
+    assert_equal 499, sub.each_edge.count
+    assert elapsed < 1.0, "subgraph on 500-node chain took #{elapsed.round(3)}s, expected <1s"
   end
 
   # --- Flat topological sort ---
@@ -292,6 +317,26 @@ class GraphTest < Minitest::Test
     assert_instance_of Enumerator, graph.each_edge
   end
 
+  def test_each_predecessor
+    graph = build_graph([:a, :b, :c, :d], [[:a, :c], [:b, :c], [:c, :d]])
+    collected = []
+    graph.each_predecessor(:c) { |p| collected << p }
+    assert_equal [:a, :b], collected.sort
+  end
+
+  def test_each_predecessor_with_no_predecessors
+    graph = build_graph([:a, :b], [[:a, :b]])
+    collected = []
+    graph.each_predecessor(:a) { |p| collected << p }
+    assert_empty collected
+  end
+
+  def test_each_predecessor_returns_enumerator
+    graph = build_graph([:a, :b], [[:a, :b]])
+    assert_instance_of Enumerator, graph.each_predecessor(:b)
+    assert_equal [:a], graph.each_predecessor(:b).to_a
+  end
+
   # --- Immutability after freeze ---
 
   def test_frozen_graph_rejects_add_node
@@ -322,6 +367,18 @@ class GraphTest < Minitest::Test
     graph = build_graph([:a], [])
     graph.freeze
     assert_raises(FrozenError) { graph.nodes << :hack }
+  end
+
+  def test_unfrozen_graph_nodes_reader_returns_frozen_snapshot
+    graph = build_graph([:a, :b], [[:a, :b]])
+    refute graph.frozen?
+    assert graph.nodes.frozen?
+    assert_raises(FrozenError) { graph.nodes << :hack }
+    # The returned snapshot must not be the same object as a subsequent call —
+    # and, crucially, mutating it cannot corrupt the internal state.
+    assert graph.node?(:a)
+    assert graph.node?(:b)
+    refute graph.node?(:hack)
   end
 
   # --- dup (unfrozen copy) ---
@@ -434,25 +491,77 @@ class GraphTest < Minitest::Test
   # --- Equality ---
 
   def test_equality_same_structure
+    g1 = build_graph([:a, :b], [[:a, :b]]).freeze
+    g2 = build_graph([:a, :b], [[:a, :b]]).freeze
+    assert_equal g1, g2
+  end
+
+  def test_equality_different_structure
+    g1 = build_graph([:a, :b], [[:a, :b]]).freeze
+    g2 = build_graph([:a, :b, :c], [[:a, :b]]).freeze
+    refute_equal g1, g2
+  end
+
+  def test_equality_with_non_graph
+    graph = build_graph([:a], []).freeze
+    refute_equal graph, "not a graph"
+  end
+
+  def test_equality_works_on_unfrozen_graphs
+    g1 = build_graph([:a, :b], [[:a, :b]])
+    g2 = build_graph([:a, :b], [[:a, :b]]).freeze
+    assert_equal g1, g2
+    assert_equal g2, g1
+  end
+
+  def test_equality_works_on_two_unfrozen_graphs
     g1 = build_graph([:a, :b], [[:a, :b]])
     g2 = build_graph([:a, :b], [[:a, :b]])
     assert_equal g1, g2
   end
 
-  def test_equality_different_structure
-    g1 = build_graph([:a, :b], [[:a, :b]])
-    g2 = build_graph([:a, :b, :c], [[:a, :b]])
-    refute_equal g1, g2
-  end
-
-  def test_equality_with_non_graph
-    graph = build_graph([:a], [])
-    refute_equal graph, "not a graph"
+  def test_hash_works_on_unfrozen_graphs
+    graph = build_graph([:a, :b], [[:a, :b]])
+    assert_kind_of Integer, graph.hash
   end
 
   def test_hash_same_for_equal_graphs
-    g1 = build_graph([:a, :b], [[:a, :b]])
-    g2 = build_graph([:a, :b], [[:a, :b]])
+    g1 = build_graph([:a, :b], [[:a, :b]]).freeze
+    g2 = build_graph([:a, :b], [[:a, :b]]).freeze
+    assert_equal g1.hash, g2.hash
+  end
+
+  def test_equality_independent_of_edge_insertion_order
+    g1 = DAG::Graph.new
+    [:a, :b, :c, :d].each { |n| g1.add_node(n) }
+    g1.add_edge(:a, :b)
+    g1.add_edge(:c, :d)
+    g1.add_edge(:a, :c)
+    g1.freeze
+
+    g2 = DAG::Graph.new
+    [:a, :b, :c, :d].each { |n| g2.add_node(n) }
+    g2.add_edge(:a, :c)
+    g2.add_edge(:a, :b)
+    g2.add_edge(:c, :d)
+    g2.freeze
+
+    assert_equal g1, g2
+    assert_equal g1.hash, g2.hash
+  end
+
+  def test_equality_independent_of_metadata_key_order
+    g1 = DAG::Graph.new
+    [:a, :b].each { |n| g1.add_node(n) }
+    g1.add_edge(:a, :b, weight: 5, label: "x")
+    g1.freeze
+
+    g2 = DAG::Graph.new
+    [:a, :b].each { |n| g2.add_node(n) }
+    g2.add_edge(:a, :b, label: "x", weight: 5)
+    g2.freeze
+
+    assert_equal g1, g2
     assert_equal g1.hash, g2.hash
   end
 
@@ -680,29 +789,53 @@ class GraphTest < Minitest::Test
     assert_equal({weight: 2}, new_graph.edge_metadata(:x, :c))
   end
 
-  # --- Enumerable ---
+  # --- Iteration via each_node / each_edge ---
 
-  def test_enumerable_map
+  def test_each_node_chains_with_enumerable
     graph = build_graph([:a, :b, :c], [])
-    assert_equal [:a, :b, :c], graph.map { |n| n }.sort
+    assert_equal [:a, :b, :c], graph.each_node.map { |n| n }.sort
   end
 
-  def test_enumerable_select
+  def test_each_node_select
     graph = build_graph([:a, :b, :c], [[:a, :b]])
-    roots = graph.select { |n| graph.indegree(n) == 0 }
+    roots = graph.each_node.select { |n| graph.indegree(n) == 0 }
     assert_includes roots, :a
     assert_includes roots, :c
   end
 
-  def test_enumerable_count
+  def test_each_node_count_matches_node_count
     graph = build_graph([:a, :b, :c], [])
-    assert_equal 3, graph.count
+    assert_equal 3, graph.each_node.count
   end
 
-  def test_enumerable_include
+  def test_no_top_level_each
     graph = build_graph([:a, :b], [])
-    assert graph.include?(:a)
-    refute graph.include?(:z)
+    refute_respond_to graph, :each, "Graph intentionally has no `each` — use each_node / each_edge"
+    refute graph.is_a?(Enumerable), "Graph intentionally does not include Enumerable"
+  end
+
+  def test_node_count_and_edge_count
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+    assert_equal 3, graph.node_count
+    assert_equal 2, graph.edge_count
+  end
+
+  def test_edge_count_zero_for_no_edges
+    graph = build_graph([:a, :b], [])
+    assert_equal 2, graph.node_count
+    assert_equal 0, graph.edge_count
+  end
+
+  def test_edge_count_after_remove_edge
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+    graph.remove_edge(:a, :b)
+    assert_equal 1, graph.edge_count
+  end
+
+  def test_node_predicate
+    graph = build_graph([:a, :b], [])
+    assert graph.node?(:a)
+    refute graph.node?(:z)
   end
 
   # --- incoming_edges ---
@@ -913,6 +1046,32 @@ class GraphTest < Minitest::Test
     graph = build_graph([:a, :b], [])
     graph.add_edge(:a, :b, weight: 3)
     assert_match(/a -> b \[label="weight=3"\]/, graph.to_dot)
+  end
+
+  def test_to_dot_quotes_node_names_with_special_chars
+    graph = DAG::Graph.new
+    graph.add_node(:"my-node")
+    graph.add_node(:"1st")
+    graph.add_edge(:"my-node", :"1st")
+    dot = graph.to_dot
+
+    assert_includes dot, %(  "my-node";)
+    assert_includes dot, %(  "1st";)
+    assert_includes dot, %(  "my-node" -> "1st";)
+  end
+
+  def test_to_dot_escapes_quotes_and_backslashes_in_node_names
+    graph = DAG::Graph.new
+    tricky = :'name with "quotes" and \\ backslash'
+    graph.add_node(tricky)
+    dot = graph.to_dot
+
+    assert_includes dot, %(  "name with \\"quotes\\" and \\\\ backslash";)
+  end
+
+  def test_to_dot_quotes_graph_name_with_special_chars
+    graph = build_graph([:a], [])
+    assert_match(/digraph "my-dag" \{/, graph.to_dot(name: "my-dag"))
   end
 
   # --- Empty graph ---

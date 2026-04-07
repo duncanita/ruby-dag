@@ -7,7 +7,6 @@ module DAG
   class DuplicateNodeError < Error; end
   class UnknownNodeError < Error; end
   class SerializationError < Error; end
-  class ParallelSafetyError < Error; end
 
   class ValidationError < Error
     attr_reader :errors

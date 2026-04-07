@@ -8,9 +8,25 @@ module DAG
     def failure? = false
     def error = nil
 
-    def and_then = yield(value)
-    def map = Success.new(value: yield(value))
+    def and_then
+      Result.assert_result!(yield(value), "and_then")
+    end
+
+    def map
+      Success.new(value: yield(value))
+    end
+
     def map_error = self
+
+    def tap
+      yield(value)
+      self
+    end
+
+    def tap_error = self
+
+    def recover = self
+
     def unwrap! = value
     def value_or(_default) = value
     def to_h = {status: :success, value: value}

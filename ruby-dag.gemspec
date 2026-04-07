@@ -7,7 +7,7 @@ Gem::Specification.new do |spec|
   spec.version = DAG::VERSION
   spec.authors = ["Riccardo Lucatuorto (GnuDuncan)"]
   spec.summary = "Lightweight DAG workflow runner in pure Ruby"
-  spec.description = "Define multi-step workflows as YAML or build them programmatically. Automatic dependency resolution and parallel execution via Ractors. Zero runtime dependencies."
+  spec.description = "Define multi-step workflows as YAML or build them programmatically. Automatic dependency resolution and pluggable parallel execution (Threads, Processes, Ractors, or Sequential). Zero runtime dependencies."
   spec.homepage = "https://github.com/duncanita/ruby-dag"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 4.0"

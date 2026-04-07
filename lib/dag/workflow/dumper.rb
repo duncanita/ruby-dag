@@ -6,6 +6,9 @@ module DAG
   module Workflow
     class Dumper
       NON_SERIALIZABLE_TYPES = %i[ruby].freeze
+      # Output keys owned by the YAML node itself; a colliding config key
+      # would silently overwrite them.
+      RESERVED_YAML_KEYS = %w[type depends_on].freeze
 
       def self.to_yaml(definition)
         new(definition).dump
@@ -37,7 +40,16 @@ module DAG
 
       def build_step(name, step)
         node = {"type" => step.type.to_s}
-        step.config.each { |k, v| node[k.to_s] = v }
+        step.config.each do |k, v|
+          key = k.to_s
+          if RESERVED_YAML_KEYS.include?(key)
+            raise SerializationError,
+              "Step #{name} has config key '#{key}' which collides with a " \
+              "reserved YAML key (#{RESERVED_YAML_KEYS.join(", ")}). " \
+              "Rename the config key before dumping."
+          end
+          node[key] = v
+        end
         deps = @graph.predecessors(name).to_a.sort
         unless deps.empty?
           node["depends_on"] = deps.map { |dep|

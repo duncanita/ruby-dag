@@ -132,4 +132,98 @@ class ResultTest < Minitest::Test
     assert result.failure?
     assert_nil result.error
   end
+
+  # --- and_then enforces Result return ---
+
+  def test_success_and_then_enforces_result
+    error = assert_raises(TypeError) do
+      DAG::Success.new(value: 1).and_then { |v| v + 1 }
+    end
+    assert_includes error.message, "and_then"
+    assert_includes error.message, "Integer"
+  end
+
+  # --- tap / tap_error ---
+
+  def test_success_tap_runs_block_and_returns_self
+    seen = nil
+    result = DAG::Success.new(value: 42).tap { |v| seen = v }
+    assert_equal 42, seen
+    assert_equal 42, result.value
+  end
+
+  def test_success_tap_error_is_noop
+    seen = nil
+    result = DAG::Success.new(value: 42).tap_error { |e| seen = e }
+    assert_nil seen
+    assert_equal 42, result.value
+  end
+
+  def test_failure_tap_is_noop
+    seen = nil
+    result = DAG::Failure.new(error: "boom").tap { |v| seen = v }
+    assert_nil seen
+    assert_equal "boom", result.error
+  end
+
+  def test_failure_tap_error_runs_block_and_returns_self
+    seen = nil
+    result = DAG::Failure.new(error: "boom").tap_error { |e| seen = e }
+    assert_equal "boom", seen
+    assert_equal "boom", result.error
+  end
+
+  # --- recover ---
+
+  def test_success_recover_is_noop
+    result = DAG::Success.new(value: 42).recover { |_| DAG::Success.new(value: 0) }
+    assert_equal 42, result.value
+  end
+
+  def test_failure_recover_to_success
+    result = DAG::Failure.new(error: "boom").recover { |_| DAG::Success.new(value: :ok) }
+    assert result.success?
+    assert_equal :ok, result.value
+  end
+
+  def test_failure_recover_to_other_failure
+    result = DAG::Failure.new(error: "boom").recover { |e| DAG::Failure.new(error: "wrapped: #{e}") }
+    assert result.failure?
+    assert_equal "wrapped: boom", result.error
+  end
+
+  def test_failure_recover_enforces_result
+    error = assert_raises(TypeError) do
+      DAG::Failure.new(error: "boom").recover { |_| 42 }
+    end
+    assert_includes error.message, "recover"
+  end
+
+  # --- Result.try ---
+
+  def test_try_success
+    result = DAG::Result.try { 1 + 1 }
+    assert result.success?
+    assert_equal 2, result.value
+  end
+
+  def test_try_failure_on_standard_error
+    result = DAG::Result.try { raise ArgumentError, "bad" }
+    assert result.failure?
+    assert_includes result.error, "ArgumentError"
+    assert_includes result.error, "bad"
+  end
+
+  def test_try_does_not_catch_outside_default
+    assert_raises(SystemExit) { DAG::Result.try { exit } }
+  end
+
+  def test_try_with_narrower_error_class
+    result = DAG::Result.try(error_class: ArgumentError) { raise ArgumentError, "bad" }
+    assert result.failure?
+
+    assert_raises(KeyError) do
+      DAG::Result.try(error_class: ArgumentError) { raise KeyError, "missing" }
+    end
+  end
 end

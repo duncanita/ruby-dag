@@ -1,30 +1,68 @@
 # frozen_string_literal: true
 
+require "etc"
+
 module DAG
   module Workflow
     TraceEntry = Data.define(:name, :layer, :started_at, :finished_at, :duration_ms, :status, :input_keys)
 
     class Runner
-      def initialize(graph, registry, parallel: true, on_step_start: nil, on_step_finish: nil)
+      DEFAULT_MAX_PARALLELISM = [Etc.nprocessors, 8].min
+
+      # parallel may be:
+      #   true / :threads     -> Thread pool (default)
+      #   false / :sequential -> single-threaded loop
+      #   :ractors            -> Ractors (experimental, no hard concurrency cap)
+      #   :processes          -> fork/pipe with hard concurrency cap
+      #
+      # timeout: optional wall-clock cap (seconds, Numeric) on the entire run.
+      # Checked between layers — a layer that is already running will not be
+      # interrupted, but no further layers start once the deadline passes.
+      # Per-step timeouts on `:exec` / `:ruby_script` still apply inside a
+      # layer; if you put a long pure-Ruby `:ruby` callable in a single layer,
+      # nothing in this library can interrupt it. Use `:processes` if you need
+      # hard isolation.
+      def initialize(graph, registry, parallel: true, max_parallelism: DEFAULT_MAX_PARALLELISM,
+        timeout: nil,
+        on_step_start: nil, on_step_finish: nil)
         @graph = graph
         @registry = registry
-        @parallel = parallel
+        @timeout = timeout
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
         @executors = {}
+        @strategy = build_strategy(parallel, max_parallelism)
+        @fallback_strategy = Parallel::Sequential.new
         validate_coverage!(graph, registry)
       end
 
       def call
-        execute_layers(@graph.topological_layers)
+        deadline = @timeout ? Process.clock_gettime(Process::CLOCK_MONOTONIC) + @timeout : nil
+        execute_layers(@graph.topological_layers, deadline)
       end
 
       private
+
+      def build_strategy(parallel, max_parallelism)
+        case parallel
+        when false, :sequential
+          Parallel::Sequential.new
+        when true, :threads
+          Parallel::Threads.new(max_parallelism: max_parallelism)
+        when :ractors
+          Parallel::Ractors.new(max_parallelism: max_parallelism)
+        when :processes
+          Parallel::Processes.new(max_parallelism: max_parallelism)
+        else
+          raise ArgumentError, "Unknown parallel mode: #{parallel.inspect}. " \
+                               "Use true, false, :sequential, :threads, :ractors, or :processes."
+        end
+      end
 
       def executor(type)
         @executors[type] ||= Steps.build(type)
       end
 
-      def execute_layers(layers)
+      def execute_layers(layers, deadline)
         outputs = {}
         trace = []
         failed_name = nil
@@ -32,6 +70,12 @@ module DAG
 
         layers.each_with_index do |layer, layer_index|
           break if failed_name
+
+          if deadline_passed?(deadline)
+            failed_name = :workflow_timeout
+            failed_result = Failure.new(error: {code: :workflow_timeout, timeout_seconds: @timeout})
+            break
+          end
 
           execute_layer(layer, layer_index, outputs, trace).each do |name, result|
             outputs[name] = result
@@ -42,96 +86,84 @@ module DAG
           end
         end
 
-        return build_failure(failed_name, failed_result, outputs, trace) if failed_name
-        Success.new(value: {outputs: outputs, trace: trace})
-      end
-
-      def execute_layer(layer, layer_index, previous_outputs, trace)
-        if @parallel && layer.size > 1 && layer.all? { |name| @registry[name].ractor_safe? }
-          execute_parallel(layer, layer_index, previous_outputs, trace)
+        if failed_name
+          Failure.new(error: wrap_payload(outputs, trace,
+            {failed_node: failed_name, step_error: failed_result.error}))
         else
-          execute_sequential(layer, layer_index, previous_outputs, trace)
+          Success.new(value: wrap_payload(outputs, trace, nil))
         end
       end
 
-      def execute_sequential(layer, layer_index, previous_outputs, trace)
-        layer.each_with_object({}) do |name, results|
-          results[name] = execute_step(name, layer_index, previous_outputs, trace)
-        end
+      def deadline_passed?(deadline)
+        deadline && Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
       end
 
-      def execute_parallel(layer, layer_index, previous_outputs, trace)
-        results_port = Ractor::Port.new
-        input_keys_by_name = layer.to_h { |name| [name, @graph.predecessors(name).to_a.sort] }
-        ractors = layer.map { |name| spawn_ractor(name, previous_outputs, results_port) }
+      # Single shape for both Success and Failure: callers always see
+      # `:outputs`, `:trace`, and `:error` keys regardless of branch.
+      def wrap_payload(outputs, trace, step_error)
+        {outputs: outputs, trace: trace, error: step_error}
+      end
 
+      # Build runnable tasks first, pick a strategy, THEN fire :start
+      # callbacks — so a consumer that logs "started on strategy X" sees
+      # the real X, not whatever the configured default was.
+      def execute_layer(layer, layer_index, previous_outputs, trace)
         results = {}
-        layer.size.times do
-          name, result_hash, started_at, finished_at, duration_ms = results_port.receive
-          result = deserialize_result(result_hash)
+        runnable_tasks = []
+
+        layer.each do |name|
+          step = @registry[name]
+          input = resolve_input(name, previous_outputs)
+          input_keys = input.keys.sort
+
+          if skip?(step, input)
+            results[name] = record_skip(name, step, layer_index, input_keys, trace)
+          else
+            runnable_tasks << Parallel::Task.new(
+              name: name, step: step, input: input,
+              executor_class: executor(step.type).class,
+              input_keys: input_keys
+            )
+          end
+        end
+
+        return results if runnable_tasks.empty?
+
+        strategy = pick_strategy(runnable_tasks.map(&:step))
+        input_keys_by_name = runnable_tasks.to_h { |t| [t.name, t.input_keys] }
+
+        runnable_tasks.each { |t| @callbacks.start(t.name, t.step) }
+
+        strategy.execute(runnable_tasks) do |name, result, started_at, finished_at, duration_ms|
           trace << build_trace_entry(name, layer_index, result,
             started_at: started_at, finished_at: finished_at, duration_ms: duration_ms,
-            input_keys: input_keys_by_name[name])
+            input_keys: input_keys_by_name.fetch(name))
           @callbacks.finish(name, result)
           results[name] = result
         end
 
-        ractors.each(&:join)
         results
       end
 
-      def spawn_ractor(name, previous_outputs, results_port)
-        step = @registry[name]
-        input = resolve_input(name, previous_outputs)
-        executor_class = executor(step.type).class
-
-        @callbacks.start(name, step)
-
-        Ractor.new(name, step, input, results_port, executor_class) do |n, s, inp, out, klass|
-          started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          result = klass.new.call(s, inp)
-          finished_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-          duration_ms = ((finished_at - started_at) * 1000).round(2)
-          out.send([n, result.to_h, started_at, finished_at, duration_ms])
-        end
-      end
-
-      def deserialize_result(hash)
-        if hash[:status] == :success
-          Success.new(value: hash[:value])
-        else
-          Failure.new(error: hash[:error])
-        end
-      end
-
-      def execute_step(name, layer_index, previous_outputs, trace)
-        step = @registry[name]
-        input = resolve_input(name, previous_outputs)
-        input_keys = input.keys.sort
-
+      def skip?(step, input)
         run_if = step.config[:run_if]
-        if run_if && !run_if.call(input)
-          result = Success.new(value: nil)
-          trace << build_trace_entry(name, layer_index, result,
-            started_at: nil, finished_at: nil, duration_ms: 0,
-            input_keys: input_keys, status: :skipped)
-          @callbacks.finish(name, result)
-          return result
-        end
+        run_if && !run_if.call(input)
+      end
 
-        @callbacks.start(name, step)
-
-        started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        result = executor(step.type).call(step, input)
-        finished_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        duration_ms = ((finished_at - started_at) * 1000).round(2)
-
+      def record_skip(name, step, layer_index, input_keys, trace)
+        result = Success.new(value: nil)
         trace << build_trace_entry(name, layer_index, result,
-          started_at: started_at, finished_at: finished_at, duration_ms: duration_ms,
-          input_keys: input_keys)
-
+          started_at: nil, finished_at: nil, duration_ms: 0,
+          input_keys: input_keys, status: :skipped)
         @callbacks.finish(name, result)
         result
+      end
+
+      # All-or-nothing per-layer fallback. A partial split (shareable
+      # steps on the primary, rest on Sequential) would muddy callback
+      # and trace ordering; revisit if a real workload needs it.
+      def pick_strategy(steps)
+        @strategy.supports?(steps) ? @strategy : @fallback_strategy
       end
 
       def build_trace_entry(name, layer_index, result, started_at:, finished_at:, duration_ms:, input_keys:, status: nil)
@@ -145,7 +177,7 @@ module DAG
       end
 
       def resolve_input(name, outputs)
-        @graph.predecessors(name).to_a.to_h { |dep| [dep, outputs[dep]&.value] }
+        @graph.each_predecessor(name).to_h { |dep| [dep, outputs[dep]&.value] }
       end
 
       def validate_coverage!(graph, registry)
@@ -153,10 +185,6 @@ module DAG
         return if missing.empty?
 
         raise ValidationError, "Missing steps for graph nodes: #{missing.sort.join(", ")}"
-      end
-
-      def build_failure(name, result, outputs, trace)
-        Failure.new(error: {failed_node: name, error: result.error, outputs: outputs, trace: trace})
       end
     end
   end

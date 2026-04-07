@@ -55,15 +55,27 @@ class RunnerTest < Minitest::Test
 
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
     assert result.failure?
-    assert_equal :fail_node, result.error[:failed_node]
+    assert_equal :fail_node, result.error[:error][:failed_node]
     refute result.error[:outputs].key?(:never_runs)
   end
 
   def test_failure_includes_error_detail
     result = run_workflow({bad: {command: "echo fail >&2; exit 42"}})
     assert result.failure?
-    assert_equal :exec_failed, result.error[:error][:code]
-    assert_equal 42, result.error[:error][:exit_status]
+    assert_equal :exec_failed, result.error[:error][:step_error][:code]
+    assert_equal 42, result.error[:error][:step_error][:exit_status]
+  end
+
+  def test_success_and_failure_share_payload_keys
+    success = run_workflow({good: {command: "echo good"}})
+    failure = run_workflow({bad: {command: "exit 1"}})
+
+    assert success.success?
+    assert failure.failure?
+    assert_equal [:outputs, :trace, :error].sort, success.value.keys.sort
+    assert_equal [:outputs, :trace, :error].sort, failure.error.keys.sort
+    assert_nil success.value[:error]
+    refute_nil failure.error[:error]
   end
 
   # --- Parallel execution ---
@@ -141,6 +153,34 @@ class RunnerTest < Minitest::Test
 
     assert_includes finished, :a
     assert_includes finished, :b
+  end
+
+  def test_start_callback_does_not_fire_for_skipped_steps
+    started = []
+    finished = []
+
+    graph = DAG::Graph.new.add_node(:a).add_node(:b).add_node(:c)
+      .add_edge(:a, :c).add_edge(:b, :c)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :ruby,
+      callable: ->(_input) { DAG::Success.new(value: "ran") }))
+    registry.register(DAG::Workflow::Step.new(name: :b, type: :ruby,
+      callable: ->(_input) { DAG::Success.new(value: "never") },
+      run_if: ->(_input) { false }))
+    registry.register(DAG::Workflow::Step.new(name: :c, type: :ruby,
+      callable: ->(_input) { DAG::Success.new(value: "also ran") }))
+
+    DAG::Workflow::Runner.new(graph, registry, parallel: false,
+      on_step_start: ->(name, _step) { started << name },
+      on_step_finish: ->(name, _result) { finished << name }).call
+
+    # Skipped step :b never triggers :start, but its :finish still fires
+    # (this matches the existing Runner contract — skipped steps write a
+    # trace entry and call on_step_finish with a nil Success).
+    assert_equal [:a, :c], started
+    assert_includes finished, :a
+    assert_includes finished, :b
+    assert_includes finished, :c
   end
 
   # --- Definition convenience methods ---
@@ -224,11 +264,14 @@ class RunnerTest < Minitest::Test
     assert_match(/b/, error.message)
   end
 
-  def test_runner_degrades_unsafe_layer_to_sequential
+  def test_threads_strategy_handles_mixed_step_types
+    # Threads (the default for parallel: true) has no shareability constraint,
+    # so a layer mixing :exec and :ruby steps just runs in the pool directly.
+    # See parallel_test.rb for the analogous Ractors-strategy degradation test.
     graph = DAG::Graph.new.add_node(:a).add_node(:b)
     registry = DAG::Workflow::Registry.new
     registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo safe"))
-    registry.register(DAG::Workflow::Step.new(name: :b, type: :ruby, callable: ->(input) { DAG::Success.new(value: "from ruby") }))
+    registry.register(DAG::Workflow::Step.new(name: :b, type: :ruby, callable: ->(_input) { DAG::Success.new(value: "from ruby") }))
 
     result = DAG::Workflow::Runner.new(graph, registry, parallel: true).call
     assert result.success?
@@ -294,6 +337,37 @@ class RunnerTest < Minitest::Test
     assert_equal([], result.value[:trace])
   end
 
+  # --- Workflow-level timeout ---
+
+  def test_workflow_timeout_halts_between_layers
+    defn = build_test_workflow(
+      slow: {command: "sleep 0.5; echo done"},
+      after: {depends_on: [:slow]}
+    )
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry,
+      parallel: false, timeout: 0.1).call
+
+    assert result.failure?
+    assert_equal :workflow_timeout, result.error[:error][:failed_node]
+    assert_equal :workflow_timeout, result.error[:error][:step_error][:code]
+    assert_equal 0.1, result.error[:error][:step_error][:timeout_seconds]
+  end
+
+  def test_workflow_timeout_does_not_fire_when_under_budget
+    defn = build_test_workflow(quick: {command: "echo fast"})
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry,
+      parallel: false, timeout: 5).call
+    assert result.success?
+    assert_equal "fast", result.value[:outputs][:quick].value
+  end
+
+  def test_workflow_timeout_nil_means_no_timeout
+    defn = build_test_workflow(a: {command: "echo a"})
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry,
+      parallel: false, timeout: nil).call
+    assert result.success?
+  end
+
   # --- Registry mutations ---
 
   def test_registry_replace_updates_step
@@ -342,7 +416,9 @@ class RunnerTest < Minitest::Test
     new_defn = defn.replace_step(:b, new_step)
 
     assert_equal "echo updated", new_defn.step(:b).config[:command]
-    assert_equal defn.graph, new_defn.graph
+    # Same-name replace returns the same Graph reference (no rebuild needed),
+    # so identity is the right check here.
+    assert_same defn.graph, new_defn.graph
   end
 
   def test_definition_replace_step_different_name_renames_graph

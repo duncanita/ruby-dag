@@ -51,6 +51,38 @@ class DumperTest < Minitest::Test
     assert_raises(DAG::SerializationError) { DAG::Workflow::Dumper.to_yaml(defn) }
   end
 
+  # depends_on is reachable via Step.new — the custom initializer splats
+  # extra kwargs into config, so `depends_on: [...]` lands in the config
+  # hash and would silently overwrite the structural depends_on field.
+  def test_raises_on_config_key_collision_with_depends_on
+    graph = DAG::Graph.new.add_node(:oops)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :oops, type: :exec, command: "true", depends_on: ["sneaky"]))
+    defn = DAG::Workflow::Definition.new(graph: graph, registry: registry)
+
+    error = assert_raises(DAG::SerializationError) { DAG::Workflow::Dumper.to_yaml(defn) }
+    assert_match(/reserved YAML key/, error.message)
+    assert_match(/depends_on/, error.message)
+  end
+
+  # :type is NOT reachable via Step.new (the custom initializer extracts
+  # it as a kwarg before it can hit the config splat) but the Dumper's
+  # collision guard is defense-in-depth for any future Step subclass or
+  # Registry that might carry a differently-shaped step. Use a duck-typed
+  # Struct stand-in to exercise the :type branch of the guard directly.
+  def test_raises_on_config_key_collision_with_type
+    fake_step_class = Struct.new(:name, :type, :config)
+    fake = fake_step_class.new(:oops, :exec, {type: "sneaky", command: "true"})
+    graph = DAG::Graph.new.add_node(:oops)
+    registry = DAG::Workflow::Registry.new
+    registry.register(fake)
+    defn = DAG::Workflow::Definition.new(graph: graph, registry: registry)
+
+    error = assert_raises(DAG::SerializationError) { DAG::Workflow::Dumper.to_yaml(defn) }
+    assert_match(/reserved YAML key/, error.message)
+    assert_match(/'type'/, error.message)
+  end
+
   def test_round_trip
     original_yaml = <<~YAML
       nodes:
@@ -74,7 +106,7 @@ class DumperTest < Minitest::Test
     dumped = DAG::Workflow::Dumper.to_yaml(defn1)
     defn2 = DAG::Workflow::Loader.from_yaml(dumped)
 
-    assert_equal defn1.graph, defn2.graph
+    assert_equal defn1.graph.freeze, defn2.graph.freeze
     defn1.graph.topological_sort.each do |name|
       assert_equal defn1.step(name).type, defn2.step(name).type
       assert_equal defn1.step(name).config, defn2.step(name).config
@@ -87,7 +119,7 @@ class DumperTest < Minitest::Test
       dumped = DAG::Workflow::Dumper.to_yaml(defn1)
       defn2 = DAG::Workflow::Loader.from_yaml(dumped)
 
-      assert_equal defn1.graph, defn2.graph, "Round-trip failed for #{File.basename(path)}"
+      assert_equal defn1.graph.freeze, defn2.graph.freeze, "Round-trip failed for #{File.basename(path)}"
     end
   end
 
@@ -97,7 +129,7 @@ class DumperTest < Minitest::Test
     Tempfile.create(["dumper_test", ".yml"]) do |f|
       DAG::Workflow::Dumper.to_file(defn, f.path)
       loaded = DAG::Workflow::Loader.from_file(f.path)
-      assert_equal defn.graph, loaded.graph
+      assert_equal defn.graph.freeze, loaded.graph.freeze
     end
   end
 

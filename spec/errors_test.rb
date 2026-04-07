@@ -9,8 +9,7 @@ class ErrorsTest < Minitest::Test
       DAG::DuplicateNodeError,
       DAG::UnknownNodeError,
       DAG::ValidationError,
-      DAG::SerializationError,
-      DAG::ParallelSafetyError
+      DAG::SerializationError
     ].each do |klass|
       assert klass < DAG::Error, "#{klass} should inherit from DAG::Error"
     end

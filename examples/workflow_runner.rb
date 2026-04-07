@@ -132,7 +132,7 @@ YAML
 
 result = DAG::Workflow::Runner.new(definition.graph, definition.registry, parallel: false).call
 puts "Success? #{result.success?}"
-puts "Failed step: #{result.error[:failed_node]}"
+puts "Failed step: #{result.error[:error][:failed_node]}"
 puts "Completed: #{result.error[:outputs].keys}"
 puts
 

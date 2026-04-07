@@ -13,6 +13,13 @@ require "minitest/autorun"
 require "tempfile"
 require_relative "../lib/dag"
 
+# The Ractors strategy emits a one-time "EXPERIMENTAL" warning the first
+# time it is instantiated in a process. Pre-mark it as already warned so
+# the normal test suite stays quiet — the dedicated `test_ractors_*_warning`
+# tests reset this flag inside a `capture_io` block and verify the warning
+# fires exactly once.
+DAG::Workflow::Parallel::Ractors.warned_experimental = true
+
 module TestHelpers
   # Builds a Graph + Registry from a hash of node definitions.
   # Returns a Workflow::Definition.

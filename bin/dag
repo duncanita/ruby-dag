@@ -3,9 +3,26 @@
 
 require "dag"
 
-if ARGV.empty?
-  puts "Usage: dag <workflow.yml> [--dry-run] [--no-parallel] [--verbose]"
-  exit 1
+USAGE = <<~TXT
+  Usage: dag <workflow.yml> [options]
+
+  Run a YAML-defined DAG workflow.
+
+  Options:
+    --dry-run         Print the execution plan and exit without running steps.
+    --no-parallel     Force sequential execution (default is :threads).
+    --verbose         Print each step as it starts.
+    -h, --help        Show this help.
+
+  Exit codes:
+    0   Workflow completed successfully.
+    1   Workflow failed (a step returned Failure or the workflow timed out).
+    2   Bad usage / failed to load the workflow file.
+TXT
+
+if ARGV.empty? || ARGV.include?("-h") || ARGV.include?("--help")
+  puts USAGE
+  exit(ARGV.empty? ? 2 : 0)
 end
 
 file = ARGV[0]
@@ -13,11 +30,16 @@ dry_run = ARGV.include?("--dry-run")
 parallel = !ARGV.include?("--no-parallel")
 verbose = ARGV.include?("--verbose")
 
-definition = DAG::Workflow::Loader.from_file(file)
+begin
+  definition = DAG::Workflow::Loader.from_file(file)
+rescue => e
+  warn "dag: failed to load #{file}: #{e.class}: #{e.message}"
+  exit 2
+end
 
 if dry_run
   puts "Workflow: #{file}"
-  puts "Nodes: #{definition.size}"
+  puts "Nodes:    #{definition.size}"
   puts "Execution order:"
   definition.execution_order.each_with_index do |layer, i|
     note = (layer.size > 1) ? " (parallel)" : ""
@@ -37,8 +59,11 @@ result = DAG::Workflow::Runner.new(definition.graph, definition.registry,
   parallel: parallel, on_step_start: on_start, on_step_finish: on_finish).call
 
 if result.success?
-  puts "\n✓ Workflow completed (#{definition.size} nodes, #{result.value[:trace].size} steps traced)"
+  trace = result.value[:trace]
+  puts "\n✓ Workflow completed (#{definition.size} nodes, #{trace.size} steps traced)"
+  exit 0
 else
-  warn "\n✗ Failed at '#{result.error[:failed_node]}': #{result.error[:error]}"
+  failure = result.error[:error]
+  warn "\n✗ Failed at '#{failure[:failed_node]}': #{failure[:step_error]}"
   exit 1
 end

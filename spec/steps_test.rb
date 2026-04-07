@@ -42,6 +42,20 @@ class StepsTest < Minitest::Test
     assert_equal 100_000, result.value.length
   end
 
+  def test_exec_array_command_bypasses_shell
+    # Shell metacharacters in argv must be passed literally, not interpreted.
+    result = run_step(:exec, command: ["echo", "hi; echo evil"])
+    assert result.success?
+    assert_equal "hi; echo evil", result.value
+  end
+
+  def test_exec_array_command_reports_failure
+    result = run_step(:exec, command: ["ruby", "-e", "exit 7"])
+    assert result.failure?
+    assert_equal :exec_failed, result.error[:code]
+    assert_equal 7, result.error[:exit_status]
+  end
+
   # --- RubyScript ---
 
   def test_ruby_script_runs_ruby_file
@@ -149,6 +163,62 @@ class StepsTest < Minitest::Test
     assert_match(/No path/, result.error)
   end
 
+  def test_file_write_multi_dep_without_from_returns_failure
+    path = "/tmp/dag_test_multidep_#{$$}.txt"
+    step = DAG::Workflow::Step.new(name: :write, type: :file_write, path: path)
+    result = DAG::Workflow::Steps.build(:file_write).call(step, {a: "foo", b: "bar"})
+
+    assert result.failure?
+    assert_match(/multiple upstream deps/, result.error)
+    refute File.exist?(path), "should not have written anything"
+  ensure
+    File.delete(path) if File.exist?(path)
+  end
+
+  def test_file_write_multi_dep_with_from_writes_selected_value
+    path = "/tmp/dag_test_from_#{$$}.txt"
+    step = DAG::Workflow::Step.new(name: :write, type: :file_write, path: path, from: :b)
+    result = DAG::Workflow::Steps.build(:file_write).call(step, {a: "foo", b: "bar"})
+
+    assert result.success?
+    assert_equal "bar", File.read(path)
+  ensure
+    File.delete(path) if File.exist?(path)
+  end
+
+  def test_file_write_from_with_unknown_key_returns_failure
+    path = "/tmp/dag_test_from_unknown_#{$$}.txt"
+    step = DAG::Workflow::Step.new(name: :write, type: :file_write, path: path, from: :missing)
+    result = DAG::Workflow::Steps.build(:file_write).call(step, {a: "foo"})
+
+    assert result.failure?
+    assert_match(/no such input/, result.error)
+  ensure
+    File.delete(path) if File.exist?(path)
+  end
+
+  def test_file_write_content_wins_over_inputs
+    path = "/tmp/dag_test_content_wins_#{$$}.txt"
+    step = DAG::Workflow::Step.new(name: :write, type: :file_write, path: path, content: "explicit")
+    result = DAG::Workflow::Steps.build(:file_write).call(step, {a: "from_a", b: "from_b"})
+
+    assert result.success?
+    assert_equal "explicit", File.read(path)
+  ensure
+    File.delete(path) if File.exist?(path)
+  end
+
+  def test_file_write_zero_dep_no_content_returns_failure
+    path = "/tmp/dag_test_zerodep_#{$$}.txt"
+    step = DAG::Workflow::Step.new(name: :write, type: :file_write, path: path)
+    result = DAG::Workflow::Steps.build(:file_write).call(step, {})
+
+    assert result.failure?
+    assert_match(/no content/, result.error)
+  ensure
+    File.delete(path) if File.exist?(path)
+  end
+
   # --- Ruby ---
 
   def test_ruby_executes_callable
@@ -182,30 +252,36 @@ class StepsTest < Minitest::Test
     assert_match(/No callable/, result.error)
   end
 
-  # --- Step shareability ---
+  # --- Step is pure data ---
+  #
+  # Step does not know about Ractors. Construction is always cheap and silent.
+  # Ractor preflight (and any "is this shareable?" warning) belongs to the
+  # Ractors strategy — see parallel_test.rb for those.
 
-  def test_step_with_simple_config_is_shareable
-    step = DAG::Workflow::Step.new(name: :test, type: :exec, command: "echo hi", timeout: 30)
-    assert Ractor.shareable?(step)
+  def test_step_construction_is_silent_for_simple_config
+    _, stderr = capture_io do
+      DAG::Workflow::Step.new(name: :test, type: :exec, command: "echo hi", timeout: 30)
+    end
+    assert_empty stderr
   end
 
-  def test_step_with_non_shareable_config_is_not_ractor_safe
-    io = StringIO.new
-    step = nil
-    _, stderr = capture_io { step = DAG::Workflow::Step.new(name: :test, type: :exec, command: io) }
-    refute step.ractor_safe?
-    assert_match(/not Ractor-shareable/, stderr)
-    assert_match(/run sequentially/, stderr)
+  def test_step_construction_is_silent_for_unshareable_config
+    _, stderr = capture_io do
+      DAG::Workflow::Step.new(name: :test, type: :exec, command: StringIO.new)
+    end
+    assert_empty stderr
   end
 
-  def test_exec_step_is_ractor_safe
+  def test_step_construction_is_silent_for_ruby_callable
+    _, stderr = capture_io do
+      DAG::Workflow::Step.new(name: :test, type: :ruby, callable: -> { "hi" })
+    end
+    assert_empty stderr
+  end
+
+  def test_step_does_not_expose_ractor_safe_predicate
     step = DAG::Workflow::Step.new(name: :test, type: :exec, command: "echo hi")
-    assert step.ractor_safe?
-  end
-
-  def test_ruby_step_is_not_ractor_safe
-    step = DAG::Workflow::Step.new(name: :test, type: :ruby, callable: -> { "hi" })
-    refute step.ractor_safe?
+    refute_respond_to step, :ractor_safe?
   end
 
   # --- Unknown type ---

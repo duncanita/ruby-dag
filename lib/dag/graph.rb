@@ -1,16 +1,44 @@
 # frozen_string_literal: true
 
 module DAG
+  # Pure DAG. Nodes are Symbols (anything `to_sym`able on input). Edges are
+  # `Edge` Data values with optional metadata.
+  #
+  # ## Iteration
+  #
+  # Use `each_node` and `each_edge` explicitly. There is **no** `each` and
+  # **no** `Enumerable` mixin — `graph.map`, `graph.count`, `graph.include?`
+  # do not exist on purpose, because their meaning ("nodes? edges? both?") is
+  # not obvious from the call site. Call `each_node`/`each_edge` (both return
+  # an Enumerator when called without a block) and chain Enumerable on those:
+  #
+  #   graph.each_node.map { |n| n.upcase }
+  #   graph.each_edge.count
+  #
+  # For cheap scalar queries prefer `node_count` / `edge_count` / `node?`.
+  #
+  # ## Mutation cost
+  #
+  # `add_edge` runs an O(V+E) reachability walk to reject cycles, so building
+  # a graph node-by-node is O(V·(V+E)) total. That is fine for the workflow
+  # graphs this library targets (tens to low thousands of nodes). If you are
+  # importing a much larger graph from a trusted source, build it in one shot
+  # and call `topological_layers` once at the end — that single call also
+  # detects cycles in O(V+E).
   class Graph
-    include Enumerable
+    EMPTY_SET = Set.new.freeze
+    private_constant :EMPTY_SET
 
-    attr_reader :nodes
+    # Frozen snapshot of the node set. Mutating it never affects the graph.
+    def nodes
+      frozen? ? @nodes : @nodes.dup.freeze
+    end
 
     def initialize
       @nodes = Set.new
-      @adjacency = Hash.new { |h, k| h[k] = Set.new }   # from → Set[to]
-      @reverse = Hash.new { |h, k| h[k] = Set.new }      # to → Set[from]
-      @edge_metadata = {}                                  # [from, to] → Hash
+      @adjacency = {}        # from → Set[to]
+      @reverse = {}          # to → Set[from]
+      @edge_metadata = {}    # [from, to] → Hash
     end
 
     # --- Mutation ---
@@ -24,6 +52,17 @@ module DAG
       self
     end
 
+    # Adds a directed edge `from -> to`, with optional metadata stored on the
+    # edge. Idempotent: re-adding an existing edge is a no-op (returns self
+    # without raising and without overwriting metadata).
+    #
+    # Cost: O(V+E) per call, because we run a reachability walk from `to` back
+    # to `from` to reject any insertion that would create a cycle. Building a
+    # graph node-by-node is therefore O(V·(V+E)) total. That is fine for the
+    # workflow graphs this library targets; if you are loading a much larger
+    # graph from a trusted source and want to skip the per-insert cycle check,
+    # build the structure yourself and call `topological_layers` once at the
+    # end (it also detects cycles, in O(V+E)).
     def add_edge(from, to, **metadata)
       check_frozen!
       from_sym = from.to_sym
@@ -34,9 +73,7 @@ module DAG
       return self if fetch_set(@adjacency, from_sym).include?(to_sym)
       raise CycleError, "Edge #{from_sym} → #{to_sym} would create a cycle" if reachable?(to_sym, from_sym)
 
-      @adjacency[from_sym] << to_sym
-      @reverse[to_sym] << from_sym
-      @edge_metadata[[from_sym, to_sym]] = metadata.freeze unless metadata.empty?
+      insert_edge(from_sym, to_sym, metadata)
       self
     end
 
@@ -45,8 +82,14 @@ module DAG
       sym = name.to_sym
       raise UnknownNodeError, "Unknown node: #{sym}" unless @nodes.include?(sym)
 
-      fetch_set(@adjacency, sym).dup.each { |to| remove_edge_internal(sym, to) }
-      fetch_set(@reverse, sym).dup.each { |from| remove_edge_internal(from, sym) }
+      fetch_set(@adjacency, sym).each do |to|
+        @reverse[to]&.delete(sym)
+        @edge_metadata.delete([sym, to])
+      end
+      fetch_set(@reverse, sym).each do |from|
+        @adjacency[from]&.delete(sym)
+        @edge_metadata.delete([from, sym])
+      end
 
       @adjacency.delete(sym)
       @reverse.delete(sym)
@@ -64,6 +107,11 @@ module DAG
       self
     end
 
+    # Renames a node, preserving every incident edge and its metadata. The
+    # rewiring is done by manipulating the adjacency hashes directly rather
+    # than going through `add_edge`, because `add_edge` would re-run cycle
+    # detection on each re-added edge — pointless work, since renaming a node
+    # in place cannot introduce a cycle that wasn't already there.
     def replace_node(old_name, new_name)
       check_frozen!
       old_sym = old_name.to_sym
@@ -77,10 +125,10 @@ module DAG
       outgoing = fetch_set(@adjacency, old_sym).map { |succ| [succ, edge_metadata(old_sym, succ)] }
 
       remove_node(old_sym)
-      add_node(new_sym)
+      @nodes << new_sym
 
-      incoming.each { |pred, meta| add_edge(pred, new_sym, **meta) }
-      outgoing.each { |succ, meta| add_edge(new_sym, succ, **meta) }
+      incoming.each { |pred, meta| insert_edge(pred, new_sym, meta) }
+      outgoing.each { |succ, meta| insert_edge(new_sym, succ, meta) }
 
       self
     end
@@ -126,6 +174,18 @@ module DAG
 
     # --- Scalar queries ---
 
+    # Prefer `node_count` / `edge_count` over `size` / `count` in code that
+    # cares which it's measuring. `size` is the node count (kept for symmetry
+    # with collection types); `count` comes from `Enumerable` and also iterates
+    # nodes via `each = each_node`.
+    def node_count = @nodes.size
+
+    def edge_count
+      n = 0
+      @adjacency.each_value { |s| n += s.size }
+      n
+    end
+
     def size = @nodes.size
     def empty? = @nodes.empty?
     def node?(name) = @nodes.include?(name.to_sym)
@@ -146,7 +206,9 @@ module DAG
 
     def incoming_edges(node)
       sym = node.to_sym
-      fetch_set(@reverse, sym).map { |from| Edge.new(from: from, to: sym, metadata: edge_metadata(from, sym)) }
+      fetch_set(@reverse, sym).each_with_object(Set.new) do |from, set|
+        set << Edge.new(from: from, to: sym, metadata: edge_metadata(from, sym))
+      end
     end
 
     def edge_metadata(from, to)
@@ -160,6 +222,11 @@ module DAG
 
     def roots = frozen? ? @cached_roots : nodes_with_no(@reverse)
     def leaves = frozen? ? @cached_leaves : nodes_with_no(@adjacency)
+
+    # Root/leaf iteration convenience. Useful when the caller wants ordered
+    # iteration (insertion order) rather than a Set.
+    def each_root(&block) = roots.each(&block)
+    def each_leaf(&block) = leaves.each(&block)
 
     # --- Transitive queries ---
 
@@ -203,17 +270,29 @@ module DAG
     end
 
     # --- Iteration ---
+    #
+    # `each_node` and `each_edge` are the ONLY iteration entry points.
+    # Graph does NOT include Enumerable: `graph.map`, `graph.count`,
+    # `graph.include?` etc. are intentionally absent because their meaning
+    # (nodes? edges?) is not obvious from the call site. Both `each_node` and
+    # `each_edge` return an `Enumerator` when called without a block, so
+    # `graph.each_node.map { ... }` / `graph.each_edge.count` give you the
+    # Enumerable surface explicitly.
 
-    def each(&block)
-      return enum_for(:each) unless block
+    def each_node(&block)
+      return enum_for(:each_node) unless block
       @nodes.each(&block)
     end
-
-    alias_method :each_node, :each
 
     def each_edge(&block)
       return enum_for(:each_edge) unless block
       edges.each(&block)
+    end
+
+    # Read-only iteration over predecessors without duping the internal Set.
+    def each_predecessor(name, &block)
+      return enum_for(:each_predecessor, name) unless block
+      fetch_set(@reverse, name.to_sym).each(&block)
     end
 
     # --- Subgraph ---
@@ -222,30 +301,26 @@ module DAG
       keep = node_names.map(&:to_sym).to_set
       raise ArgumentError, "Unknown nodes: #{(keep - @nodes).to_a}" unless keep.subset?(@nodes)
 
-      keep.each_with_object(Graph.new) do |n, g|
-        g.add_node(n)
-      end.then do |g|
-        keep.each do |from|
-          fetch_set(@adjacency, from).each do |to|
-            g.add_edge(from, to, **edge_metadata(from, to)) if keep.include?(to)
-          end
-        end
-        g
-      end
+      add_nodes_to(Graph.new, keep).then { |g| copy_internal_edges(g, keep) }
     end
 
+    # Renders the graph in Graphviz DOT format. Node and graph names are
+    # quoted whenever they contain anything outside `[A-Za-z0-9_]` (or start
+    # with a digit), and any embedded `"` / `\` characters in node labels are
+    # escaped. This means symbols like `:"my node"`, `:foo-bar`, or `:1st`
+    # produce valid DOT instead of a parse error in `dot(1)`.
     def to_dot(name: "dag")
       sorted = topological_sort
-      lines = ["digraph #{name} {"]
-      sorted.each { |n| lines << "  #{n};" }
+      lines = ["digraph #{dot_id(name)} {"]
+      sorted.each { |n| lines << "  #{dot_id(n)};" }
       sorted.each do |from|
         fetch_set(@adjacency, from).sort.each do |to|
           meta = edge_metadata(from, to)
           if meta.empty?
-            lines << "  #{from} -> #{to};"
+            lines << "  #{dot_id(from)} -> #{dot_id(to)};"
           else
             label = meta.map { |k, v| "#{k}=#{v}" }.join(", ")
-            lines << "  #{from} -> #{to} [label=\"#{label}\"];"
+            lines << "  #{dot_id(from)} -> #{dot_id(to)} [label=#{dot_quote(label)}];"
           end
         end
       end
@@ -264,8 +339,18 @@ module DAG
       }
     end
 
+    # Equality is structural: two Graphs are equal iff they have the same node
+    # set and the same edge set (with the same metadata). It works on frozen
+    # AND unfrozen graphs alike — no FrozenError surprises.
+    #
+    # CAVEAT: a graph's identity is its node + edge set. If you store an
+    # unfrozen Graph as a Hash key or Set member and then mutate it, you will
+    # break the container's invariants (the bucket index won't match anymore).
+    # Freeze before using as a key. The library can't enforce that for you
+    # without making `==` itself misbehave, which is the worse trade.
     def ==(other)
-      other.is_a?(Graph) && @nodes == other.nodes && edges == other.edges
+      return false unless other.is_a?(Graph)
+      @nodes == other.nodes && edges == other.edges
     end
     alias_method :eql?, :==
 
@@ -280,7 +365,31 @@ module DAG
 
     private
 
-    def nodes_with_no(hash) = @nodes.select { |n| fetch_set(hash, n).empty? }
+    def add_nodes_to(graph, names)
+      names.each { |n| graph.add_node(n) }
+      graph
+    end
+
+    # Source is a valid DAG, so skip the per-insert cycle check.
+    def copy_internal_edges(graph, keep)
+      keep.each do |from|
+        fetch_set(@adjacency, from).each do |to|
+          next unless keep.include?(to)
+          graph.send(:insert_edge, from, to, edge_metadata(from, to))
+        end
+      end
+      graph
+    end
+
+    # Returns a Set of nodes whose entry in `hash` is empty (no
+    # successors / predecessors). Set is the right type here so that
+    # `roots`/`leaves` are consistent with `successors`/`predecessors`.
+    # Iteration order is the underlying Set order (insertion order).
+    def nodes_with_no(hash)
+      @nodes.each_with_object(Set.new) do |n, set|
+        set << n if fetch_set(hash, n).empty?
+      end
+    end
 
     def compute_edges
       @adjacency.each_with_object(Set.new) do |(from, tos), set|
@@ -358,15 +467,9 @@ module DAG
     def initialize_dup(orig)
       super
       @nodes = @nodes.dup
-      @adjacency = deep_dup_hash_of_sets(@adjacency)
-      @reverse = deep_dup_hash_of_sets(@reverse)
+      @adjacency = @adjacency.transform_values(&:dup)
+      @reverse = @reverse.transform_values(&:dup)
       @edge_metadata = @edge_metadata.dup
-    end
-
-    def deep_dup_hash_of_sets(hash)
-      Hash.new { |h, k| h[k] = Set.new }.tap do |h|
-        hash.each { |k, v| h[k] = v.dup }
-      end
     end
 
     def check_frozen!
@@ -379,9 +482,37 @@ module DAG
       @edge_metadata.delete([from, to])
     end
 
-    # Avoids auto-vivification on frozen hashes
+    # Inserts an edge into the adjacency hashes WITHOUT cycle detection or
+    # validation. Used by `replace_node`, where the edges being re-added are
+    # already known to belong to a valid DAG. Do not call this from anywhere
+    # that doesn't have that guarantee.
+    def insert_edge(from, to, metadata)
+      (@adjacency[from] ||= Set.new) << to
+      (@reverse[to] ||= Set.new) << from
+      @edge_metadata[[from, to]] = metadata.freeze unless metadata.empty?
+    end
+
+    DOT_BARE_ID = /\A[A-Za-z_][A-Za-z0-9_]*\z/
+    private_constant :DOT_BARE_ID
+
+    # Returns a DOT-safe identifier for `name`. Symbols / strings made of
+    # `[A-Za-z_][A-Za-z0-9_]*` are emitted bare (the common case). Anything
+    # else gets wrapped in double quotes with `"` and `\` escaped.
+    def dot_id(name)
+      str = name.to_s
+      DOT_BARE_ID.match?(str) ? str : dot_quote(str)
+    end
+
+    def dot_quote(str)
+      escaped = str.gsub("\\", "\\\\\\\\").gsub('"', '\\"')
+      %("#{escaped}")
+    end
+
+    # Avoids auto-vivification on frozen hashes. Returns a shared frozen
+    # empty Set on miss; callers must not mutate the returned value (we
+    # only ever iterate or take .size on it).
     def fetch_set(hash, key)
-      hash.fetch(key) { Set.new }
+      hash.fetch(key, EMPTY_SET)
     end
 
     def walk(adjacency_hash, start, target: nil)

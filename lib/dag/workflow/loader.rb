@@ -21,29 +21,27 @@ module DAG
         data = YAML.safe_load(yaml_string)
         raise ArgumentError, "YAML must contain 'nodes' key" unless data&.key?("nodes")
 
-        entries = data["nodes"].map do |name, config|
-          config = config.dup
-          type = config.delete("type") || raise(ArgumentError, "Node '#{name}' missing 'type'")
-          validate_type!(name, type.to_sym, valid_types: Steps.yaml_types)
-
-          depends_on = parse_depends_on(config.delete("depends_on"))
-          [name.to_sym, {type: type.to_sym, depends_on: depends_on, **config.transform_keys(&:to_sym)}]
-        end
-
-        build_definition(entries)
+        build_definition(normalize_entries(data["nodes"], string_keys: true))
       end
 
       def self.from_hash(**node_defs)
-        entries = node_defs.map do |name, opts|
+        build_definition(normalize_entries(node_defs, string_keys: false))
+      end
+
+      def self.normalize_entries(node_defs, string_keys:)
+        type_key = string_keys ? "type" : :type
+        depends_key = string_keys ? "depends_on" : :depends_on
+        valid_types = string_keys ? Steps.yaml_types : Steps.types
+
+        node_defs.map do |name, opts|
           opts = opts.dup
-          type = opts.delete(:type) || raise(ArgumentError, "Node '#{name}' missing 'type'")
-          validate_type!(name, type.to_sym)
+          type = opts.delete(type_key) || raise(ArgumentError, "Node '#{name}' missing 'type'")
+          validate_type!(name, type.to_sym, valid_types: valid_types)
 
-          depends_on = parse_depends_on(opts.delete(:depends_on))
-          [name.to_sym, {type: type.to_sym, depends_on: depends_on, **opts}]
+          depends_on = parse_depends_on(opts.delete(depends_key))
+          rest = string_keys ? opts.transform_keys(&:to_sym) : opts
+          [name.to_sym, {type: type.to_sym, depends_on: depends_on, **rest}]
         end
-
-        build_definition(entries)
       end
 
       def self.build_definition(entries)
@@ -95,7 +93,7 @@ module DAG
         end
       end
 
-      private_class_method :build_definition, :validate_type!, :parse_depends_on
+      private_class_method :build_definition, :validate_type!, :parse_depends_on, :normalize_entries
     end
   end
 end
