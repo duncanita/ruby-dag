@@ -44,6 +44,14 @@ module DAG
         end
       end
 
+      # Two-pass build: first pass adds every node and registers its step;
+      # second pass adds the edges. The split exists because `Graph#add_edge`
+      # validates that BOTH endpoints already exist, and YAML files routinely
+      # declare nodes in any order — a node `consumer` whose `depends_on` lists
+      # `producer` may appear before `producer` is declared. Adding nodes first
+      # and edges second makes declaration order irrelevant; the resulting
+      # error for a typoed dependency is also clearer (`unknown node X`) than
+      # the bare `UnknownNodeError` you'd get from edge insertion mid-pass.
       def self.build_definition(entries)
         graph = Graph.new
         registry = Registry.new
