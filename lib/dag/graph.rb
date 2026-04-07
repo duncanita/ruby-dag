@@ -161,6 +161,11 @@ module DAG
     # --- Freezing ---
 
     def freeze
+      # Idempotent: a second freeze must not try to re-assign the cache
+      # ivars (the object is already frozen, so the writes would raise
+      # FrozenError). Caught by the property fuzz tests.
+      return self if frozen?
+
       @nodes.freeze
       @adjacency.each_value(&:freeze)
       @adjacency.freeze
