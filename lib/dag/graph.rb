@@ -521,6 +521,11 @@ module DAG
     DOT_BARE_ID = /\A[A-Za-z_][A-Za-z0-9_]*\z/
     private_constant :DOT_BARE_ID
 
+    # Hash form of gsub avoids the back-reference reinterpretation that
+    # makes the string-replacement form unreadable for backslash escapes.
+    DOT_ESCAPES = {"\\" => "\\\\", '"' => '\"'}.freeze
+    private_constant :DOT_ESCAPES
+
     # Returns a DOT-safe identifier for `name`. Symbols / strings made of
     # `[A-Za-z_][A-Za-z0-9_]*` are emitted bare (the common case). Anything
     # else gets wrapped in double quotes with `"` and `\` escaped.
@@ -530,8 +535,7 @@ module DAG
     end
 
     def dot_quote(str)
-      escaped = str.gsub("\\", "\\\\\\\\").gsub('"', '\\"')
-      %("#{escaped}")
+      %("#{str.gsub(/[\\"]/, DOT_ESCAPES)}")
     end
 
     # Avoids auto-vivification on frozen hashes. Returns a shared frozen
