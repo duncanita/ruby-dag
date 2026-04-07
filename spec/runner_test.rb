@@ -26,11 +26,11 @@ class RunnerTest < Minitest::Test
     defn = build_test_workflow(
       produce: {},
       consume: {type: :ruby, depends_on: [:produce],
-                callable: ->(input) { DAG::Success.new(value: "got: #{input}") }}
+                callable: ->(input) { DAG::Success.new(value: input) }}
     )
 
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
-    assert_equal "got: {produce: \"produce\"}", result.value[:outputs][:consume].value
+    assert_equal({produce: "produce"}, result.value[:outputs][:consume].value)
   end
 
   def test_merges_multiple_dependency_outputs
