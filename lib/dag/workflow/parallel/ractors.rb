@@ -17,11 +17,22 @@ module DAG
       # EXPERIMENTAL STRATEGY
       # ============================================================
       #
-      # `Parallel::Ractors.experimental?` returns `true`. The first time a
-      # Ractors strategy is instantiated in a process, a one-line warning is
-      # printed to stderr summarising the limitations below and pointing at
-      # `:threads` / `:processes` as stable alternatives. Subsequent
-      # instantiations are silent.
+      # `experimental?` returns `true`, and `Runner#build_strategy` refuses
+      # `parallel: :ractors` unless `DAG_ENABLE_RACTORS` is set. The first
+      # instantiation per process also emits a one-line stderr warning
+      # (dedup'd via class-level state); subsequent instantiations are silent.
+      #
+      # SEMANTIC INCONSISTENCY WITH OTHER STRATEGIES
+      # --------------------------------------------
+      #
+      # This strategy calls `Ractor.make_shareable(result.to_h)` on each
+      # step's result hash before sending it back over the port (see
+      # `spawn_ractor`). Deep-freezing the result is mandatory for Ractor
+      # transit, but it means a step that returns a mutable value (e.g.
+      # `{stdout: +"..."}`) will be observed as frozen on the parent side
+      # here, while the same step run under `:threads` / `:processes` /
+      # `:sequential` returns an unfrozen value. Consumers that mutate step
+      # results in-place are not portable across strategies.
       #
       # KNOWN LIMITATION ON RUBY 4.0
       # ----------------------------

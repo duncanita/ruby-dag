@@ -9,11 +9,15 @@ module DAG
     class Runner
       DEFAULT_MAX_PARALLELISM = [Etc.nprocessors, 8].min
 
+      # Accepts either a Definition (the common case after Loader) or a
+      # `(graph, registry)` pair for code that built the pieces by hand.
+      #
       # parallel may be:
       #   true / :threads     -> Thread pool (default)
       #   false / :sequential -> single-threaded loop
-      #   :ractors            -> Ractors (experimental, no hard concurrency cap)
       #   :processes          -> fork/pipe with hard concurrency cap
+      #   :ractors            -> Ractors (experimental, opt-in via
+      #                          DAG_ENABLE_RACTORS=1; see ractors.rb)
       #
       # timeout: optional wall-clock cap (seconds, Numeric) on the entire run.
       # Checked between layers — a layer that is already running will not be
@@ -22,9 +26,11 @@ module DAG
       # layer; if you put a long pure-Ruby `:ruby` callable in a single layer,
       # nothing in this library can interrupt it. Use `:processes` if you need
       # hard isolation.
-      def initialize(graph, registry, parallel: true, max_parallelism: DEFAULT_MAX_PARALLELISM,
+      def initialize(graph_or_definition, registry = nil, parallel: true,
+        max_parallelism: DEFAULT_MAX_PARALLELISM,
         timeout: nil,
         on_step_start: nil, on_step_finish: nil)
+        graph, registry = unpack_definition(graph_or_definition, registry)
         @graph = graph
         @registry = registry
         @timeout = timeout
@@ -49,12 +55,30 @@ module DAG
         when true, :threads
           Parallel::Threads.new(max_parallelism: max_parallelism)
         when :ractors
+          unless ENV["DAG_ENABLE_RACTORS"]
+            raise ArgumentError,
+              "The :ractors strategy is experimental and disabled by default. " \
+              "Ruby 4.0's per-Ractor deadlock detector trips on :exec / :ruby_script, " \
+              "and the strategy does not honor max_parallelism as a hard cap. " \
+              "Set DAG_ENABLE_RACTORS=1 to opt in, or use :threads / :processes."
+          end
           Parallel::Ractors.new(max_parallelism: max_parallelism)
         when :processes
           Parallel::Processes.new(max_parallelism: max_parallelism)
         else
           raise ArgumentError, "Unknown parallel mode: #{parallel.inspect}. " \
-                               "Use true, false, :sequential, :threads, :ractors, or :processes."
+                               "Use true, false, :sequential, :threads, or :processes."
+        end
+      end
+
+      def unpack_definition(graph, registry)
+        case graph
+        when Definition
+          raise ArgumentError, "Runner.new(definition) takes no registry argument" if registry
+          graph.deconstruct
+        else
+          raise ArgumentError, "Runner.new(graph, registry) requires a registry" if registry.nil?
+          [graph, registry]
         end
       end
 
@@ -104,12 +128,15 @@ module DAG
         {outputs: outputs, trace: trace, error: step_error}
       end
 
-      # Build runnable tasks first, pick a strategy, THEN fire :start
-      # callbacks — so a consumer that logs "started on strategy X" sees
-      # the real X, not whatever the configured default was.
+      # Callback ordering: every :start in a layer fires before any :finish
+      # in that layer, so a consumer logging "layer begins" on the first
+      # :start sees a coherent sequence. Strategy is picked before any
+      # callback fires, so a consumer querying the real strategy from
+      # inside :start sees the chosen one.
       def execute_layer(layer, layer_index, previous_outputs, trace)
         results = {}
         runnable_tasks = []
+        skipped = []
 
         layer.each do |name|
           step = @registry[name]
@@ -117,7 +144,7 @@ module DAG
           input_keys = input.keys.sort
 
           if skip?(step, input)
-            results[name] = record_skip(name, step, layer_index, input_keys, trace)
+            skipped << [name, step, input_keys]
           else
             runnable_tasks << Parallel::Task.new(
               name: name, step: step, input: input,
@@ -127,12 +154,19 @@ module DAG
           end
         end
 
-        return results if runnable_tasks.empty?
+        # Fully-skipped layer: no :start events exist, so skip-finish order
+        # is unconstrained and we can short-circuit before touching the
+        # strategy (avoids an unused `Ractor::Port` under `:ractors`).
+        if runnable_tasks.empty?
+          record_skipped(skipped, results, layer_index, trace)
+          return results
+        end
 
         strategy = pick_strategy(runnable_tasks.map(&:step))
         input_keys_by_name = runnable_tasks.to_h { |t| [t.name, t.input_keys] }
 
         runnable_tasks.each { |t| @callbacks.start(t.name, t.step) }
+        record_skipped(skipped, results, layer_index, trace)
 
         strategy.execute(runnable_tasks) do |name, result, started_at, finished_at, duration_ms|
           trace << build_trace_entry(name, layer_index, result,
@@ -148,6 +182,12 @@ module DAG
       def skip?(step, input)
         run_if = step.config[:run_if]
         run_if && !run_if.call(input)
+      end
+
+      def record_skipped(skipped, results, layer_index, trace)
+        skipped.each do |name, step, input_keys|
+          results[name] = record_skip(name, step, layer_index, input_keys, trace)
+        end
       end
 
       def record_skip(name, step, layer_index, input_keys, trace)

@@ -212,6 +212,25 @@ class ParallelTest < Minitest::Test
     end
   end
 
+  # Ractors is gated behind DAG_ENABLE_RACTORS. With the var unset, asking
+  # for `:ractors` must raise with a clear message; the other strategies
+  # remain selectable.
+  def test_ractors_requires_env_var_opt_in
+    defn = build_test_workflow(a: {command: "echo a"})
+    original = ENV.delete("DAG_ENABLE_RACTORS")
+    begin
+      error = assert_raises(ArgumentError) do
+        DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: :ractors)
+      end
+      assert_match(/DAG_ENABLE_RACTORS/, error.message)
+
+      # Other strategies still work with the var unset.
+      assert DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: :threads).call.success?
+    ensure
+      ENV["DAG_ENABLE_RACTORS"] = original if original
+    end
+  end
+
   # --- Sequential strategy ---
 
   def test_sequential_strategy_runs_all_steps

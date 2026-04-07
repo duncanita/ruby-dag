@@ -19,7 +19,7 @@ module DAG
 
       def self.from_yaml(yaml_string)
         data = YAML.safe_load(yaml_string)
-        raise ArgumentError, "YAML must contain 'nodes' key" unless data&.key?("nodes")
+        raise ValidationError, "YAML must contain 'nodes' key" unless data&.key?("nodes")
 
         build_definition(normalize_entries(data["nodes"], string_keys: true))
       end
@@ -35,7 +35,7 @@ module DAG
 
         node_defs.map do |name, opts|
           opts = opts.dup
-          type = opts.delete(type_key) || raise(ArgumentError, "Node '#{name}' missing 'type'")
+          type = opts.delete(type_key) || raise(ValidationError, "Node '#{name}' missing 'type'")
           validate_type!(name, type.to_sym, valid_types: valid_types)
 
           depends_on = parse_depends_on(opts.delete(depends_key))
@@ -63,7 +63,7 @@ module DAG
           from = edge[:from]
           to = edge[:to]
           metadata = edge.except(:from, :to)
-          raise ArgumentError, "Node #{to} depends on unknown node #{from}" unless graph.node?(from)
+          raise ValidationError, "Node #{to} depends on unknown node #{from}" unless graph.node?(from)
           graph.add_edge(from, to, **metadata)
         end
 
@@ -74,10 +74,10 @@ module DAG
         return if valid_types.include?(type)
 
         if Steps.types.include?(type) && !valid_types.include?(type)
-          raise ArgumentError, "Node '#{name}' has type '#{type}' which is not supported in YAML. Use from_hash for programmatic step types."
+          raise ValidationError, "Node '#{name}' has type '#{type}' which is not supported in YAML. Use from_hash for programmatic step types."
         end
 
-        raise ArgumentError, "Node '#{name}' has invalid type '#{type}'. Valid: #{valid_types.join(", ")}"
+        raise ValidationError, "Node '#{name}' has invalid type '#{type}'. Valid: #{valid_types.join(", ")}"
       end
 
       def self.parse_depends_on(raw)
@@ -88,7 +88,7 @@ module DAG
           when String, Symbol
             {from: dep.to_sym}
           else
-            raise ArgumentError, "Invalid depends_on entry: #{dep.inspect}"
+            raise ValidationError, "Invalid depends_on entry: #{dep.inspect}"
           end
         end
       end

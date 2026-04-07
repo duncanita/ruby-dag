@@ -183,6 +183,56 @@ class RunnerTest < Minitest::Test
     assert_includes finished, :c
   end
 
+  # --- Runner accepts a Definition directly ---
+
+  def test_runner_accepts_definition
+    defn = build_test_workflow(a: {command: "echo a"})
+    result = DAG::Workflow::Runner.new(defn, parallel: false).call
+    assert result.success?
+    assert_equal "a", result.value[:outputs][:a].value
+  end
+
+  def test_runner_definition_form_rejects_extra_registry
+    defn = build_test_workflow(a: {command: "echo a"})
+    assert_raises(ArgumentError) do
+      DAG::Workflow::Runner.new(defn, defn.registry, parallel: false)
+    end
+  end
+
+  def test_runner_pair_form_requires_registry
+    graph = DAG::Graph.new.add_node(:a)
+    assert_raises(ArgumentError) do
+      DAG::Workflow::Runner.new(graph, parallel: false)
+    end
+  end
+
+  # --- Callback ordering with mixed skipped/runnable in one layer ---
+
+  def test_start_callbacks_fire_before_any_finish_in_mixed_layer
+    events = []
+
+    graph = DAG::Graph.new.add_node(:run).add_node(:skip)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :run, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "ran") }))
+    registry.register(DAG::Workflow::Step.new(name: :skip, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "never") },
+      run_if: ->(_) { false }))
+
+    DAG::Workflow::Runner.new(graph, registry, parallel: false,
+      on_step_start: ->(name, _step) { events << [:start, name] },
+      on_step_finish: ->(name, _result) { events << [:finish, name] }).call
+
+    # All :start events for the layer must come before the first :finish.
+    first_finish = events.index { |kind, _| kind == :finish }
+    before = events[0...first_finish]
+    assert before.all? { |kind, _| kind == :start },
+      "expected all :start before first :finish, got #{events.inspect}"
+    # And :start fires only for the runnable step.
+    assert_includes events, [:start, :run]
+    refute_includes events, [:start, :skip]
+  end
+
   # --- Definition convenience methods ---
 
   def test_definition_empty

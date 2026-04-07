@@ -376,11 +376,14 @@ keyword on `Runner.new`.
 | `true` / `:threads` | `Parallel::Threads` | stable | yes | yes (`max_parallelism`) | none |
 | `false` / `:sequential` | `Parallel::Sequential` | stable | — | n/a (always 1) | none |
 | `:processes` | `Parallel::Processes` | stable | — | yes (`max_parallelism`) | result must be Marshal-able |
-| `:ractors` | `Parallel::Ractors` | **experimental** | — | no (best-effort, see below) | strategy lazily preflights `Ractor.make_shareable(step)` |
+| `:ractors` | `Parallel::Ractors` | **experimental, opt-in** | — | no (best-effort, see below) | strategy lazily preflights `Ractor.make_shareable(step)` |
 
 Each strategy class answers `Strategy.experimental?` (`true` only for
-`Parallel::Ractors`). The first time a `Parallel::Ractors` is instantiated in
-a process, the library prints a one-line warning to stderr summarising the
+`Parallel::Ractors`). Selecting `parallel: :ractors` on a Runner raises
+unless the `DAG_ENABLE_RACTORS` env var is set — the stable strategies
+(`:threads`, `:processes`, `:sequential`) are always available. Even with
+the env var set, the first time a `Parallel::Ractors` is instantiated in a
+process the library prints a one-line warning to stderr summarising the
 limitations and pointing at `:threads` / `:processes` as stable alternatives.
 
 `max_parallelism:` defaults to `[Etc.nprocessors, 8].min`.
@@ -419,14 +422,17 @@ Constraints:
 - Result payloads should fit comfortably in one pipe buffer (~64 KB) to avoid
   the child blocking on write.
 
-### Ractors (experimental)
+### Ractors (experimental, opt-in)
 
-> ⚠️  **EXPERIMENTAL.** This strategy ships because it's useful for
-> pure-Ruby Ractor-safe steps, but it carries hard limitations on Ruby 4.0
-> (see below) and should not be used as a default. `Parallel::Ractors.experimental?`
-> returns `true`, and the library prints a one-time warning to stderr the
-> first time you instantiate it. For production workloads use `:threads`
-> (the default) or `:processes`.
+> ⚠️  **EXPERIMENTAL, opt-in.** This strategy ships because it's useful
+> for pure-Ruby Ractor-safe steps, but it carries hard limitations on
+> Ruby 4.0 (see below) and should not be used as a default. The Runner
+> refuses `parallel: :ractors` unless `DAG_ENABLE_RACTORS=1` is set in the
+> environment — a deliberate speed bump so you cannot reach it by accident.
+> `Parallel::Ractors.experimental?` returns `true`, and even with the env
+> var set the library prints a one-time warning to stderr the first time
+> you instantiate it. For production workloads use `:threads` (the default)
+> or `:processes`.
 
 Runs each task inside its own Ractor, with results returning via `Ractor::Port`.
 The Ractors strategy lazily calls `Ractor.make_shareable(step)` the first time

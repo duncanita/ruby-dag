@@ -85,13 +85,18 @@ class LoaderTest < Minitest::Test
   end
 
   # --- Error handling ---
+  #
+  # Structural problems with the workflow definition surface as
+  # DAG::ValidationError (< DAG::Error). Infrastructure problems like a
+  # missing YAML file stay as ArgumentError — they are not a statement
+  # about the workflow content.
 
   def test_rejects_missing_nodes_key
-    assert_raises(ArgumentError) { load_yaml("name: test") }
+    assert_raises(DAG::ValidationError) { load_yaml("name: test") }
   end
 
   def test_rejects_missing_type
-    assert_raises(ArgumentError) do
+    assert_raises(DAG::ValidationError) do
       load_yaml(<<~YAML)
         name: test
         nodes:
@@ -102,7 +107,7 @@ class LoaderTest < Minitest::Test
   end
 
   def test_rejects_invalid_type
-    assert_raises(ArgumentError) do
+    assert_raises(DAG::ValidationError) do
       load_yaml(<<~YAML)
         name: test
         nodes:
@@ -135,7 +140,7 @@ class LoaderTest < Minitest::Test
   end
 
   def test_rejects_unknown_dependency
-    assert_raises(ArgumentError) do
+    assert_raises(DAG::ValidationError) do
       load_yaml(<<~YAML)
         name: test
         nodes:
@@ -150,7 +155,7 @@ class LoaderTest < Minitest::Test
   # --- ruby type rejection in YAML ---
 
   def test_rejects_ruby_type_in_yaml
-    error = assert_raises(ArgumentError) do
+    error = assert_raises(DAG::ValidationError) do
       load_yaml(<<~YAML)
         name: test
         nodes:
@@ -183,19 +188,19 @@ class LoaderTest < Minitest::Test
   end
 
   def test_from_hash_rejects_missing_type
-    assert_raises(ArgumentError) do
+    assert_raises(DAG::ValidationError) do
       DAG::Workflow::Loader.from_hash(bad: {command: "echo oops"})
     end
   end
 
   def test_from_hash_rejects_invalid_type
-    assert_raises(ArgumentError) do
+    assert_raises(DAG::ValidationError) do
       DAG::Workflow::Loader.from_hash(bad: {type: :banana})
     end
   end
 
   def test_from_hash_rejects_unknown_dependency
-    assert_raises(ArgumentError) do
+    assert_raises(DAG::ValidationError) do
       DAG::Workflow::Loader.from_hash(
         a: {type: :exec, command: "echo a", depends_on: [:missing]}
       )

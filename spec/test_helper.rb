@@ -11,6 +11,13 @@ end
 
 require "minitest/autorun"
 require "tempfile"
+
+# The Ractors strategy is disabled by default and only runs when
+# DAG_ENABLE_RACTORS is set in the environment. The test suite exercises
+# it, so flip it on here before loading the library — the dedicated
+# "disabled without env var" test unsets it locally and restores after.
+ENV["DAG_ENABLE_RACTORS"] ||= "1"
+
 require_relative "../lib/dag"
 
 # The Ractors strategy emits a one-time "EXPERIMENTAL" warning the first

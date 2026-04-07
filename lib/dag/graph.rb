@@ -253,14 +253,26 @@ module DAG
       topological_layers.flatten
     end
 
+    # Shortest path from `from` to `to` as `{cost:, path:}`, or `nil` if
+    # `to` is unreachable. Edge cost comes from the `:weight` metadata key
+    # on each edge (`add_edge(:a, :b, weight: 4)`); edges without `:weight`
+    # default to cost 1.
     def shortest_path(from, to)
       weighted_path(from, to, Float::INFINITY) { |a, b| a < b }
     end
 
+    # Longest path from `from` to `to` as `{cost:, path:}`, or `nil` if
+    # unreachable. Uses the same `:weight` edge-metadata convention as
+    # `shortest_path` (unweighted edges default to cost 1). Safe on DAGs
+    # because topological order turns longest-path into a relaxation.
     def longest_path(from, to)
       weighted_path(from, to, -Float::INFINITY) { |a, b| a > b }
     end
 
+    # Critical path: the longest root-to-leaf path through the whole DAG,
+    # as `{cost:, path:}`. Uses the same `:weight` convention — unweighted
+    # edges default to cost 1, so on a plain unweighted DAG this returns
+    # the longest edge-count chain.
     def critical_path
       return nil if empty?
 
