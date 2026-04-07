@@ -69,7 +69,9 @@ module DAG
       to_sym = to.to_sym
 
       validate_edge_nodes!(from_sym, to_sym)
-      raise ArgumentError, "Self-referencing edge: #{from_sym}" if from_sym == to_sym
+      # A self-edge is a 1-cycle. Reported as CycleError so callers that
+      # rescue cycle errors to recover from bad input catch this case too.
+      raise CycleError, "Edge #{from_sym} → #{from_sym} is a self-loop (1-cycle)" if from_sym == to_sym
       return self if fetch_set(@adjacency, from_sym).include?(to_sym)
       raise CycleError, "Edge #{from_sym} → #{to_sym} would create a cycle" if reachable?(to_sym, from_sym)
 

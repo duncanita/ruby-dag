@@ -36,10 +36,13 @@ class GraphTest < Minitest::Test
     end
   end
 
-  def test_rejects_self_referencing_edge
-    assert_raises(ArgumentError) do
+  def test_rejects_self_referencing_edge_as_cycle
+    # A self-edge is a 1-cycle. Same category as any other cycle, so callers
+    # rescuing CycleError to clean up bad input catch this one too.
+    error = assert_raises(DAG::CycleError) do
       DAG::Graph.new.add_node(:a).add_edge(:a, :a)
     end
+    assert_match(/self-loop/, error.message)
   end
 
   def test_duplicate_edge_is_idempotent

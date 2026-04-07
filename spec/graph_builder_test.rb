@@ -47,7 +47,9 @@ class GraphBuilderTest < Minitest::Test
   end
 
   def test_rejects_self_edge
-    assert_raises(ArgumentError) do
+    # A self-edge is a 1-cycle and surfaces as CycleError, so callers
+    # rescuing CycleError catch it too.
+    assert_raises(DAG::CycleError) do
       DAG::Graph::Builder.new
         .add_node(:a)
         .add_edge(:a, :a)
