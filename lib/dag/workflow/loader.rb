@@ -17,9 +17,11 @@ module DAG
         raise ArgumentError, "File not found: #{path}"
       end
 
+      # Symbols permitted so step configs with `:symbol` values round-trip
+      # through Dumper. Nothing else — keep the surface tight.
       def self.from_yaml(yaml_string)
-        data = YAML.safe_load(yaml_string)
-        raise ValidationError, "YAML must contain 'nodes' key" unless data&.key?("nodes")
+        data = YAML.safe_load(yaml_string, permitted_classes: [Symbol])
+        raise ValidationError, "YAML must contain a 'nodes' mapping" unless data.is_a?(Hash) && data["nodes"].is_a?(Hash)
 
         build_definition(normalize_entries(data["nodes"], string_keys: true))
       end
@@ -35,7 +37,8 @@ module DAG
 
         node_defs.map do |name, opts|
           opts = opts.dup
-          type = opts.delete(type_key) || raise(ValidationError, "Node '#{name}' missing 'type'")
+          type = opts.delete(type_key)
+          raise ValidationError, "Node '#{name}' missing 'type'" if type.nil? || type.to_s.empty?
           validate_type!(name, type.to_sym, valid_types: valid_types)
 
           depends_on = parse_depends_on(opts.delete(depends_key))

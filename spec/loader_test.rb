@@ -95,12 +95,43 @@ class LoaderTest < Minitest::Test
     assert_raises(DAG::ValidationError) { load_yaml("name: test") }
   end
 
+  def test_rejects_non_hash_yaml_root
+    # Bare list at the root used to crash with NoMethodError on Array#key?
+    error = assert_raises(DAG::ValidationError) { load_yaml("- a\n- b\n") }
+    assert_match(/mapping/, error.message)
+  end
+
+  def test_rejects_non_hash_nodes_value
+    # `nodes:` with a list value used to crash deep inside normalize_entries.
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          - foo
+          - bar
+      YAML
+    end
+    assert_match(/mapping/, error.message)
+  end
+
   def test_rejects_missing_type
     assert_raises(DAG::ValidationError) do
       load_yaml(<<~YAML)
         name: test
         nodes:
           bad:
+            command: "echo oops"
+      YAML
+    end
+  end
+
+  def test_rejects_explicit_nil_type
+    # `type: ~` used to crash with NoMethodError on `nil.to_sym`. Now it
+    # raises ValidationError like any other missing type.
+    assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          bad:
+            type: ~
             command: "echo oops"
       YAML
     end

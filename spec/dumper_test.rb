@@ -155,6 +155,17 @@ class DumperTest < Minitest::Test
     assert_equal({weight: 3}, defn2.graph.edge_metadata(:fetch, :parse))
   end
 
+  # Symbol values in step config used to break round-trip: Dumper happily
+  # emitted `mode: :strict` but Loader's safe_load did not permit Symbol
+  # and crashed with Psych::DisallowedClass. Both sides should now agree.
+  def test_round_trip_with_symbol_config_values
+    defn1 = build_test_workflow(task: {type: :exec, command: "echo x", mode: :strict})
+    dumped = DAG::Workflow::Dumper.to_yaml(defn1)
+    defn2 = DAG::Workflow::Loader.from_yaml(dumped)
+
+    assert_equal :strict, defn2.step(:task).config[:mode]
+  end
+
   def test_empty_workflow
     graph = DAG::Graph.new
     registry = DAG::Workflow::Registry.new
