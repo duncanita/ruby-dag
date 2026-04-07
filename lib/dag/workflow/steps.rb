@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "steps/exec"
-require_relative "steps/script"
+require_relative "steps/ruby_script"
 require_relative "steps/file_read"
 require_relative "steps/file_write"
 require_relative "steps/ruby"
