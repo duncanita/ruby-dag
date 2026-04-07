@@ -12,8 +12,6 @@ module DAG
     #   report.valid?  # => true/false
     #   report.errors  # => ["Node c is disconnected", ...]
 
-    # Renamed from Result to avoid collision with DAG::Result (the value-monad
-    # marker module included by Success/Failure).
     Report = Data.define(:errors) do
       def valid? = errors.empty?
     end
