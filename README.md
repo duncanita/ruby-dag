@@ -659,6 +659,27 @@ building block, not the platform.
 
 All three implement `#execute(tasks) { |name, result, started_at, finished_at, duration_ms| ... }`. Custom strategies can subclass `DAG::Workflow::Parallel::Strategy`.
 
+## Benchmarks
+
+A small benchmark harness lives at `script/benchmark.rb`. It runs three
+synthetic shapes (`fan_out`, `chain`, `mixed`) at two sizes (16 and 64 steps)
+across two workload types (IO-bound `sleep 20ms` and CPU-bound naive
+`fib(22)`), against the three stable strategies (`:sequential`, `:threads`,
+`:processes`), and emits a markdown report.
+
+```bash
+ruby script/benchmark.rb                                # print to stdout
+ruby script/benchmark.rb --out benchmarks/$(date +%Y-%m-%d).md
+ruby script/benchmark.rb --quick                        # smaller matrix (~15s)
+```
+
+Each cell is the median of 3 wall-clock runs. Numbers are not portable
+across machines — re-run on the target before drawing conclusions.
+
+The most recent baseline lives at
+[`benchmarks/0.3.0-baseline.md`](benchmarks/0.3.0-baseline.md). Generate a
+fresh report and check it in alongside every release.
+
 ## Development
 
 ```bash
