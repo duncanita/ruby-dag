@@ -81,9 +81,23 @@ module DAG
         # Drains everything currently available on `rd` into `buffer`. Returns
         # true if EOF was hit (the child closed its write end), false if the
         # pipe is just temporarily empty and we should come back via select.
+        #
+        # Note on EINTR: `read_nonblock(exception: false)` only suppresses
+        # `IO::WaitReadable` and `EOFError`. It does NOT suppress
+        # `Errno::EINTR`, which fires when a signal (typically SIGCHLD from a
+        # sibling child exiting) lands mid-syscall. Under high concurrency
+        # this is common enough that an unguarded `read_nonblock` will crash
+        # the parent within minutes — found by the soak rig at parallelism=32.
+        # The right behavior is to retry: an interrupted read read nothing,
+        # and the pipe state is unchanged.
         def drain_into(rd, buffer)
           loop do
-            chunk = rd.read_nonblock(READ_CHUNK, exception: false)
+            chunk =
+              begin
+                rd.read_nonblock(READ_CHUNK, exception: false)
+              rescue Errno::EINTR
+                next
+              end
             case chunk
             when :wait_readable then return false
             when nil then return true # EOF
