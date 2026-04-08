@@ -373,6 +373,35 @@ class ParallelTest < Minitest::Test
     end
   end
 
+  # EINTR regression: `read_nonblock(exception: false)` only suppresses
+  # IO::WaitReadable / EOFError, NOT Errno::EINTR. Under high concurrency
+  # the parent receives SIGCHLD constantly and one will eventually land
+  # mid-syscall, surfacing EINTR up out of drain_into. The strategy must
+  # retry the read instead of crashing the parent. Found by the soak rig
+  # at parallelism=32 after ~1 minute of steady-state load; this test
+  # captures the contract directly via a fake IO so it stays deterministic.
+  def test_processes_strategy_drain_into_retries_on_eintr
+    skip unless Process.respond_to?(:fork)
+
+    strategy = DAG::Workflow::Parallel::Processes.new(max_parallelism: 1)
+    fake_io = Object.new
+    sequence = [:eintr, "first chunk ", :eintr, "second chunk", :eof]
+    fake_io.define_singleton_method(:read_nonblock) do |_size, exception:|
+      case (step = sequence.shift)
+      when :eintr then raise Errno::EINTR
+      when :eof then nil
+      else step
+      end
+    end
+
+    buffer = +""
+    eof = strategy.send(:drain_into, fake_io, buffer)
+
+    assert_equal true, eof
+    assert_equal "first chunk second chunk", buffer
+    assert_empty sequence, "drain_into did not consume the full sequence"
+  end
+
   # Exception path: the yield block raises on the FIRST completion while
   # two other children are still running their 30-second sleep. The ensure
   # clause must reap every in-flight child via the TERM -> KILL ladder
