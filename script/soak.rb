@@ -114,7 +114,8 @@ module DAGSoak
       :tasks_drained, :bytes_verified, :checksum_failures,
       :cleanup_ms_samples, :zombies_seen,
       :rss_initial, :rss_peak, :fds_initial, :fds_peak,
-      :threads_initial, :threads_peak
+      :threads_initial, :threads_peak,
+      :wall_gaps_seen, :wall_gap_total_seconds
 
     def initialize(strategy)
       @strategy = strategy
@@ -126,6 +127,8 @@ module DAGSoak
       @checksum_failures = 0
       @cleanup_ms_samples = []
       @zombies_seen = 0
+      @wall_gaps_seen = 0
+      @wall_gap_total_seconds = 0.0
     end
 
     def cleanup_ms_max = cleanup_ms_samples.max || 0.0
@@ -309,6 +312,13 @@ module DAGSoak
     t_start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     deadline = t_start + options[:duration]
     next_status = t_start + options[:status_interval]
+    last_tick = t_start
+    # If the gap between two loop iterations exceeds this, the process was
+    # almost certainly frozen (laptop sleep, SIGSTOP, severe CPU starvation)
+    # and the strategy wasn't actually running during that window — not a
+    # health failure, but the operator needs to know their "60 minute soak"
+    # was really 45 minutes of run plus 15 minutes of nap.
+    gap_threshold = options[:status_interval] * 3
 
     mode_cycle = MODES_FOR.fetch(strategy_sym).cycle
 
@@ -318,6 +328,15 @@ module DAGSoak
     begin
       loop do
         now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        gap = now - last_tick
+        if gap > gap_threshold
+          stats.wall_gaps_seen += 1
+          stats.wall_gap_total_seconds += gap
+          warn format(
+            "!! [%s] wall-clock gap of %.1fs at t+%s — process was frozen (laptop sleep / CPU stall); strategy wasn't running during this window",
+            strategy_sym, gap, format_duration((now - t_start).to_i)
+          )
+        end
         break if now >= deadline
 
         mode = mode_cycle.next
@@ -347,7 +366,8 @@ module DAGSoak
           return [stats, false]
         end
 
-        if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= next_status
+        last_tick = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        if last_tick >= next_status
           print_status(strategy_sym, stats, t_start)
           next_status += options[:status_interval]
         end
@@ -431,14 +451,21 @@ module DAGSoak
     targets = options[:all] ? STRATEGIES.keys : [options[:strategy]]
 
     results = targets.map do |sym|
-      _, pass = soak_one(sym, options, payload_info)
-      [sym, pass]
+      stats, pass = soak_one(sym, options, payload_info)
+      [sym, pass, stats]
     end
 
     warn ""
     warn "==== SUMMARY ===="
-    results.each { |sym, pass| warn "  #{sym}: #{pass ? "PASS" : "FAIL"}" }
-    (results.all? { |_, pass| pass }) ? 0 : 1
+    results.each do |sym, pass, stats|
+      line = "  #{sym}: #{pass ? "PASS" : "FAIL"}"
+      if stats.wall_gaps_seen > 0
+        line += format(" (warning: %d wall-clock gap%s totalling %.1fs — actual soak time was shorter than requested)",
+          stats.wall_gaps_seen, (stats.wall_gaps_seen == 1) ? "" : "s", stats.wall_gap_total_seconds)
+      end
+      warn line
+    end
+    (results.all? { |_, pass, _| pass }) ? 0 : 1
   end
 end
 
