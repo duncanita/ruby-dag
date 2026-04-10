@@ -4,7 +4,7 @@ Lightweight DAG workflow runner in pure Ruby. Zero runtime dependencies.
 
 Define multi-step workflows as YAML or build them programmatically. Automatic dependency resolution and parallel execution via a pluggable Strategy (Threads, Processes, or Sequential).
 
-**Version:** 0.3.0 | **License:** MIT | **Ruby:** >= 3.2
+**Version:** 0.3.1 | **License:** MIT | **Ruby:** >= 3.2
 
 ## Install
 
