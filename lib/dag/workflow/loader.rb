@@ -36,6 +36,7 @@ module DAG
         valid_types = string_keys ? Steps.yaml_types : Steps.types
 
         node_defs.map do |name, opts|
+          raise ValidationError, "Node '#{name}' must be a mapping, got #{opts.inspect}" unless opts.is_a?(Hash)
           opts = opts.dup
           type = opts.delete(type_key)
           raise ValidationError, "Node '#{name}' missing 'type'" if type.nil? || type.to_s.empty?
@@ -95,7 +96,10 @@ module DAG
         Array(raw).map do |dep|
           case dep
           when Hash
-            dep.transform_keys(&:to_sym).tap { |h| h[:from] = h[:from].to_sym }
+            dep.transform_keys(&:to_sym).tap do |h|
+              raise ValidationError, "depends_on entry #{dep.inspect} missing required 'from' key" unless h.key?(:from)
+              h[:from] = h[:from].to_sym
+            end
           when String, Symbol
             {from: dep.to_sym}
           else

@@ -183,6 +183,73 @@ class LoaderTest < Minitest::Test
     end
   end
 
+  # --- malformed node definitions ---
+
+  def test_rejects_nil_node_definition
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          bad: ~
+      YAML
+    end
+    assert_match(/must be a mapping/, error.message)
+    assert_match(/bad/, error.message)
+  end
+
+  def test_rejects_numeric_node_definition
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          bad: 42
+      YAML
+    end
+    assert_match(/must be a mapping/, error.message)
+  end
+
+  def test_rejects_string_node_definition
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          bad: "just a string"
+      YAML
+    end
+    assert_match(/must be a mapping/, error.message)
+  end
+
+  def test_rejects_depends_on_hash_missing_from
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          a:
+            type: exec
+            command: "echo a"
+          b:
+            type: exec
+            command: "echo b"
+            depends_on:
+              - weight: 3
+      YAML
+    end
+    assert_match(/missing.*from/, error.message)
+  end
+
+  def test_from_hash_rejects_nil_node_definition
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Loader.from_hash(bad: nil)
+    end
+    assert_match(/must be a mapping/, error.message)
+  end
+
+  def test_from_hash_rejects_depends_on_hash_missing_from
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Loader.from_hash(
+        a: {type: :exec, command: "echo a"},
+        b: {type: :exec, command: "echo b", depends_on: [{weight: 3}]}
+      )
+    end
+    assert_match(/missing.*from/, error.message)
+  end
+
   # --- ruby type rejection in YAML ---
 
   def test_rejects_ruby_type_in_yaml
