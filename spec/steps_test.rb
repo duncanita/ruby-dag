@@ -350,6 +350,31 @@ class StepsTest < Minitest::Test
     assert called
   end
 
+  def test_step_does_not_freeze_original_nested_inputs
+    args = ["a", "b"]
+    env = {"FOO" => "bar"}
+    command = +"mutable string"
+    callable = ->(_) { DAG::Success.new(value: "ok") }
+
+    DAG::Workflow::Step.new(name: :test, type: :ruby,
+      args: args, env: env, command: command, callable: callable)
+
+    refute args.frozen?
+    refute env.frozen?
+    refute command.frozen?
+    refute callable.frozen?
+  end
+
+  def test_step_handles_cyclic_config_without_stack_overflow
+    config = {}
+    config[:self] = config
+
+    step = DAG::Workflow::Step.new(name: :test, type: :exec, data: config)
+
+    assert_same step.config[:data], step.config[:data][:self]
+    assert step.config[:data].frozen?
+  end
+
   # --- Unknown type ---
 
   def test_unknown_step_type_raises
