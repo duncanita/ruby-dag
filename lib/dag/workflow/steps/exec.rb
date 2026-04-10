@@ -68,9 +68,9 @@ module DAG
 
           def spawn_command(command, wr_out, wr_err)
             if command.is_a?(Array)
-              Process.spawn(*command, out: wr_out, err: wr_err)
+              Process.spawn(*command, out: wr_out, err: wr_err, pgroup: true)
             else
-              Process.spawn(command, out: wr_out, err: wr_err)
+              Process.spawn(command, out: wr_out, err: wr_err, pgroup: true)
             end
           end
 
@@ -101,11 +101,11 @@ module DAG
           end
 
           def kill_process(pid)
-            Process.kill("TERM", pid)
+            signal_tree("TERM", pid)
             return if Process.waitpid(pid, Process::WNOHANG)
 
             sleep(KILL_GRACE_SECONDS)
-            Process.kill("KILL", pid)
+            signal_tree("KILL", pid)
 
             deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + KILL_GRACE_SECONDS
             loop do
@@ -117,6 +117,15 @@ module DAG
             # Uninterruptible-sleep child: nothing more we can do from userspace.
             Process.waitpid(pid)
           rescue Errno::ESRCH, Errno::ECHILD
+          end
+
+          # Signal the process group first (catches grandchildren spawned by
+          # the command). Falls back to the direct PID when the platform
+          # disallows group signals (macOS sandbox, some container runtimes).
+          def signal_tree(sig, pid)
+            Process.kill(sig, -pid)
+          rescue Errno::EPERM, Errno::ESRCH
+            Process.kill(sig, pid)
           end
 
           def build_result(command, stdout, stderr, status)

@@ -30,6 +30,35 @@ class StepsTest < Minitest::Test
     assert_equal 1, result.error[:timeout_seconds]
   end
 
+  def test_exec_kills_process_group_on_timeout
+    pidfile = "/tmp/dag_pgroup_test_#{$$}"
+    # The shell writes the background child's PID to a file, then sleeps
+    # (holding the pipes open) until killed by timeout. The background
+    # child redirects its own stdout/stderr so it doesn't hold the pipes,
+    # but it shares the process group set by pgroup: true.
+    cmd = "sh -c '(sleep 999 >/dev/null 2>/dev/null & echo $! > #{pidfile}; sleep 999)'"
+    result = run_step(:exec, command: cmd, timeout: 1)
+
+    assert result.failure?
+    assert_equal :exec_timeout, result.error[:code]
+
+    # If the pidfile was written, verify the background child was killed
+    # by the process-group signal.
+    if File.exist?(pidfile)
+      sleep 0.2
+      bg_pid = File.read(pidfile).strip.to_i
+      alive = begin
+        Process.kill(0, bg_pid)
+        true
+      rescue Errno::ESRCH, Errno::EPERM
+        false
+      end
+      refute alive, "background child #{bg_pid} should have been killed"
+    end
+  ensure
+    File.delete(pidfile) if pidfile && File.exist?(pidfile)
+  end
+
   def test_exec_returns_failure_on_nil_command
     result = run_step(:exec)
     assert result.failure?

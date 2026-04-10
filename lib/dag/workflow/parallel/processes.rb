@@ -48,6 +48,7 @@ module DAG
               task = pending.shift
               rd, wr = IO.pipe
               pid = Process.fork do
+                Process.setpgrp
                 rd.close
                 run_in_child(task, wr)
               end
@@ -179,9 +180,13 @@ module DAG
         def signal_then_reap(pids, sig, grace)
           return pids if pids.empty?
           pids.each do |pid|
-            Process.kill(sig, pid)
+            begin
+              Process.kill(sig, -pid)
+            rescue Errno::EPERM, Errno::ESRCH
+              Process.kill(sig, pid)
+            end
           rescue Errno::ESRCH
-            # child already gone
+            # child (or group) already gone
           end
           reap_batch(pids, grace)
         end
