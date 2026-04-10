@@ -285,6 +285,42 @@ class StepsTest < Minitest::Test
     assert_empty stderr
   end
 
+  # --- Deep freeze ---
+
+  def test_step_config_nested_array_is_frozen
+    step = DAG::Workflow::Step.new(name: :test, type: :exec, args: ["a", "b"])
+    assert_raises(FrozenError) { step.config[:args] << "c" }
+    assert_raises(FrozenError) { step.config[:args][0] = "z" }
+  end
+
+  def test_step_config_nested_hash_is_frozen
+    step = DAG::Workflow::Step.new(name: :test, type: :exec, env: {"FOO" => "bar"})
+    assert_raises(FrozenError) { step.config[:env]["BAZ"] = "qux" }
+  end
+
+  def test_step_config_deeply_nested_structure_is_frozen
+    step = DAG::Workflow::Step.new(name: :test, type: :exec,
+      options: {retries: [1, 2, 3], meta: {key: "val"}})
+    assert_raises(FrozenError) { step.config[:options][:retries] << 4 }
+    assert_raises(FrozenError) { step.config[:options][:meta][:key] = "new" }
+  end
+
+  def test_step_config_string_values_are_frozen
+    step = DAG::Workflow::Step.new(name: :test, type: :exec, command: +"mutable string")
+    assert step.config[:command].frozen?
+  end
+
+  def test_step_config_with_lambda_is_still_callable
+    called = false
+    lam = ->(_) {
+      called = true
+      DAG::Success.new(value: "ok")
+    }
+    step = DAG::Workflow::Step.new(name: :test, type: :ruby, callable: lam)
+    step.config[:callable].call(nil)
+    assert called
+  end
+
   # --- Unknown type ---
 
   def test_unknown_step_type_raises
