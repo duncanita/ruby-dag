@@ -125,9 +125,10 @@ module DAG
       # consumer querying strategy identity from inside :start sees the
       # one actually running.
       def execute_layer(layer, layer_index, previous_outputs, trace)
-        runnable, skipped = partition_layer(layer, previous_outputs)
+        runnable, skipped, failed = partition_layer(layer, previous_outputs)
         results = {}
 
+        record_run_if_failures(failed, results, layer_index, trace)
         runnable.each { |t| @callbacks.start(t.name, t.step) }
         record_skipped(skipped, results, layer_index, trace)
         run_tasks(runnable, layer_index, trace, results)
@@ -138,24 +139,30 @@ module DAG
       def partition_layer(layer, previous_outputs)
         runnable = []
         skipped = []
+        failed = []
 
         layer.each do |name|
           step = @registry[name]
           input = resolve_input(name, previous_outputs)
           input_keys = input.keys.sort
 
-          if skip?(step, input)
-            skipped << [name, step, input_keys]
-          else
-            runnable << Parallel::Task.new(
-              name: name, step: step, input: input,
-              executor_class: executor_class(step.type),
-              input_keys: input_keys
-            )
+          begin
+            if skip?(step, input)
+              skipped << [name, step, input_keys]
+            else
+              runnable << Parallel::Task.new(
+                name: name, step: step, input: input,
+                executor_class: executor_class(step.type),
+                input_keys: input_keys
+              )
+            end
+          rescue => e
+            failed << [name, input_keys, Result.exception_failure(:run_if_error, e,
+              message: "run_if for step #{name} raised: #{e.message}")]
           end
         end
 
-        [runnable, skipped]
+        [runnable, skipped, failed]
       end
 
       # Short-circuits on an empty task list (a layer in which every step
@@ -183,6 +190,16 @@ module DAG
       def record_skipped(skipped, results, layer_index, trace)
         skipped.each do |name, step, input_keys|
           results[name] = record_skip(name, step, layer_index, input_keys, trace)
+        end
+      end
+
+      def record_run_if_failures(failed, results, layer_index, trace)
+        failed.each do |name, input_keys, failure_result|
+          trace << build_trace_entry(name, layer_index, failure_result,
+            started_at: nil, finished_at: nil, duration_ms: 0,
+            input_keys: input_keys)
+          @callbacks.finish(name, failure_result)
+          results[name] = failure_result
         end
       end
 

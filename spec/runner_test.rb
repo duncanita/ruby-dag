@@ -377,6 +377,77 @@ class RunnerTest < Minitest::Test
     assert_equal "always", result.value[:outputs][:a].value
   end
 
+  # --- run_if exception containment ---
+
+  def test_run_if_exception_produces_failure_not_crash
+    graph = DAG::Graph.new.add_node(:a)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "never") },
+      run_if: ->(_) { raise "predicate boom" }))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
+
+    assert result.failure?
+    assert_equal :a, result.error[:error][:failed_node]
+    step_error = result.error[:error][:step_error]
+    assert_equal :run_if_error, step_error[:code]
+    assert_match(/predicate boom/, step_error[:message])
+    assert_equal "RuntimeError", step_error[:error_class]
+  end
+
+  def test_run_if_exception_records_trace_entry
+    graph = DAG::Graph.new.add_node(:a)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "never") },
+      run_if: ->(_) { raise "boom" }))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
+
+    trace = result.error[:trace]
+    assert_equal 1, trace.size
+    entry = trace.first
+    assert_equal :a, entry.name
+    assert_equal :failure, entry.status
+    assert_nil entry.started_at
+    assert_nil entry.finished_at
+  end
+
+  def test_run_if_exception_does_not_fire_start_callback
+    started = []
+    finished = []
+
+    graph = DAG::Graph.new.add_node(:a)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "never") },
+      run_if: ->(_) { raise "boom" }))
+
+    DAG::Workflow::Runner.new(graph, registry, parallel: false,
+      on_step_start: ->(name, _) { started << name },
+      on_step_finish: ->(name, _) { finished << name }).call
+
+    assert_empty started
+    assert_equal [:a], finished
+  end
+
+  def test_run_if_exception_preserves_prior_outputs
+    graph = DAG::Graph.new.add_node(:ok).add_node(:bad).add_edge(:ok, :bad)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :ok, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "fine") }))
+    registry.register(DAG::Workflow::Step.new(name: :bad, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "never") },
+      run_if: ->(_) { raise "conditional exploded" }))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
+
+    assert result.failure?
+    assert_equal [:error, :outputs, :trace], result.error.keys.sort
+    assert result.error[:outputs][:ok].success?
+  end
+
   def test_empty_graph_succeeds
     graph = DAG::Graph.new
     registry = DAG::Workflow::Registry.new
