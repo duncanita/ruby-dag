@@ -36,15 +36,17 @@ module DAG
         valid_types = string_keys ? Steps.yaml_types : Steps.types
 
         node_defs.map do |name, opts|
-          raise ValidationError, "Node '#{name}' must be a mapping, got #{opts.inspect}" unless opts.is_a?(Hash)
+          node_name = coerce_symbol!(name, context: "Node name")
+          raise ValidationError, "Node '#{node_name}' must be a mapping, got #{opts.inspect}" unless opts.is_a?(Hash)
           opts = opts.dup
           type = opts.delete(type_key)
-          raise ValidationError, "Node '#{name}' missing 'type'" if type.nil? || type.to_s.empty?
-          validate_type!(name, type.to_sym, valid_types: valid_types)
+          raise ValidationError, "Node '#{node_name}' missing 'type'" if type.nil? || type.to_s.empty?
+          type_sym = type.to_sym
+          validate_type!(node_name, type_sym, valid_types: valid_types)
 
           depends_on = parse_depends_on(opts.delete(depends_key))
-          rest = string_keys ? opts.transform_keys(&:to_sym) : opts
-          [name.to_sym, {type: type.to_sym, depends_on: depends_on, **rest}]
+          rest = normalize_config_keys(opts, node_name: node_name, string_keys: string_keys)
+          [node_name, {type: type_sym, depends_on: depends_on, **rest}]
         end
       end
 
@@ -96,9 +98,11 @@ module DAG
         Array(raw).map do |dep|
           case dep
           when Hash
-            dep.transform_keys(&:to_sym).tap do |h|
+            dep.each_with_object({}) do |(key, value), h|
+              h[coerce_symbol!(key, context: "depends_on key in #{dep.inspect}")] = value
+            end.tap do |h|
               raise ValidationError, "depends_on entry #{dep.inspect} missing required 'from' key" unless h.key?(:from)
-              h[:from] = h[:from].to_sym
+              h[:from] = coerce_symbol!(h[:from], context: "depends_on :from in #{dep.inspect}")
             end
           when String, Symbol
             {from: dep.to_sym}
@@ -108,7 +112,20 @@ module DAG
         end
       end
 
-      private_class_method :build_definition, :validate_type!, :parse_depends_on, :normalize_entries
+      def self.normalize_config_keys(opts, node_name:, string_keys:)
+        opts.each_with_object({}) do |(key, value), h|
+          h[coerce_symbol!(key, context: "config key for node '#{node_name}'")] = value
+        end
+      end
+
+      def self.coerce_symbol!(value, context:)
+        value.to_sym
+      rescue NoMethodError, TypeError
+        raise ValidationError, "#{context} must be symbolizable, got #{value.inspect}"
+      end
+
+      private_class_method :build_definition, :validate_type!, :parse_depends_on, :normalize_entries,
+        :normalize_config_keys, :coerce_symbol!
     end
   end
 end

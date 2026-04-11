@@ -250,6 +250,100 @@ class LoaderTest < Minitest::Test
     assert_match(/missing.*from/, error.message)
   end
 
+  def test_rejects_non_symbolizable_node_name
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          1:
+            type: exec
+            command: "echo hi"
+      YAML
+    end
+    assert_match(/Node name must be symbolizable/, error.message)
+  end
+
+  def test_rejects_non_symbolizable_config_key
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          a:
+            type: exec
+            1: foo
+      YAML
+    end
+    assert_match(/config key/, error.message)
+    assert_match(/symbolizable/, error.message)
+  end
+
+  def test_rejects_non_symbolizable_depends_on_key
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          a:
+            type: exec
+            command: "echo a"
+          b:
+            type: exec
+            command: "echo b"
+            depends_on:
+              - 1: a
+      YAML
+    end
+    assert_match(/depends_on key/, error.message)
+  end
+
+  def test_rejects_non_symbolizable_depends_on_from
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          a:
+            type: exec
+            command: "echo a"
+          b:
+            type: exec
+            command: "echo b"
+            depends_on:
+              - from: 1
+      YAML
+    end
+    assert_match(/depends_on :from/, error.message)
+  end
+
+  def test_from_hash_rejects_non_symbolizable_node_name
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Loader.send(:normalize_entries, {1 => {type: :exec, command: "echo nope"}}, string_keys: false)
+    end
+    assert_match(/Node name must be symbolizable/, error.message)
+  end
+
+  def test_from_hash_rejects_non_symbolizable_config_key
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Loader.send(:normalize_entries,
+        {a: {:type => :exec, :command => "echo ok", 1 => "bad key"}}, string_keys: false)
+    end
+    assert_match(/config key/, error.message)
+  end
+
+  def test_from_hash_rejects_non_symbolizable_depends_on_key
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Loader.from_hash(
+        a: {type: :exec, command: "echo a"},
+        b: {type: :exec, command: "echo b", depends_on: [{1 => :a}]}
+      )
+    end
+    assert_match(/depends_on key/, error.message)
+  end
+
+  def test_from_hash_rejects_non_symbolizable_depends_on_from
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Loader.from_hash(
+        a: {type: :exec, command: "echo a"},
+        b: {type: :exec, command: "echo b", depends_on: [{from: 1}]}
+      )
+    end
+    assert_match(/depends_on :from/, error.message)
+  end
+
   # --- ruby type rejection in YAML ---
 
   def test_rejects_ruby_type_in_yaml
