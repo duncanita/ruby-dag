@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "tmpdir"
 
 class StepsTest < Minitest::Test
   include TestHelpers
@@ -28,6 +29,25 @@ class StepsTest < Minitest::Test
     assert_equal :exec_timeout, result.error[:code]
     assert_equal "sleep 10", result.error[:command]
     assert_equal 1, result.error[:timeout_seconds]
+  end
+
+  def test_exec_timeout_kill_returns_early_when_term_succeeds
+    # Process traps SIGTERM and exits immediately. With the polling kill,
+    # the parent reaps within KILL_GRACE_SECONDS without escalating to KILL.
+    cmd = "sh -c 'trap \"exit 0\" TERM; sleep 999'"
+    result = run_step(:exec, command: cmd, timeout: 1)
+    assert result.failure?
+    assert_equal :exec_timeout, result.error[:code]
+  end
+
+  def test_exec_timeout_escalates_to_kill_when_term_ignored
+    # Process ignores SIGTERM. poll_until_dead times out, KILL is sent.
+    # Covers the else of `return if poll_until_dead(...)` and the timeout
+    # return-false in poll_until_dead.
+    cmd = "sh -c 'trap \"\" TERM; sleep 999'"
+    result = run_step(:exec, command: cmd, timeout: 1)
+    assert result.failure?
+    assert_equal :exec_timeout, result.error[:code]
   end
 
   def test_exec_kills_process_group_on_timeout
@@ -365,6 +385,17 @@ class StepsTest < Minitest::Test
     refute callable.frozen?
   end
 
+  def test_step_safe_dup_returns_original_on_type_error
+    # Custom object whose `dup` raises TypeError — covers safe_dup's rescue.
+    weird = Class.new {
+      def dup
+        raise TypeError, "no dup for you"
+      end
+    }.new
+    step = DAG::Workflow::Step.new(name: :t, type: :exec, weird: weird)
+    assert_same weird, step.config[:weird]
+  end
+
   def test_step_handles_cyclic_config_without_stack_overflow
     config = {}
     config[:self] = config
@@ -379,6 +410,83 @@ class StepsTest < Minitest::Test
 
   def test_unknown_step_type_raises
     assert_raises(ArgumentError) { DAG::Workflow::Steps.build(:banana) }
+  end
+
+  # --- Steps registry public API ---
+
+  def test_steps_registered_predicate
+    assert DAG::Workflow::Steps.registered?(:exec)
+    refute DAG::Workflow::Steps.registered?(:nonexistent_type)
+  end
+
+  def test_steps_freeze_registry_prevents_register
+    # Isolate global state: dup the registry into a fresh mutable hash, swap
+    # it in, freeze, attempt to register, restore.
+    original_registry = DAG::Workflow::Steps.instance_variable_get(:@registry)
+    original_frozen = DAG::Workflow::Steps.instance_variable_get(:@frozen)
+    begin
+      duped = original_registry.transform_values(&:dup)
+      DAG::Workflow::Steps.instance_variable_set(:@registry, duped)
+      DAG::Workflow::Steps.instance_variable_set(:@frozen, false)
+      DAG::Workflow::Steps.freeze_registry!
+      error = assert_raises(DAG::Error) do
+        DAG::Workflow::Steps.register(:bogus, Class.new)
+      end
+      assert_match(/registry is frozen/, error.message)
+    ensure
+      DAG::Workflow::Steps.instance_variable_set(:@registry, original_registry)
+      DAG::Workflow::Steps.instance_variable_set(:@frozen, original_frozen)
+    end
+  end
+
+  # --- ruby_script no path ---
+
+  def test_ruby_script_returns_failure_on_missing_path
+    result = run_step(:ruby_script)
+    assert result.failure?
+    assert_equal :ruby_script_no_path, result.error[:code]
+    assert_match(/no :path config/, result.error[:message])
+  end
+
+  # --- file_write invalid mode ---
+
+  def test_file_write_rejects_invalid_mode
+    with_tempfile("") do |path|
+      result = run_step(:file_write, path: path, content: "hi", mode: "x")
+      assert result.failure?
+      assert_equal :file_write_invalid_mode, result.error[:code]
+      assert_equal "x", result.error[:mode]
+    end
+  end
+
+  # --- file_read IO error path (not ENOENT) ---
+
+  def test_file_read_io_error_when_path_is_directory
+    Dir.mktmpdir do |dir|
+      result = run_step(:file_read, path: dir)
+      assert result.failure?
+      assert_equal :file_read_io_error, result.error[:code]
+      assert_equal dir, result.error[:path]
+    end
+  end
+
+  # --- file_write IO error path ---
+
+  def test_file_write_io_error_for_unwritable_target
+    result = run_step(:file_write, path: "/nonexistent_dir_xyz/out.txt", content: "hi")
+    assert result.failure?
+    assert_equal :file_write_io_error, result.error[:code]
+  end
+
+  # --- file_write non-Hash input ---
+
+  def test_file_write_writes_non_hash_input_directly
+    with_tempfile("") do |path|
+      step = DAG::Workflow::Step.new(name: :w, type: :file_write, path: path)
+      result = DAG::Workflow::Steps::FileWrite.new.call(step, "raw content")
+      assert result.success?
+      assert_equal "raw content", File.read(path)
+    end
   end
 
   private

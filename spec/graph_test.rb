@@ -1085,6 +1085,61 @@ class GraphTest < Minitest::Test
     assert_equal 0, graph.size
   end
 
+  # --- Graph#inspect ---
+
+  def test_graph_inspect_format
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    graph.add_edge(:a, :b)
+    assert_match(/DAG::Graph nodes=\[:a, :b\] edges=1/, graph.inspect)
+  end
+
+  # --- Edge#inspect ---
+
+  def test_edge_inspect_without_metadata
+    edge = DAG::Edge.new(from: :a, to: :b)
+    assert_equal "Edge(a -> b)", edge.inspect
+    assert_equal "Edge(a -> b)", edge.to_s
+  end
+
+  def test_edge_inspect_with_metadata
+    edge = DAG::Edge.new(from: :a, to: :b, metadata: {weight: 3})
+    assert_match(/Edge\(a -> b, \{.*weight.*3.*\}\)/, edge.inspect)
+  end
+
+  # --- to_h with metadata ---
+
+  def test_to_h_includes_edge_metadata
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    graph.add_edge(:a, :b, weight: 7)
+    h = graph.to_h
+    edge = h[:edges].first
+    assert_equal({weight: 7}, edge[:metadata])
+  end
+
+  # --- weighted_path with unknown node ---
+
+  def test_shortest_path_returns_nil_for_unknown_source
+    graph = build_graph([:a, :b], [[:a, :b]])
+    assert_nil graph.shortest_path(:nonexistent, :b)
+  end
+
+  def test_longest_path_returns_nil_for_unknown_target
+    graph = build_graph([:a, :b], [[:a, :b]])
+    assert_nil graph.longest_path(:a, :nonexistent)
+  end
+
+  # --- delete_metadata partial-row case ---
+
+  def test_remove_edge_preserves_other_metadata_in_same_row
+    graph = DAG::Graph.new.add_node(:a).add_node(:b).add_node(:c)
+    graph.add_edge(:a, :b, weight: 1)
+    graph.add_edge(:a, :c, weight: 2)
+    graph.remove_edge(:a, :b)
+
+    assert_equal({weight: 2}, graph.edge_metadata(:a, :c))
+    assert_equal({}, graph.edge_metadata(:a, :b))
+  end
+
   private
 
   def build_graph(nodes, edges)

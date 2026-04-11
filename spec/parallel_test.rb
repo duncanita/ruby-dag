@@ -403,23 +403,29 @@ class ParallelTest < Minitest::Test
   end
 
   # Exception path: the yield block raises on the FIRST completion while
-  # two other children are still running their 30-second sleep. The ensure
-  # clause must reap every in-flight child via the TERM -> KILL ladder
-  # within a bounded timeout. A missing ladder would let the test hit
-  # the Timeout.timeout(5) boundary and fail.
+  # two other children are still running. The ensure clause must reap every
+  # in-flight child via the TERM -> KILL ladder within a bounded timeout.
+  # A missing ladder would let the test hit the Timeout.timeout(5) boundary.
+  #
+  # The :ruby callables trap TERM in the forked worker so the grace window
+  # in reap_batch must actually elapse (covers `break if deadline`) and the
+  # KILL escalation must do the real work.
   def test_processes_strategy_cleans_up_children_on_exception
-    skip unless Process.respond_to?(:fork)
-
     strategy = DAG::Workflow::Parallel::Processes.new(max_parallelism: 3)
-    # The first task finishes immediately, triggering the first yield.
-    # The other two are "indefinite" from the test's perspective — if the
-    # ensure clause doesn't kill them, the test hangs at Timeout.timeout.
-    cmds = ["echo done", "sleep 30; echo late1", "sleep 30; echo late2"]
-    tasks = cmds.each_with_index.map do |cmd, i|
-      step = DAG::Workflow::Step.new(name: :"p#{i}", type: :exec, command: cmd)
+    fast = DAG::Workflow::Step.new(name: :fast, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "done") })
+    slow_term_resistant = ->(name) {
+      DAG::Workflow::Step.new(name: name, type: :ruby, callable: ->(_) {
+        Signal.trap("TERM") {}
+        sleep 30
+        DAG::Success.new(value: "late")
+      })
+    }
+    steps = [fast, slow_term_resistant.call(:slow1), slow_term_resistant.call(:slow2)]
+    tasks = steps.map do |step|
       DAG::Workflow::Parallel::Task.new(
-        name: :"p#{i}", step: step, input: {},
-        executor_class: DAG::Workflow::Steps::Exec, input_keys: []
+        name: step.name, step: step, input: {},
+        executor_class: DAG::Workflow::Steps::Ruby, input_keys: []
       )
     end
 
@@ -435,6 +441,63 @@ class ParallelTest < Minitest::Test
     # Must complete well under the 30-second sleep the late children were
     # doing; the cleanup ladder should bring them down in ~100ms.
     assert elapsed < 3.0, "expected fast cleanup, took #{elapsed.round(2)}s"
+  end
+
+  def test_strategy_base_class_execute_raises_not_implemented
+    base = DAG::Workflow::Parallel::Strategy.new(max_parallelism: 1)
+    assert_raises(NotImplementedError) { base.execute([]) }
+  end
+
+  def test_strategy_run_task_wraps_step_exceptions_into_failure
+    # Use a custom executor class whose #call raises directly. The built-in
+    # :ruby step rescues its own exceptions, so it never reaches the
+    # Strategy.run_task rescue clause.
+    raising_executor = Class.new do
+      def call(_step, _input)
+        raise "executor kaboom"
+      end
+    end
+    step = DAG::Workflow::Step.new(name: :crash, type: :exec, command: "")
+    task = DAG::Workflow::Parallel::Task.new(
+      name: :crash, step: step, input: {},
+      executor_class: raising_executor, input_keys: []
+    )
+    name, result, _started, _finished, _duration = DAG::Workflow::Parallel::Sequential.run_task(task)
+    assert_equal :crash, name
+    assert result.failure?
+    assert_equal :step_raised, result.error[:code]
+    assert_match(/executor kaboom/, result.error[:message])
+  end
+
+  def test_processes_decode_payload_handles_corrupt_marshal_data
+    strategy = DAG::Workflow::Parallel::Processes.new(max_parallelism: 1)
+    fake_task = Struct.new(:name).new(:bad)
+    name, result, _started, _finished, _duration =
+      strategy.send(:decode_payload, fake_task, "definitely not marshal data")
+    assert_equal :bad, name
+    assert result.failure?
+    assert_equal :decode_failed, result.error[:code]
+  end
+
+  def test_processes_waitpid_nohang_returns_true_for_already_reaped_pid
+    strategy = DAG::Workflow::Parallel::Processes.new(max_parallelism: 1)
+    pid = Process.fork { exit!(0) }
+    Process.waitpid(pid) # reap it explicitly so the next call hits ECHILD
+    assert_equal true, strategy.send(:waitpid_nohang, pid)
+  end
+
+  def test_processes_strategy_handles_empty_child_payload
+    # Child exits before writing any payload to the pipe; the parent reads
+    # EOF on an empty buffer and synthesizes an :empty_child_payload Failure.
+    defn = build_test_workflow(
+      crash: {type: :ruby, callable: ->(_) { exit!(0) }}
+    )
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: :processes).call
+
+    assert result.failure?
+    step_error = result.error[:error][:step_error]
+    assert_equal :empty_child_payload, step_error[:code]
+    assert_match(/exited without writing/, step_error[:message])
   end
 
   private

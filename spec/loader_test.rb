@@ -334,6 +334,16 @@ class LoaderTest < Minitest::Test
     assert_match(/depends_on key/, error.message)
   end
 
+  def test_from_hash_rejects_invalid_depends_on_entry
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Loader.from_hash(
+        a: {type: :exec, command: "echo a"},
+        b: {type: :exec, command: "echo b", depends_on: [42]}
+      )
+    end
+    assert_match(/Invalid depends_on entry/, error.message)
+  end
+
   def test_from_hash_rejects_non_symbolizable_depends_on_from
     error = assert_raises(DAG::ValidationError) do
       DAG::Workflow::Loader.from_hash(

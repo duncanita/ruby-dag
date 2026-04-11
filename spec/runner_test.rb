@@ -511,6 +511,22 @@ class RunnerTest < Minitest::Test
 
   # --- Registry mutations ---
 
+  def test_registry_register_rejects_duplicate
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo a"))
+    error = assert_raises(ArgumentError) do
+      registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo b"))
+    end
+    assert_match(/Duplicate step: a/, error.message)
+  end
+
+  def test_registry_inspect_lists_step_names
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :alpha, type: :exec, command: "echo a"))
+    registry.register(DAG::Workflow::Step.new(name: :beta, type: :exec, command: "echo b"))
+    assert_match(/Registry steps=\[:alpha, :beta\]/, registry.inspect)
+  end
+
   def test_registry_replace_updates_step
     registry = DAG::Workflow::Registry.new
     registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo old"))
