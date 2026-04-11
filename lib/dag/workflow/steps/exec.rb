@@ -36,8 +36,11 @@ module DAG
         #
         # Used by Exec#call and by RubyScript.
         def self.run_command(command, timeout:)
+          pipes = []
           rd_out, wr_out = IO.pipe
+          pipes.push(rd_out, wr_out)
           rd_err, wr_err = IO.pipe
+          pipes.push(rd_err, wr_err)
           pid = spawn_command(command, wr_out, wr_err)
           wr_out.close
           wr_err.close
@@ -59,8 +62,12 @@ module DAG
           pid = nil
           build_result(command, stdout, stderr, status)
         ensure
-          [rd_out, wr_out, rd_err, wr_err].each { |io| io&.close unless io&.closed? }
+          pipes.each { |io| io.close unless io.closed? }
+          # :nocov: cleanup safety net for the exotic case where an exception
+          # escapes between spawn and the explicit `pid = nil`. Required by
+          # the process-tree-kill contract; not exercised in normal tests.
           kill_process(pid) if pid
+          # :nocov:
         end
 
         class << self
@@ -90,7 +97,10 @@ module DAG
               ready[0].each do |io|
                 chunk = io.read_nonblock(READ_CHUNK, exception: false)
                 case chunk
+                # :nocov: race between IO.select and read_nonblock — necessary
+                # for correctness but not deterministically testable.
                 when :wait_readable then next
+                # :nocov:
                 when nil then readers.delete(io)
                 else ((io == rd_out) ? stdout_buf : stderr_buf) << chunk
                 end
@@ -102,30 +112,33 @@ module DAG
 
           def kill_process(pid)
             signal_tree("TERM", pid)
-            return if Process.waitpid(pid, Process::WNOHANG)
+            return if poll_until_dead(pid, KILL_GRACE_SECONDS)
 
-            sleep(KILL_GRACE_SECONDS)
             signal_tree("KILL", pid)
-
-            deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + KILL_GRACE_SECONDS
-            loop do
-              return if Process.waitpid(pid, Process::WNOHANG)
-              break if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
-              sleep 0.01
-            end
-
-            # Uninterruptible-sleep child: nothing more we can do from userspace.
+            # KILL is uncatchable. If the child is in uninterruptible kernel
+            # sleep we block here until it dies — nothing else to do from
+            # userspace.
             Process.waitpid(pid)
           rescue Errno::ESRCH, Errno::ECHILD
           end
 
-          # Signal the process group first (catches grandchildren spawned by
-          # the command). Falls back to the direct PID when the platform
-          # disallows group signals (macOS sandbox, some container runtimes).
+          # Polls `Process.waitpid(pid, WNOHANG)` until the child is reaped or
+          # `timeout` seconds have elapsed. Returns true if reaped, false on
+          # timeout.
+          def poll_until_dead(pid, timeout)
+            deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
+            loop do
+              return true if Process.waitpid(pid, Process::WNOHANG)
+              return false if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+              sleep 0.01
+            end
+          end
+
+          # Signal the process group (catches grandchildren spawned by the
+          # command). The child becomes its own group leader via `pgroup: true`
+          # on spawn, so `-pid` is the group ID.
           def signal_tree(sig, pid)
             Process.kill(sig, -pid)
-          rescue Errno::EPERM, Errno::ESRCH
-            Process.kill(sig, pid)
           end
 
           def build_result(command, stdout, stderr, status)
