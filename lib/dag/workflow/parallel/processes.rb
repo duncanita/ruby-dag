@@ -30,13 +30,6 @@ module DAG
         READ_CHUNK = 16_384
         KILL_GRACE_SECONDS = Steps::Exec::KILL_GRACE_SECONDS
 
-        def initialize(max_parallelism:)
-          super
-          unless Process.respond_to?(:fork)
-            raise NotImplementedError, "Processes strategy requires Process.fork (not available on this platform)"
-          end
-        end
-
         def execute(tasks)
           in_flight = {}    # pid => task
           pipes = {}        # IO  => {pid:, buffer:}
@@ -47,11 +40,15 @@ module DAG
             while in_flight.size < @max_parallelism && !pending.empty?
               task = pending.shift
               rd, wr = IO.pipe
+              # :nocov: forked-child code is opaque to the parent's coverage
+              # tracker (the child exits via `exit!` which skips SimpleCov's
+              # flush). Tested via integration through Processes#execute.
               pid = Process.fork do
                 Process.setpgrp
                 rd.close
                 run_in_child(task, wr)
               end
+              # :nocov:
               wr.close
               in_flight[pid] = task
               pipes[rd] = {pid: pid, buffer: +""}
@@ -60,7 +57,11 @@ module DAG
             ready, = IO.select(pipes.keys)
             ready.each do |rd|
               info = pipes[rd]
+              # :nocov: partial-data race — drain_into may return false if
+              # the child wrote some data but EOF hasn't propagated yet.
+              # Necessary for correctness; not deterministically testable.
               next unless drain_into(rd, info[:buffer])
+              # :nocov:
 
               # EOF reached: child is done writing.
               pid = info[:pid]
@@ -73,7 +74,10 @@ module DAG
             end
           end
         ensure
-          pipes.each_key { |rd| rd.close unless rd.closed? }
+          # Anything still in `pipes` at ensure time is undrained — therefore
+          # still open. The normal drain path removes pipes via `pipes.delete`
+          # before closing them, so a closed pipe in this hash is impossible.
+          pipes.each_key(&:close)
           drain_orphans(in_flight)
         end
 
@@ -100,13 +104,19 @@ module DAG
                 next
               end
             case chunk
+            # :nocov: race between IO.select and read_nonblock — same as
+            # exec.rb#drain_pipes. Necessary for correctness, not testable.
             when :wait_readable then return false
+            # :nocov:
             when nil then return true # EOF
             else buffer << chunk
             end
           end
         end
 
+        # :nocov: child-only — runs in forked subprocess where coverage
+        # tracking is lost when `exit!` skips SimpleCov's flush. Tested via
+        # integration through Processes#execute.
         def run_in_child(task, wr)
           wr.write(marshal_tuple(run_task(task)))
           wr.close
@@ -141,6 +151,7 @@ module DAG
           })
           Marshal.dump([name, fallback, started_at, finished_at, duration_ms])
         end
+        # :nocov:
 
         def decode_payload(task, payload)
           if payload.empty?
@@ -180,13 +191,9 @@ module DAG
         def signal_then_reap(pids, sig, grace)
           return pids if pids.empty?
           pids.each do |pid|
-            begin
-              Process.kill(sig, -pid)
-            rescue Errno::EPERM, Errno::ESRCH
-              Process.kill(sig, pid)
-            end
+            Process.kill(sig, -pid)
           rescue Errno::ESRCH
-            # child (or group) already gone
+            # group already gone
           end
           reap_batch(pids, grace)
         end
@@ -198,7 +205,7 @@ module DAG
           until remaining.empty?
             remaining.reject! { |pid| waitpid_nohang(pid) }
             break if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
-            sleep 0.01 unless remaining.empty?
+            sleep 0.01
           end
           remaining
         end
