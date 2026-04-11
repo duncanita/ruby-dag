@@ -84,9 +84,11 @@ module DAG
       sym = name.to_sym
       raise UnknownNodeError, "Unknown node: #{sym}" unless @nodes.include?(sym)
 
-      fetch_set(@adjacency, sym).each { |to| @reverse[to]&.delete(sym) }
+      # Invariant: if `sym → to` is in @adjacency, @reverse[to] contains sym.
+      # Direct access (no `&.`) — a NoMethodError would surface inconsistency.
+      fetch_set(@adjacency, sym).each { |to| @reverse[to].delete(sym) }
       fetch_set(@reverse, sym).each do |from|
-        @adjacency[from]&.delete(sym)
+        @adjacency[from].delete(sym)
         delete_metadata(from, sym)
       end
 
@@ -479,7 +481,12 @@ module DAG
         queue = next_queue.sort
       end
 
+      # :nocov: defensive — cycle prevention happens at add_edge, so this
+      # is unreachable in normal flow. Kept as an explicit failure mode in
+      # case internal state ever drifts; removing it would silently return
+      # incomplete layers.
       raise CycleError, "Graph contains a cycle" if processed < @nodes.size
+      # :nocov:
       layers
     end
 
@@ -496,8 +503,9 @@ module DAG
     end
 
     def remove_edge_internal(from, to)
-      @adjacency[from]&.delete(to)
-      @reverse[to]&.delete(from)
+      # Invariant: callers ensure both endpoints exist in both directions.
+      @adjacency[from].delete(to)
+      @reverse[to].delete(from)
       delete_metadata(from, to)
     end
 
