@@ -432,6 +432,27 @@ class RunnerTest < Minitest::Test
     assert_equal [:a], finished
   end
 
+  def test_run_if_failure_still_preserves_start_before_finish_order_in_mixed_layer
+    events = []
+
+    graph = DAG::Graph.new.add_node(:run).add_node(:bad)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :run, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "ok") }))
+    registry.register(DAG::Workflow::Step.new(name: :bad, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "never") },
+      run_if: ->(_) { raise "boom" }))
+
+    DAG::Workflow::Runner.new(graph, registry, parallel: false,
+      on_step_start: ->(name, _) { events << [:start, name] },
+      on_step_finish: ->(name, _) { events << [:finish, name] }).call
+
+    first_finish = events.index { |kind, _| kind == :finish }
+    before = events[0...first_finish]
+    assert before.all? { |kind, _| kind == :start },
+      "expected all :start before first :finish, got #{events.inspect}"
+  end
+
   def test_run_if_exception_preserves_prior_outputs
     graph = DAG::Graph.new.add_node(:ok).add_node(:bad).add_edge(:ok, :bad)
     registry = DAG::Workflow::Registry.new
