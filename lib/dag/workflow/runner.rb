@@ -27,11 +27,13 @@ module DAG
       def initialize(graph_or_definition, registry = nil, parallel: true,
         max_parallelism: DEFAULT_MAX_PARALLELISM,
         timeout: nil,
+        clock: Clock.new,
         on_step_start: nil, on_step_finish: nil)
         graph, registry = unpack_definition(graph_or_definition, registry)
         @graph = graph
         @registry = registry
         @timeout = timeout
+        @clock = clock
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
         @strategy = build_strategy(parallel, max_parallelism)
         validate_coverage!(graph, registry)
@@ -39,7 +41,7 @@ module DAG
       end
 
       def call
-        deadline = @timeout ? Process.clock_gettime(Process::CLOCK_MONOTONIC) + @timeout : nil
+        deadline = @timeout ? @clock.monotonic_now + @timeout : nil
         execute_layers(@graph.topological_layers, deadline)
       end
 
@@ -107,7 +109,7 @@ module DAG
       end
 
       def deadline_passed?(deadline)
-        deadline && Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+        deadline && @clock.monotonic_now >= deadline
       end
 
       def build_run_result(outputs, trace, status, error)
