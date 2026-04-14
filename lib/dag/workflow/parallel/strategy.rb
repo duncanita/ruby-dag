@@ -33,15 +33,15 @@ module DAG
 
         def name = self.class::STRATEGY_SYM
 
-        # The single place that stamps timings, rescues step errors into a
-        # Failure, and enforces the executor return contract — so every
-        # strategy produces identical trace shape and identical error shape.
+        # The single place that stamps timings, rescues attempt errors into a
+        # Failure, and enforces the DAG::Result contract — so every strategy
+        # produces identical trace shape and identical error shape.
         def run_task(task)
           strategy_sym = name
           started_at = @clock.monotonic_now
           result =
             begin
-              raw = task.executor_class.new.call(task.step, task.input)
+              raw = task.attempt.call
               if raw.is_a?(Result)
                 raw
               else

@@ -28,12 +28,14 @@ module DAG
         max_parallelism: DEFAULT_MAX_PARALLELISM,
         timeout: nil,
         clock: Clock.new,
+        middleware: [],
         on_step_start: nil, on_step_finish: nil)
         graph, registry = unpack_definition(graph_or_definition, registry)
         @graph = graph
         @registry = registry
         @timeout = timeout
         @clock = clock
+        @middleware = Array(middleware).freeze
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
         @strategy = build_strategy(parallel, max_parallelism)
         validate_coverage!(graph, registry)
@@ -94,7 +96,7 @@ module DAG
             break
           end
 
-          execute_layer(layer, layer_index, outputs, statuses, trace).each do |name, result|
+          execute_layer(layer, layer_index, outputs, statuses, trace, deadline).each do |name, result|
             outputs[name] = result
             if result.failure? && failed_name.nil?
               failed_name = name
@@ -130,8 +132,8 @@ module DAG
       # :start batch. Strategy is picked before any callback fires, so a
       # consumer querying strategy identity from inside :start sees the
       # one actually running.
-      def execute_layer(layer, layer_index, previous_outputs, statuses, trace)
-        runnable, immediate_results = partition_layer(layer, previous_outputs, statuses)
+      def execute_layer(layer, layer_index, previous_outputs, statuses, trace, deadline)
+        runnable, immediate_results = partition_layer(layer, previous_outputs, statuses, deadline)
         results = {}
 
         runnable.each { |t| @callbacks.start(t.name, t.step) }
@@ -141,7 +143,7 @@ module DAG
         results
       end
 
-      def partition_layer(layer, previous_outputs, statuses)
+      def partition_layer(layer, previous_outputs, statuses, deadline)
         runnable = []
         immediate_results = []
 
@@ -155,9 +157,13 @@ module DAG
             if skip?(step, condition_context)
               immediate_results << [name, record_skip_result, input_keys, :skipped]
             else
+              execution = build_step_execution(name, current_attempt: 1, deadline: deadline)
               runnable << Parallel::Task.new(
-                name: name, step: step, input: input,
-                executor_class: executor_class(step.type),
+                name: name,
+                step: step,
+                input: input,
+                attempt: build_step_attempt(step, input, execution),
+                execution: execution,
                 input_keys: input_keys
               )
             end
@@ -187,6 +193,50 @@ module DAG
           @callbacks.finish(name, result)
           results[name] = result
         end
+      end
+
+      def build_step_execution(name, current_attempt:, deadline:)
+        StepExecution.new(
+          workflow_id: nil,
+          node_path: [name],
+          attempt: current_attempt,
+          deadline: deadline,
+          depth: 0,
+          parallel: @strategy.name,
+          execution_store: nil,
+          event_bus: nil
+        )
+      end
+
+      def build_step_attempt(step, input, execution)
+        chain = @middleware.reverse.reduce(core_step_invoker(step)) do |next_step, middleware|
+          build_middleware_invoker(middleware, next_step)
+        end
+
+        -> { chain.call(step, input, context: nil, execution: execution) }
+      end
+
+      def core_step_invoker(step)
+        executor = executor_class(step.type).new
+        ->(current_step, current_input, context:, execution:) { executor.call(current_step, current_input) }
+      end
+
+      def build_middleware_invoker(middleware, next_step)
+        ->(step, input, context:, execution:) do
+          result = middleware.call(step, input, context: context, execution: execution, next_step: next_step)
+          validate_middleware_result!(middleware, step, result)
+        end
+      end
+
+      def validate_middleware_result!(middleware, step, result)
+        return result if result.is_a?(Result)
+
+        Failure.new(error: {
+          code: :middleware_bad_return,
+          message: "middleware #{middleware.class} returned #{result.class} for step #{step.name} instead of a DAG::Result",
+          middleware: middleware.class.name,
+          returned_class: result.class.name
+        })
       end
 
       def skip?(step, condition_context) = !Condition.evaluate(step.config[:run_if], condition_context)

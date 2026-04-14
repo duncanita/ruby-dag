@@ -66,7 +66,8 @@ module DAGSoak
       name: name,
       step: step,
       input: {},
-      executor_class: DAG::Workflow::Steps::Ruby,
+      attempt: -> { DAG::Workflow::Steps::Ruby.new.call(step, {}) },
+      execution: nil,
       input_keys: []
     )
   end
@@ -81,7 +82,8 @@ module DAGSoak
       name: name,
       step: step,
       input: {},
-      executor_class: DAG::Workflow::Steps::Ruby,
+      attempt: -> { DAG::Workflow::Steps::Ruby.new.call(step, {}) },
+      execution: nil,
       input_keys: []
     )
   end
@@ -92,7 +94,8 @@ module DAGSoak
       name: name,
       step: step,
       input: {},
-      executor_class: DAG::Workflow::Steps.class_for(WORKER_DEATH_TYPE),
+      attempt: -> { DAG::Workflow::Steps.class_for(WORKER_DEATH_TYPE).new.call(step, {}) },
+      execution: nil,
       input_keys: []
     )
   end
