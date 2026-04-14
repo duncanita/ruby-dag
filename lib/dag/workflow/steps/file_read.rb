@@ -3,6 +3,10 @@
 module DAG
   module Workflow
     module Steps
+      # Reads the file at `step.config[:path]` and returns its contents as a
+      # Success value. No path sandboxing is applied — the caller is
+      # responsible for validating paths if workflow definitions come from
+      # untrusted sources.
       class FileRead
         def call(step, _input)
           path = step.config[:path]

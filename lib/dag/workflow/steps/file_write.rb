@@ -3,6 +3,9 @@
 module DAG
   module Workflow
     module Steps
+      # Writes content to the file at `step.config[:path]`. No path
+      # sandboxing is applied — the caller is responsible for validating
+      # paths if workflow definitions come from untrusted sources.
       class FileWrite
         VALID_MODES = %w[w a].freeze
 
