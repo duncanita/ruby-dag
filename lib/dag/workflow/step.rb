@@ -12,6 +12,10 @@ module DAG
 
     Step = Data.define(:name, :type, :config) do
       def initialize(name:, type:, **config)
+        # run_if: nil is semantically "no condition" — identical to absent.
+        # Strip it so round-tripping through Dumper/Loader is structurally
+        # equal. Other nil config values are preserved (they may be meaningful).
+        config.delete(:run_if) if config.key?(:run_if) && config[:run_if].nil?
         super(
           name: name.to_sym,
           type: type.to_sym,

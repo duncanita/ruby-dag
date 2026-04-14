@@ -46,6 +46,11 @@ module DAG
 
           depends_on = parse_depends_on(opts.delete(depends_key))
           rest = normalize_config_keys(opts, node_name: node_name, string_keys: string_keys)
+          if rest.key?(:run_if)
+            raise ValidationError, "Node '#{node_name}' has a blank run_if — remove it or provide a condition" if rest[:run_if].nil?
+
+            rest[:run_if] = Condition.normalize(rest[:run_if], context: "run_if for node '#{node_name}'")
+          end
           [node_name, {type: type_sym, depends_on: depends_on, **rest}]
         end
       end
@@ -81,6 +86,7 @@ module DAG
           graph.add_edge(from, to, **metadata)
         end
 
+        Validator.validate!(graph, registry)
         Definition.new(graph: graph, registry: registry)
       end
 

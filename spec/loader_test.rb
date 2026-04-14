@@ -67,6 +67,25 @@ class LoaderTest < Minitest::Test
     assert_equal "custom_value", defn.step(:task).config[:custom_key]
   end
 
+  def test_loads_declarative_run_if_from_yaml
+    defn = load_yaml(<<~YAML)
+      nodes:
+        decide:
+          type: exec
+          command: "echo prod"
+        deploy:
+          type: exec
+          command: "echo deploy"
+          depends_on: [decide]
+          run_if:
+            from: decide
+            value:
+              equals: "prod"
+    YAML
+
+    assert_equal({from: :decide, value: {equals: "prod"}}, defn.step(:deploy).config[:run_if])
+  end
+
   def test_loads_from_file
     file = Tempfile.new(["workflow", ".yml"])
     file.write(<<~YAML)
@@ -181,6 +200,107 @@ class LoaderTest < Minitest::Test
             depends_on: [missing]
       YAML
     end
+  end
+
+  def test_rejects_blank_run_if
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          a:
+            type: exec
+            command: "echo ok"
+          b:
+            type: exec
+            command: "echo deploy"
+            depends_on: [a]
+            run_if:
+      YAML
+    end
+
+    assert_match(/blank run_if/, error.message)
+  end
+
+  def test_rejects_run_if_that_is_not_a_mapping
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          decide:
+            type: exec
+            command: "echo prod"
+          deploy:
+            type: exec
+            command: "echo deploy"
+            depends_on: [decide]
+            run_if: true
+      YAML
+    end
+
+    assert_match(/run_if/, error.message)
+    assert_match(/mapping/, error.message)
+  end
+
+  def test_rejects_run_if_with_empty_all
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          decide:
+            type: exec
+            command: "echo prod"
+          deploy:
+            type: exec
+            command: "echo deploy"
+            depends_on: [decide]
+            run_if:
+              all: []
+      YAML
+    end
+
+    assert_match(/non-empty array/, error.message)
+  end
+
+  def test_rejects_run_if_with_unknown_value_predicate
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          decide:
+            type: exec
+            command: "echo prod"
+          deploy:
+            type: exec
+            command: "echo deploy"
+            depends_on: [decide]
+            run_if:
+              from: decide
+              value:
+                greater_than: 1
+      YAML
+    end
+
+    assert_match(/equals, in, present, nil, matches/, error.message)
+  end
+
+  def test_rejects_run_if_referencing_non_dependency
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          decide:
+            type: exec
+            command: "echo prod"
+          audit:
+            type: exec
+            command: "echo audit"
+          deploy:
+            type: exec
+            command: "echo deploy"
+            depends_on: [decide]
+            run_if:
+              from: audit
+              status: success
+      YAML
+    end
+
+    assert_match(/direct dependencies/, error.message)
+    assert_match(/audit/, error.message)
   end
 
   # --- malformed node definitions ---
@@ -423,6 +543,22 @@ class LoaderTest < Minitest::Test
       task: {type: :ruby, callable: ->(_) { DAG::Success.new(value: "ok") }}
     )
     assert_equal :ruby, defn.step(:task).type
+  end
+
+  def test_from_hash_normalizes_declarative_run_if
+    defn = DAG::Workflow::Loader.from_hash(
+      decide: {type: :exec, command: "echo prod"},
+      deploy: {type: :exec, command: "echo deploy", depends_on: [:decide],
+               run_if: {"all" => [
+                 {"from" => "decide", "status" => "success"},
+                 {"not" => {"from" => "decide", "value" => {"nil" => true}}}
+               ]}}
+    )
+
+    assert_equal(
+      {all: [{from: :decide, status: :success}, {not: {from: :decide, value: {nil: true}}}]},
+      defn.step(:deploy).config[:run_if]
+    )
   end
 
   def test_from_hash_preserves_extra_config

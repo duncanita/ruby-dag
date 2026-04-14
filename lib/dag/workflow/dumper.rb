@@ -8,7 +8,7 @@ module DAG
       NON_SERIALIZABLE_TYPES = %i[ruby].freeze
       # Output keys owned by the YAML node itself; a colliding config key
       # would silently overwrite them.
-      RESERVED_YAML_KEYS = %w[type depends_on].freeze
+      RESERVED_YAML_KEYS = %w[type depends_on run_if].freeze
 
       def self.to_yaml(definition)
         new(definition).dump
@@ -26,6 +26,7 @@ module DAG
       end
 
       def dump
+        Validator.validate!(@graph, @registry)
         data = {}
         @graph.topological_sort.each do |name|
           step = @registry[name]
@@ -40,8 +41,12 @@ module DAG
 
       def build_step(name, step)
         node = {"type" => step.type.to_s}
+        if step.config.key?(:run_if) && !step.config[:run_if].nil?
+          node["run_if"] = Condition.dumpable(step.config[:run_if])
+        end
         step.config.each do |k, v|
           key = k.to_s
+          next if key == "run_if"
           if RESERVED_YAML_KEYS.include?(key)
             raise SerializationError,
               "Step #{name} has config key '#{key}' which collides with a " \

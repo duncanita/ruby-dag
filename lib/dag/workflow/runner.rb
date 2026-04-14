@@ -35,6 +35,7 @@ module DAG
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
         @strategy = build_strategy(parallel, max_parallelism)
         validate_coverage!(graph, registry)
+        validate_workflow!(graph, registry)
       end
 
       def call
@@ -73,6 +74,7 @@ module DAG
 
       def execute_layers(layers, deadline)
         outputs = {}
+        statuses = {}
         trace = []
         failed_name = nil
         failed_result = nil
@@ -90,7 +92,7 @@ module DAG
             break
           end
 
-          execute_layer(layer, layer_index, outputs, trace).each do |name, result|
+          execute_layer(layer, layer_index, outputs, statuses, trace).each do |name, result|
             outputs[name] = result
             if result.failure? && failed_name.nil?
               failed_name = name
@@ -124,28 +126,29 @@ module DAG
       # :start batch. Strategy is picked before any callback fires, so a
       # consumer querying strategy identity from inside :start sees the
       # one actually running.
-      def execute_layer(layer, layer_index, previous_outputs, trace)
-        runnable, immediate_results = partition_layer(layer, previous_outputs)
+      def execute_layer(layer, layer_index, previous_outputs, statuses, trace)
+        runnable, immediate_results = partition_layer(layer, previous_outputs, statuses)
         results = {}
 
         runnable.each { |t| @callbacks.start(t.name, t.step) }
-        record_immediate_results(immediate_results, results, layer_index, trace)
-        run_tasks(runnable, layer_index, trace, results)
+        record_immediate_results(immediate_results, results, statuses, layer_index, trace)
+        run_tasks(runnable, layer_index, trace, results, statuses)
 
         results
       end
 
-      def partition_layer(layer, previous_outputs)
+      def partition_layer(layer, previous_outputs, statuses)
         runnable = []
         immediate_results = []
 
         layer.each do |name|
           step = @registry[name]
-          input = resolve_input(name, previous_outputs)
+          condition_context = resolve_condition_context(name, previous_outputs, statuses)
+          input = extract_input(condition_context)
           input_keys = input.keys.sort
 
           begin
-            if skip?(step, input)
+            if skip?(step, input, condition_context)
               immediate_results << [name, record_skip_result, input_keys, :skipped]
             else
               runnable << Parallel::Task.new(
@@ -166,30 +169,40 @@ module DAG
       # Short-circuits on an empty task list (a layer in which every step
       # was filtered by `run_if`): no point handing an empty array to the
       # strategy, and it keeps the trace ordering tidy.
-      def run_tasks(tasks, layer_index, trace, results)
+      def run_tasks(tasks, layer_index, trace, results, statuses)
         return if tasks.empty?
 
         input_keys_by_name = tasks.to_h { |t| [t.name, t.input_keys] }
 
         @strategy.execute(tasks) do |name, result, started_at, finished_at, duration_ms|
-          trace << build_trace_entry(name, layer_index, result,
+          entry = build_trace_entry(name, layer_index, result,
             started_at: started_at, finished_at: finished_at, duration_ms: duration_ms,
             input_keys: input_keys_by_name.fetch(name))
+          trace << entry
+          statuses[name] = entry.status
           @callbacks.finish(name, result)
           results[name] = result
         end
       end
 
-      def skip?(step, input)
+      def skip?(step, input, condition_context)
         run_if = step.config[:run_if]
-        run_if && !run_if.call(input)
+        return false unless run_if
+
+        if Condition.callable?(run_if)
+          !run_if.call(input)
+        else
+          !Condition.evaluate(run_if, condition_context)
+        end
       end
 
-      def record_immediate_results(entries, results, layer_index, trace)
+      def record_immediate_results(entries, results, statuses, layer_index, trace)
         entries.each do |name, result, input_keys, status|
-          trace << build_trace_entry(name, layer_index, result,
+          entry = build_trace_entry(name, layer_index, result,
             started_at: nil, finished_at: nil, duration_ms: 0,
             input_keys: input_keys, status: status)
+          trace << entry
+          statuses[name] = entry.status
           @callbacks.finish(name, result)
           results[name] = result
         end
@@ -209,8 +222,14 @@ module DAG
 
       # Predecessors always have a Result in `outputs` by the time we
       # resolve a downstream layer — skipped steps still record Success(nil).
-      def resolve_input(name, outputs)
-        @graph.each_predecessor(name).to_h { |dep| [dep, outputs[dep].value] }
+      def resolve_condition_context(name, outputs, statuses)
+        @graph.each_predecessor(name).to_h do |dep|
+          [dep, {value: outputs.fetch(dep).value, status: statuses.fetch(dep)}]
+        end
+      end
+
+      def extract_input(condition_context)
+        condition_context.transform_values { |entry| entry[:value] }
       end
 
       def validate_coverage!(graph, registry)
@@ -218,6 +237,10 @@ module DAG
         return if missing.empty?
 
         raise ValidationError, "Missing steps for graph nodes: #{missing.sort.join(", ")}"
+      end
+
+      def validate_workflow!(graph, registry)
+        Validator.validate!(graph, registry)
       end
     end
   end

@@ -155,6 +155,45 @@ class DumperTest < Minitest::Test
     assert_equal({weight: 3}, defn2.graph.edge_metadata(:fetch, :parse))
   end
 
+  def test_round_trip_with_declarative_run_if
+    yaml = <<~YAML
+      nodes:
+        decide:
+          type: exec
+          command: "echo prod"
+        deploy:
+          type: exec
+          command: "echo deploy"
+          depends_on:
+            - decide
+          run_if:
+            any:
+              - from: decide
+                status: success
+              - from: decide
+                value:
+                  equals: "prod"
+    YAML
+
+    defn1 = DAG::Workflow::Loader.from_yaml(yaml)
+    dumped = DAG::Workflow::Dumper.to_yaml(defn1)
+    defn2 = DAG::Workflow::Loader.from_yaml(dumped)
+
+    assert_equal defn1.step(:deploy).config[:run_if], defn2.step(:deploy).config[:run_if]
+  end
+
+  def test_raises_on_callable_run_if
+    graph = DAG::Graph.new.add_node(:deploy)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :deploy, type: :exec,
+      command: "echo deploy", run_if: ->(_) { true }))
+    defn = DAG::Workflow::Definition.new(graph: graph, registry: registry)
+
+    error = assert_raises(DAG::SerializationError) { DAG::Workflow::Dumper.to_yaml(defn) }
+    assert_match(/run_if/, error.message)
+    assert_match(/YAML-serializable/, error.message)
+  end
+
   # Symbol values in step config used to break round-trip: Dumper happily
   # emitted `mode: :strict` but Loader's safe_load did not permit Symbol
   # and crashed with Psych::DisallowedClass. Both sides should now agree.

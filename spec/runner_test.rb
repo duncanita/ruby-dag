@@ -331,16 +331,20 @@ class RunnerTest < Minitest::Test
   # --- Conditional execution ---
 
   def test_skipped_step_when_condition_false
-    graph = DAG::Graph.new.add_node(:a).add_node(:b).add_edge(:a, :b)
+    graph = DAG::Graph.new.add_node(:a).add_node(:b).add_node(:c)
+      .add_edge(:a, :b).add_edge(:a, :c)
     registry = DAG::Workflow::Registry.new
     registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo hello"))
     registry.register(DAG::Workflow::Step.new(name: :b, type: :ruby,
       callable: ->(input) { DAG::Success.new(value: "ran") },
       run_if: ->(input) { false }))
+    registry.register(DAG::Workflow::Step.new(name: :c, type: :ruby,
+      callable: ->(input) { DAG::Success.new(value: "fallback") }))
 
     result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
     assert result.success?
     assert_nil result.value[:outputs][:b].value
+    assert_equal "fallback", result.value[:outputs][:c].value
   end
 
   def test_step_runs_when_condition_true
@@ -356,15 +360,94 @@ class RunnerTest < Minitest::Test
   end
 
   def test_skipped_step_trace_has_skipped_status
-    graph = DAG::Graph.new.add_node(:a)
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    graph.add_edge(:a, :b)
     registry = DAG::Workflow::Registry.new
     registry.register(DAG::Workflow::Step.new(name: :a, type: :ruby,
       callable: ->(input) { DAG::Success.new(value: "ran") },
       run_if: ->(input) { false }))
+    registry.register(DAG::Workflow::Step.new(name: :b, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "fallback") },
+      run_if: ->(input) { input[:a].nil? }))
 
     result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
     trace = result.value[:trace]
-    assert_equal :skipped, trace.first.status
+    assert_equal :skipped, trace.find { |entry| entry.name == :a }.status
+  end
+
+  def test_skipped_leaf_succeeds
+    graph = DAG::Graph.new.add_node(:a).add_node(:b).add_edge(:a, :b)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo hello"))
+    registry.register(DAG::Workflow::Step.new(name: :b, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "never") },
+      run_if: ->(_) { false }))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
+
+    # Runner success means "no step failed." Skipped steps are not
+    # failures — run_if intentionally filtered them.
+    assert result.success?
+    assert_nil result.value[:error]
+    assert result.value[:trace].any? { |e| e.status == :skipped }
+  end
+
+  def test_declarative_run_if_selects_branch_by_value
+    graph = DAG::Graph.new.add_node(:decide).add_node(:prod).add_node(:noop)
+    graph.add_edge(:decide, :prod)
+    graph.add_edge(:decide, :noop)
+
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :decide, type: :exec, command: "echo prod"))
+    registry.register(DAG::Workflow::Step.new(name: :prod, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "deploy prod") },
+      run_if: {from: :decide, value: {equals: "prod"}}))
+    registry.register(DAG::Workflow::Step.new(name: :noop, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "no-op") },
+      run_if: {from: :decide, value: {equals: "staging"}}))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
+
+    assert result.success?
+    assert_equal "deploy prod", result.value[:outputs][:prod].value
+    assert_nil result.value[:outputs][:noop].value
+  end
+
+  def test_declarative_run_if_can_follow_skipped_dependency_status
+    graph = DAG::Graph.new.add_node(:root).add_node(:conditional).add_node(:fallback)
+    graph.add_edge(:root, :conditional)
+    graph.add_edge(:conditional, :fallback)
+
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :root, type: :exec, command: "echo root"))
+    registry.register(DAG::Workflow::Step.new(name: :conditional, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "never") },
+      run_if: {from: :root, value: {equals: "skip-me"}}))
+    registry.register(DAG::Workflow::Step.new(name: :fallback, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "fallback path") },
+      run_if: {from: :conditional, status: :skipped}))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
+
+    assert result.success?
+    assert_equal "fallback path", result.value[:outputs][:fallback].value
+  end
+
+  def test_runner_rejects_invalid_declarative_run_if_on_manual_definition
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    graph.add_edge(:a, :b)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo a"))
+    registry.register(DAG::Workflow::Step.new(name: :b, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "bad") },
+      run_if: {from: :missing, status: :success}))
+
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Runner.new(graph, registry, parallel: false)
+    end
+
+    assert_match(/direct dependencies/, error.message)
+    assert_match(/missing/, error.message)
   end
 
   def test_step_without_condition_always_runs
@@ -565,6 +648,12 @@ class RunnerTest < Minitest::Test
     assert_equal "echo new", duped[:a].config[:command]
   end
 
+  def test_step_strips_nil_run_if_from_config
+    step = DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo a", run_if: nil)
+    refute step.config.key?(:run_if)
+    assert_equal "echo a", step.config[:command]
+  end
+
   # --- Definition#replace_step ---
 
   def test_definition_replace_step_same_name_keeps_graph
@@ -629,6 +718,51 @@ class RunnerTest < Minitest::Test
     result = DAG::Workflow::Runner.new(new_defn.graph, new_defn.registry, parallel: false).call
     assert result.success?
     assert_equal "replaced", result.value[:outputs][:b].value
+  end
+
+  def test_definition_replace_step_rewrites_declarative_run_if
+    graph = DAG::Graph.new
+    %i[build test deploy].each { |n| graph.add_node(n) }
+    graph.add_edge(:build, :test)
+    graph.add_edge(:test, :deploy)
+
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :build, type: :exec, command: "echo built"))
+    registry.register(DAG::Workflow::Step.new(name: :test, type: :exec, command: "echo tested"))
+    registry.register(DAG::Workflow::Step.new(name: :deploy, type: :exec, command: "echo deploy",
+      run_if: {from: :test, status: :success}))
+
+    defn = DAG::Workflow::Definition.new(graph: graph, registry: registry)
+    new_step = DAG::Workflow::Step.new(name: :verify, type: :exec, command: "echo verified")
+    new_defn = defn.replace_step(:test, new_step)
+
+    # run_if[:from] should be rewritten from :test to :verify
+    assert_equal :verify, new_defn.step(:deploy).config[:run_if][:from]
+
+    # Runner should accept the renamed definition without validation error
+    runner = DAG::Workflow::Runner.new(new_defn.graph, new_defn.registry, parallel: false)
+    result = runner.call
+    assert result.success?
+  end
+
+  def test_definition_replace_step_leaves_unrelated_run_if_intact
+    graph = DAG::Graph.new
+    %i[a b c].each { |n| graph.add_node(n) }
+    graph.add_edge(:a, :b)
+    graph.add_edge(:a, :c)
+
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo a"))
+    registry.register(DAG::Workflow::Step.new(name: :b, type: :exec, command: "echo b"))
+    registry.register(DAG::Workflow::Step.new(name: :c, type: :exec, command: "echo c",
+      run_if: {from: :a, status: :success}))
+
+    defn = DAG::Workflow::Definition.new(graph: graph, registry: registry)
+    new_step = DAG::Workflow::Step.new(name: :x, type: :exec, command: "echo x")
+    new_defn = defn.replace_step(:b, new_step)
+
+    # c's run_if references :a (not :b), so it should be unchanged
+    assert_equal :a, new_defn.step(:c).config[:run_if][:from]
   end
 
   private
