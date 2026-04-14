@@ -81,10 +81,11 @@ in-memory workflow engine as its primary abstraction.
 - The coordinator may live in the gem later, but it is layered on top of
   persisted state and `Runner#call`, not instead of it.
 
-### 2. Step results and workflow results are different concepts
+### 2. Step results are monads; workflow state is not
 
-`DAG::Success` / `DAG::Failure` remain the contract for one step attempt.
-Future workflow execution uses a dedicated workflow result object.
+`DAG::Success` / `DAG::Failure` remain the monadic contract for one step
+attempt. Future workflow execution uses dedicated immutable value objects with
+explicit invariants instead of a second monad layer.
 
 ```ruby
 RunResult = Data.define(
@@ -103,6 +104,22 @@ Definitions:
 - `:failed`: at least one node failed and the workflow halted
 - `:waiting`: no runnable work remains in this invocation, but at least one node is waiting on time, approval, external data, or pause gate
 - `:paused`: a pause flag was observed between layers and execution stopped cleanly
+
+Rules:
+
+- `DAG::Result` stays step-attempt scoped.
+- `RunResult` is not a monad. It is a workflow-level immutable value object.
+- `Step`, `Definition`, `StepExecution`, `TraceEntry`, and durable execution
+  records are immutable value objects, not monads.
+
+`RunResult` invariants:
+
+- `status` is one of `:completed`, `:failed`, `:waiting`, `:paused`.
+- `outputs` contains only completed or intentionally skipped node outputs.
+- `error` is present only when `status == :failed`.
+- `waiting_nodes` is non-empty only when `status == :waiting`.
+- `trace` is append-only attempt history. It is not the source of truth for
+  node lifecycle state.
 
 ### 3. Durable state is unified under `ExecutionStore`
 
@@ -213,9 +230,50 @@ StepExecution = Data.define(
 )
 ```
 
+`StepExecution` invariants:
+
+- one instance exists per node attempt
+- `attempt` is an integer `>= 1`
+- `node_path` is unique within one logical workflow run
+- `deadline` is monotonic-time based when present
+- `execution_store` and `event_bus` may be `nil` only when the corresponding
+  feature is disabled
+
+Milestone 0 changes the current strategy handoff. The runner becomes
+responsible for composing one attempt invoker per task:
+
+- resolve dependency inputs
+- build `StepExecution`
+- wrap the core step call with middleware
+- pass the prepared attempt callable to the strategy
+
+Strategies remain responsible only for executing prepared attempts and yielding
+`DAG::Result` plus timing. They do not own graph traversal, stores, event
+delivery, or lifecycle decisions.
+
 Middleware order is declaration order, first middleware outermost.
 
-### 7. Context injection is application data, not runtime state
+### 7. Time uses an injected `Clock`
+
+Time-based features use one explicit protocol instead of calling wall-clock or
+monotonic time ad hoc throughout the runtime.
+
+```ruby
+class Clock
+  def wall_now = Time.now.utc
+  def monotonic_now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+end
+```
+
+Rules:
+
+- `wall_now` governs `not_before`, `not_after`, `cron`, and `ttl`.
+- `monotonic_now` governs workflow deadlines, retry backoff, timeout
+  budgeting, and duration measurements.
+- The default implementation is a system clock.
+- Tests use injected fake clocks instead of real sleeping.
+
+### 8. Context injection is application data, not runtime state
 
 Feature 4 introduces explicit `context:` for step handlers. It is separate from
 runner execution metadata.
@@ -225,7 +283,7 @@ runner execution metadata.
 - Built-in coordination data such as workflow ID, remaining timeout, or store
   handle does not ride through the user context object.
 
-### 8. Durable features require a stable definition fingerprint
+### 9. Durable features require a stable definition fingerprint
 
 Checkpointing, resume, versioning, invalidation, scheduling, and pause/resume
 all rely on reproducible workflow fingerprints.
@@ -241,6 +299,34 @@ Fingerprint rules:
 
 If persistence is enabled and any step cannot be fingerprinted, runner
 construction fails with `ValidationError`.
+
+---
+
+## Milestone 0: Runtime Foundations
+
+All features below assume Milestone 0 lands first. It is a prerequisite
+milestone, not Feature 0.
+
+### Scope
+
+- Introduce workflow-level `RunResult` with the invariants above.
+- Introduce `ExecutionStore` as the single durable state interface.
+- Introduce deterministic fingerprinting hooks and validation.
+- Introduce injected `Clock` support for wall and monotonic time.
+- Replace the current direct strategy handoff with runner-built attempt
+  invokers wrapped in middleware.
+
+### Acceptance criteria
+
+- `Runner#call` still supports non-persistent execution without `workflow_id`.
+- Store-backed runs fail fast on missing fingerprint hooks or invalid durable
+  configuration.
+- Strategies execute prepared attempt callables and remain agnostic to stores,
+  event buses, and workflow lifecycle.
+- Time-based tests can run against a fake clock without real sleeping.
+- Trace and node-path invariants hold across retries and nested sub-workflows.
+
+**Status:** `not-started` | **Complexity:** large
 
 ---
 
@@ -277,7 +363,11 @@ runner = Runner.new(definition, middleware: [DAG::Workflow::RetryMiddleware.new]
   - `:linear`: `base_delay * retry_index`
   - `:exponential`: `base_delay * (2 ** (retry_index - 1))`
 - Delay is capped at `max_delay`.
-- Backoff time counts against the workflow deadline.
+- Backoff time is measured against `clock.monotonic_now` and counts against the workflow deadline.
+- Backoff holds the current worker slot. Under `:threads` and `:processes`,
+  the same worker remains occupied until the retry chain succeeds or exhausts.
+- Retry remains inside the current worker and middleware chain. It is not
+  rescheduled through the runner.
 - The middleware appends one trace entry per attempt.
 - Earlier failed attempts are marked `retried: true`.
 - Callbacks remain observational. The retry contract does not depend on adding a new callback status.
@@ -289,6 +379,8 @@ runner = Runner.new(definition, middleware: [DAG::Workflow::RetryMiddleware.new]
 - Hitting the workflow deadline during backoff or later attempt returns workflow failure.
 - Final failure payload includes all attempt errors in order.
 - Successful later attempt persists only the successful output as reusable.
+- With `max_parallelism: 1`, a step in backoff prevents another runnable step
+  from starting until that retry chain completes or fails.
 
 **Status:** `not-started` | **Priority:** high
 
@@ -328,6 +420,14 @@ result = runner.call
   treated as missing and the node is re-executed.
 - `clear_on_completion:` is optional and defaults to `false`. The default
   preserves auditability and version history.
+
+Minimum `FileStore` guarantees in v1:
+
+- per-record writes use temp-file-plus-rename atomic replacement
+- a crash may lose the last in-flight write, but must never expose a partially
+  written readable record
+- no distributed locking, lease, or multi-writer coordination guarantee is
+  provided
 
 ### Fingerprinting rules
 
@@ -392,15 +492,19 @@ nodes:
 - `definition:` is programmatic-only.
 - `definition_path:` is YAML-safe and is resolved relative to the caller.
 - Parent input is transformed by `input_mapping` before the child run starts.
+- Parent and child share one logical `workflow_id`.
+- There is no separate child workflow record or child workflow ID in v1.
 - Child runner inherits:
   - parallel strategy
   - `max_parallelism`
   - remaining deadline
   - middleware stack
   - `context`
-  - `execution_store` namespace
+  - `execution_store`
 - Child node paths are prefixed with the parent node path.
   Example: parent node `[:process]`, child node `:summarize` becomes `[:process, :summarize]`.
+- Child trace entries, durable node records, reusable outputs, version history,
+  and stale markers all live under that prefixed `node_path` namespace.
 - Default output is a hash of child leaf values keyed by leaf name.
 - `output_key:` requires that key to be a leaf node in the child definition and returns only that leaf value.
 - Maximum nesting depth defaults to `10`.
@@ -411,6 +515,7 @@ nodes:
 - Child timeout uses remaining parent deadline, not the original workflow timeout.
 - `output_key` rejects non-leaf nodes.
 - Checkpoint/version records for child nodes do not collide with parent nodes.
+- Child persistence uses the same logical `workflow_id` as the parent run.
 - Inline `definition:` is rejected by YAML dumper.
 
 **Status:** `not-started` | **Priority:** high
@@ -444,14 +549,15 @@ end
 - Built-in steps ignore context unless they later opt in.
 - `context` must be thread-safe under `:threads`.
 - `context` is not automatically serialized into forked children under `:processes`.
-- In `:processes` mode, built-in context passing is disabled unless a later
-  feature introduces explicit `context_serializer:` / `context_loader:` hooks.
+- `Runner.new(..., context: ..., parallel: :processes)` fails fast unless a
+  future feature introduces explicit `context_serializer:` /
+  `context_loader:` hooks.
 
 ### Acceptance criteria
 
 - Sequential and threads modes pass context to compatible handlers.
-- Processes mode raises a clear validation error if context is present and no
-  explicit context-serialization strategy exists.
+- Processes mode raises a clear validation error at `Runner.new` if context is
+  present and no explicit context-serialization strategy exists.
 - Built-in steps that do not accept context still run unchanged.
 
 **Status:** `not-started` | **Priority:** high
@@ -477,14 +583,18 @@ Step.new(
     ttl: 604_800
   }
 )
+
+runner = Runner.new(definition, clock: my_clock)
 ```
 
 ### Exact semantics
 
 - `not_before`: node is ineligible before the timestamp. Runner records node state `:waiting`.
-- `not_after`: if current time is past this timestamp before completion, node transitions to `:failed` with `code: :deadline_exceeded`.
-- `ttl`: reusable output older than this duration is stale and cannot satisfy resume/version lookup.
+- `not_after`: if `clock.wall_now` is past this timestamp before completion, node transitions to `:failed` with `code: :deadline_exceeded`.
+- `ttl`: reusable output older than this duration relative to `clock.wall_now` is stale and cannot satisfy resume/version lookup.
 - `cron`: stored scheduling metadata only. The coordinator is responsible for invoking the runner on the relevant schedule.
+- Scheduling eligibility uses `clock.wall_now`.
+- Workflow deadlines, retry backoff, and duration measurements use `clock.monotonic_now`.
 - The runner never sleeps waiting for `not_before`.
 - A run returns `RunResult(status: :waiting, waiting_nodes: [...])` if at least one node is waiting and no runnable or failing nodes remain in this invocation.
 
@@ -494,6 +604,7 @@ Step.new(
 - `not_after` fails deterministically before executing late work.
 - `ttl` expiry causes re-execution instead of reuse.
 - `cron` metadata round-trips through Loader/Dumper for YAML-safe step types.
+- Scheduling tests can run against a fake clock without real sleeping.
 
 **Status:** `not-started` | **Priority:** medium
 
@@ -537,6 +648,13 @@ Step.new(
   - integer -> single raw value
   - `:all` -> array of raw values ordered by ascending version
 - The existing `depends_on` hash shape is extended with `version:` and optional `as:`.
+- For local dependencies, `version: :latest` follows normal dependency
+  resolution and reusable-output lookup. It does not create a separate waiting
+  state by itself.
+- For local dependencies, requesting an explicit integer version that does not
+  exist fails the workflow with `code: :version_not_found`.
+- For local dependencies, `version: :all` returns `[]` when no historical
+  versions exist.
 - If `as:` is omitted:
   - local dependency key defaults to `from`
   - cross-workflow dependency key defaults to `node`
@@ -546,7 +664,8 @@ Step.new(
 
 - Loader/Dumper round-trip `version:` metadata.
 - `:all` produces ordered arrays of raw values, not `DAG::Result` objects.
-- Missing requested version transitions the node to `:waiting` if external resolution may satisfy it later; otherwise validation/runtime failure is explicit.
+- Missing explicit local integer versions fail with `:version_not_found`.
+- `:all` over an empty local history returns `[]`.
 - Resume always reuses the latest reusable successful version only.
 
 **Status:** `not-started` | **Priority:** medium
@@ -598,7 +717,9 @@ new_definition = DAG::Workflow.replace_subtree(
   definition,
   root_node: :process,
   replacement: replacement_definition,
-  reconnect: {summarize: :report}
+  reconnect: [
+    {from: :summarize, to: :report, metadata: {}}
+  ]
 )
 ```
 
@@ -608,7 +729,9 @@ Graph primitive:
 graph.with_subtree_replaced(
   root: :process,
   replacement_graph: replacement_graph,
-  reconnect: {summarize: :report}
+  reconnect: [
+    {from: :summarize, to: :report, metadata: {}}
+  ]
 )
 ```
 
@@ -619,7 +742,14 @@ graph.with_subtree_replaced(
 - For v1, replacement definitions must have exactly one root unless explicit
   ingress mapping is added in a future feature.
 - Incoming edges of the old root are rewired to the single root of the replacement graph.
-- `reconnect:` maps replacement leaf node names to original downstream node names.
+- Each `reconnect` descriptor maps one replacement leaf to one original
+  downstream node and optionally supplies replacement edge metadata.
+- Multiple reconnect descriptors may target the same downstream node.
+- Downstream nodes with multiple inputs keep unaffected inputs unchanged.
+- Duplicate effective downstream aliases or incompatible reconnect metadata are
+  validation errors.
+- If the removed edges carried required metadata and reconnect descriptors do
+  not recreate it explicitly, the mutation is invalid.
 - Replacement must remain acyclic after reconnection.
 - Persisted state for removed nodes is retained for audit but marked obsolete.
 - Persisted state for downstream completed nodes reachable from the replaced
@@ -629,7 +759,9 @@ graph.with_subtree_replaced(
 
 - Replacement preserves upstream completed outputs.
 - Cycle introduction is rejected before state mutation.
-- Reconnected downstream nodes receive inputs from the mapped replacement leaves only.
+- Reconnected downstream nodes receive inputs from the mapped replacement
+  leaves while preserving untouched inputs.
+- Reconnect metadata rules are validated deterministically before state mutation.
 - Old subtree state is auditable but not reusable.
 
 **Status:** `not-started` | **Priority:** medium
@@ -664,12 +796,22 @@ runner = Runner.new(definition, middleware: [DAG::Workflow::EventMiddleware.new]
 Event = Data.define(:name, :workflow_id, :node_path, :payload, :emitted_at)
 ```
 
+### Event bus contract
+
+```ruby
+class EventBus
+  def publish(event) = nil
+end
+```
+
 ### Exact semantics
 
-- Events are emitted only after a successful step attempt.
+- Events are emitted only after the final successful step attempt.
 - Event conditions inspect the final `DAG::Result` of that step attempt.
 - Event emission is middleware-driven and does not modify step output.
+- Middleware calls `event_bus.publish(event)` synchronously at the bus boundary.
 - Event bus delivery is best-effort and non-transactional in v1.
+- Failed attempts and intermediate retry failures emit no events.
 - YAML support is not part of v1 because event conditions are Proc-based.
 - Trigger steps and out-of-graph reactive activation are explicitly out of scope for this feature.
 
@@ -678,6 +820,7 @@ Event = Data.define(:name, :workflow_id, :node_path, :payload, :emitted_at)
 - A successful step can emit zero, one, or many events.
 - Failed attempts emit no events.
 - Event payload shape is stable and includes workflow ID and node path.
+- `publish(event)` is called once per emitted event.
 - Event emission never changes the workflow result branch.
 
 **Status:** `not-started` | **Priority:** low
@@ -705,8 +848,16 @@ nodes:
 ```
 
 ```ruby
+CrossWorkflowResolution = Data.define(:status, :value, :error)
+# status: :ready | :waiting | :error
+
 resolver = ->(workflow_id, node_name, version) {
-  store.load_output(workflow_id: workflow_id, node_path: [node_name], version: version)
+  value = store.load_output(workflow_id: workflow_id, node_path: [node_name], version: version)
+  if value
+    CrossWorkflowResolution.new(status: :ready, value: value, error: nil)
+  else
+    CrossWorkflowResolution.new(status: :waiting, value: nil, error: nil)
+  end
 }
 
 runner = Runner.new(definition,
@@ -720,15 +871,22 @@ runner = Runner.new(definition,
 
 - Cross-workflow dependency descriptors are not stored as edges in the local graph.
 - Resolution occurs before the step attempt is built.
-- If external data is unavailable, the node transitions to `:waiting`.
+- The resolver returns one of:
+  - `:ready` with `value`
+  - `:waiting`
+  - `:error` with an explicit error payload
+- Resolver output determines whether missing external data is waitable or terminal.
+- If the resolver returns `:waiting`, the node transitions to `:waiting`.
+- If the resolver returns `:error`, the workflow fails explicitly.
 - Resolved values enter the input hash under `as:` or the default alias.
 - No cross-workflow cycle detection is provided by the gem.
-- Resolver returns raw reusable output values, not `DAG::Result`.
+- The gem does not infer waitability for missing external data on its own.
 
 ### Acceptance criteria
 
 - Local and cross-workflow dependencies can coexist on the same node.
-- Missing external value yields `RunResult(status: :waiting)`.
+- Resolver `:waiting` yields `RunResult(status: :waiting)`.
+- Resolver `:error` yields explicit workflow failure.
 - Duplicate input aliases are validation errors.
 - External resolution failure is surfaced as explicit workflow error, not silent skip.
 
@@ -766,6 +924,7 @@ result = Runner.new(definition,
 - If pause is observed before the next layer starts, workflow status becomes `:paused`.
 - Resume is simply another `Runner#call` with the same `workflow_id`.
 - Completed reusable outputs are reused on resume.
+- Pause gating and resume deadlines continue to use the injected `clock`.
 - Human approval is modeled as durable `:waiting` state set by the coordinator or approval middleware, not as a special in-process blocking step primitive.
 
 ### Acceptance criteria
@@ -811,8 +970,13 @@ runner = Runner.new(definition,
 - `next_step` must return `DAG::Result`.
 - Middleware may short-circuit by returning `DAG::Result` directly.
 - Middleware must not mutate `Step`.
+- Milestone 0 changes the strategy boundary: the runner resolves dependency
+  inputs, builds `StepExecution`, composes middleware around the core step
+  call, and hands one prepared attempt callable to the strategy.
 - Middleware is executed inside the strategy worker, not around graph traversal.
-- The runner is responsible for building `StepExecution`, dependency inputs,
+- The strategy executes prepared attempt callables and measures timing. It does
+  not know about middleware ordering, stores, event buses, or lifecycle rules.
+- The runner remains responsible for workflow traversal, dependency resolution,
   lifecycle transitions, and trace entries.
 
 ### Initial built-ins planned
@@ -832,7 +996,17 @@ runner = Runner.new(definition,
 
 ---
 
-## Feature summary
+## Milestone and feature summary
+
+The feature table below assumes Milestone 0 has landed first.
+
+### Milestone 0 summary
+
+| Milestone | Scope | Status | Complexity |
+|-----------|-------|--------|------------|
+| 0 | `RunResult`, `ExecutionStore`, fingerprinting, `Clock`, middleware handoff | `not-started` | large |
+
+### Feature summary
 
 | # | Feature | Priority | Status | Complexity |
 |---|---------|----------|--------|------------|
@@ -852,7 +1026,7 @@ runner = Runner.new(definition,
 ## Dependency graph
 
 ```text
-Definition fingerprinting + RunResult + ExecutionStore
+Milestone 0 (RunResult + ExecutionStore + fingerprinting + Clock + middleware handoff)
     |
     +--> Feature 12 (Middleware)
     |        |
@@ -878,13 +1052,18 @@ Definition fingerprinting + RunResult + ExecutionStore
 
 ## Suggested implementation order
 
-### Batch 1: foundations
+### Milestone 0: runtime foundations
 
 1. workflow `RunResult`
 2. `ExecutionStore`
 3. step fingerprinting rules
-4. middleware execution model
-5. context injection
+4. `Clock` and time injection
+5. strategy / middleware handoff
+
+### Batch 1: execution surface
+
+1. step middleware
+2. context injection
 
 ### Batch 2: reliability and composition
 
@@ -915,8 +1094,6 @@ Definition fingerprinting + RunResult + ExecutionStore
 
 ## Possible companion docs
 
-- `architecture-analysis.md`
-- `roadmap-foundations.md`
-- `roadmap-temporal.md`
-- `roadmap-enterprise.md`
-- `../dag-llm/graph-aware-software-engineering.md`
+- `durable-state-and-filestore.md`
+- `dynamic-graph-mutation.md`
+- `temporal-execution-and-versioning.md`
