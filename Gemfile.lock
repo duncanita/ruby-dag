@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    ruby-dag (0.3.1)
+    ruby-dag (0.4.0)
 
 GEM
   remote: https://rubygems.org/
