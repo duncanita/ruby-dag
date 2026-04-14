@@ -18,8 +18,6 @@ module DAG
           next unless registry.key?(node)
 
           errors.concat(Condition.validate(registry[node].config[:run_if], node_name: node, graph: graph))
-        rescue ValidationError => e
-          errors.concat(e.errors)
         end
 
         ValidationReport.new(errors: errors)

@@ -84,7 +84,8 @@ cannot live in YAML. Build those programmatically with `Loader.from_hash` or
 `Step.new` directly.
 
 Programmatic workflows can still use a callable `run_if`, but YAML workflows
-must use the declarative DSL:
+must use the declarative DSL. For Ruby APIs, `run_if: nil` is treated the same
+as omitting the condition entirely; blank YAML `run_if:` remains invalid.
 
 ```yaml
 nodes:

@@ -17,25 +17,23 @@ module DAG
         end
 
         def validate(condition, node_name:, graph:)
-          normalized = normalize(condition, context: "run_if for node '#{node_name}'")
-          return [] if normalized.nil? || callable?(normalized)
+          return [] if condition.nil? || callable?(condition)
 
-          validate_dependencies(normalized, node_name: node_name, allowed_inputs: graph.predecessors(node_name))
+          validate_dependencies(condition, node_name: node_name, allowed_inputs: graph.predecessors(node_name))
         end
 
         def validate!(condition, node_name:, graph:)
           errors = validate(condition, node_name: node_name, graph: graph)
           raise ValidationError, errors unless errors.empty?
 
-          normalize(condition, context: "run_if for node '#{node_name}'")
+          condition
         end
 
         def evaluate(condition, dependency_context)
-          normalized = normalize(condition)
-          return true if normalized.nil?
-          return normalized.call(extract_values(dependency_context)) if callable?(normalized)
+          return true if condition.nil?
+          return condition.call(extract_values(dependency_context)) if callable?(condition)
 
-          evaluate_condition(normalized, dependency_context)
+          evaluate_condition(condition, dependency_context)
         end
 
         # Returns a new condition with every `:from` reference to `old_name`
@@ -45,15 +43,21 @@ module DAG
         def rename_from(condition, old_name, new_name)
           return condition if condition.nil? || callable?(condition)
 
-          rewrite(normalize(condition), old_name.to_sym, new_name.to_sym)
+          old_sym = old_name.to_sym
+          new_sym = new_name.to_sym
+
+          map_tree(condition) do |leaf|
+            (leaf[:from] == old_sym) ? leaf.merge(from: new_sym) : leaf
+          end
         end
 
         def dumpable(condition)
-          normalized = normalize(condition)
-          raise SerializationError, "run_if is not YAML-serializable when it is callable" if callable?(normalized)
-          return nil if normalized.nil?
+          raise SerializationError, "run_if is not YAML-serializable when it is callable" if callable?(condition)
+          return nil if condition.nil?
 
-          dump_condition(normalized)
+          map_tree(condition, all_key: "all", any_key: "any", not_key: "not") do |leaf|
+            dump_leaf(leaf)
+          end
         end
 
         def callable?(condition)
@@ -177,7 +181,7 @@ module DAG
 
         def validate_dependencies(condition, node_name:, allowed_inputs:)
           errors = []
-          walk(condition) do |leaf|
+          each_leaf(condition) do |leaf|
             from = leaf.fetch(:from)
             next if allowed_inputs.include?(from)
 
@@ -192,15 +196,13 @@ module DAG
         end
 
         def evaluate_condition(condition, dependency_context)
-          if condition.key?(:all)
-            condition[:all].all? { |entry| evaluate_condition(entry, dependency_context) }
-          elsif condition.key?(:any)
-            condition[:any].any? { |entry| evaluate_condition(entry, dependency_context) }
-          elsif condition.key?(:not)
-            !evaluate_condition(condition[:not], dependency_context)
-          else
-            evaluate_leaf(condition, dependency_context)
-          end
+          dispatch_tree(
+            condition,
+            on_all: ->(entries) { entries.all? { |entry| evaluate_condition(entry, dependency_context) } },
+            on_any: ->(entries) { entries.any? { |entry| evaluate_condition(entry, dependency_context) } },
+            on_not: ->(entry) { !evaluate_condition(entry, dependency_context) },
+            on_leaf: ->(leaf) { evaluate_leaf(leaf, dependency_context) }
+          )
         end
 
         def evaluate_leaf(condition, dependency_context)
@@ -251,45 +253,54 @@ module DAG
           true
         end
 
-        def dump_condition(condition)
-          if condition.key?(:all)
-            {"all" => condition[:all].map { |entry| dump_condition(entry) }}
-          elsif condition.key?(:any)
-            {"any" => condition[:any].map { |entry| dump_condition(entry) }}
-          elsif condition.key?(:not)
-            {"not" => dump_condition(condition[:not])}
-          else
-            node = {"from" => condition[:from].to_s}
-            node["status"] = condition[:status].to_s if condition.key?(:status)
-            if condition.key?(:value)
-              predicate, expected = condition[:value].first
-              node["value"] = {predicate.to_s => expected}
-            end
-            node
+        def dump_leaf(condition)
+          node = {"from" => condition[:from].to_s}
+          node["status"] = condition[:status].to_s if condition.key?(:status)
+          if condition.key?(:value)
+            predicate, expected = condition[:value].first
+            node["value"] = {predicate.to_s => expected}
           end
+          node
         end
 
-        def rewrite(condition, old_sym, new_sym)
-          if condition.key?(:all)
-            {all: condition[:all].map { |entry| rewrite(entry, old_sym, new_sym) }}
-          elsif condition.key?(:any)
-            {any: condition[:any].map { |entry| rewrite(entry, old_sym, new_sym) }}
-          elsif condition.key?(:not)
-            {not: rewrite(condition[:not], old_sym, new_sym)}
-          else
-            (condition[:from] == old_sym) ? condition.merge(from: new_sym) : condition
-          end
+        def map_tree(condition, all_key: :all, any_key: :any, not_key: :not, &block)
+          dispatch_tree(
+            condition,
+            on_all: ->(entries) {
+              {all_key => entries.map { |entry| map_tree(entry,
+                all_key: all_key, any_key: any_key, not_key: not_key, &block) }}
+            },
+            on_any: ->(entries) {
+              {any_key => entries.map { |entry| map_tree(entry,
+                all_key: all_key, any_key: any_key, not_key: not_key, &block) }}
+            },
+            on_not: ->(entry) {
+              {not_key => map_tree(entry,
+                all_key: all_key, any_key: any_key, not_key: not_key, &block)}
+            },
+            on_leaf: ->(leaf) { block.call(leaf) }
+          )
         end
 
-        def walk(condition, &block)
+        def each_leaf(condition, &block)
+          dispatch_tree(
+            condition,
+            on_all: ->(entries) { entries.each { |entry| each_leaf(entry, &block) } },
+            on_any: ->(entries) { entries.each { |entry| each_leaf(entry, &block) } },
+            on_not: ->(entry) { each_leaf(entry, &block) },
+            on_leaf: ->(leaf) { block.call(leaf) }
+          )
+        end
+
+        def dispatch_tree(condition, on_all:, on_any:, on_not:, on_leaf:)
           if condition.key?(:all)
-            condition[:all].each { |entry| walk(entry, &block) }
+            on_all.call(condition[:all])
           elsif condition.key?(:any)
-            condition[:any].each { |entry| walk(entry, &block) }
+            on_any.call(condition[:any])
           elsif condition.key?(:not)
-            walk(condition[:not], &block)
+            on_not.call(condition[:not])
           else
-            yield condition
+            on_leaf.call(condition)
           end
         end
 

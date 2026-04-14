@@ -654,6 +654,22 @@ class RunnerTest < Minitest::Test
     assert_equal "echo a", step.config[:command]
   end
 
+  def test_step_normalizes_declarative_run_if
+    step = DAG::Workflow::Step.new(name: :deploy, type: :exec, command: "echo deploy",
+      run_if: {"from" => "tests", "status" => "success"})
+
+    assert_equal({from: :tests, status: :success}, step.config[:run_if])
+  end
+
+  def test_step_rejects_malformed_declarative_run_if
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Step.new(name: :deploy, type: :exec, command: "echo deploy", run_if: "bad")
+    end
+
+    assert_match(/run_if/, error.message)
+    assert_match(/mapping/, error.message)
+  end
+
   # --- Definition#replace_step ---
 
   def test_definition_replace_step_same_name_keeps_graph

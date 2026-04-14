@@ -45,11 +45,9 @@ module DAG
           validate_type!(node_name, type_sym, valid_types: valid_types)
 
           depends_on = parse_depends_on(opts.delete(depends_key))
-          rest = normalize_config_keys(opts, node_name: node_name, string_keys: string_keys)
-          if rest.key?(:run_if)
-            raise ValidationError, "Node '#{node_name}' has a blank run_if — remove it or provide a condition" if rest[:run_if].nil?
-
-            rest[:run_if] = Condition.normalize(rest[:run_if], context: "run_if for node '#{node_name}'")
+          rest = normalize_config_keys(opts, node_name: node_name)
+          if string_keys && rest.key?(:run_if) && rest[:run_if].nil?
+            raise ValidationError, "Node '#{node_name}' has a blank run_if — remove it or provide a condition"
           end
           [node_name, {type: type_sym, depends_on: depends_on, **rest}]
         end
@@ -118,7 +116,7 @@ module DAG
         end
       end
 
-      def self.normalize_config_keys(opts, node_name:, string_keys:)
+      def self.normalize_config_keys(opts, node_name:)
         opts.each_with_object({}) do |(key, value), h|
           h[coerce_symbol!(key, context: "config key for node '#{node_name}'")] = value
         end

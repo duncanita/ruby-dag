@@ -29,8 +29,9 @@
 - **`empty_child_payload` diagnostics**: the error now includes the child's
   exit status ("killed by signal 9", "exited 1") instead of the opaque
   "exited without writing a payload".
-- `Step` strips `run_if: nil` from config on construction so Dumper/Loader
-  round-trip is structurally equal.
+- `run_if` is canonicalized once at `Step` construction. Ruby entry points
+  (`Step.new`, `Loader.from_hash`) treat `run_if: nil` as omitted, while YAML
+  keeps rejecting blank `run_if:`.
 - `Condition.evaluate` handles callable conditions instead of crashing with
   `NoMethodError`.
 

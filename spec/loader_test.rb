@@ -561,6 +561,25 @@ class LoaderTest < Minitest::Test
     )
   end
 
+  def test_from_hash_treats_nil_run_if_as_omitted
+    defn = DAG::Workflow::Loader.from_hash(
+      deploy: {type: :exec, command: "echo deploy", run_if: nil}
+    )
+
+    refute defn.step(:deploy).config.key?(:run_if)
+  end
+
+  def test_from_hash_rejects_malformed_declarative_run_if_at_construction
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Loader.from_hash(
+        deploy: {type: :exec, command: "echo deploy", run_if: "bad"}
+      )
+    end
+
+    assert_match(/run_if/, error.message)
+    assert_match(/mapping/, error.message)
+  end
+
   def test_from_hash_preserves_extra_config
     defn = DAG::Workflow::Loader.from_hash(
       task: {type: :exec, command: "echo x", timeout: 60, custom_key: "custom_value"}

@@ -98,17 +98,4 @@ class ValidatorTest < Minitest::Test
     report = ValidationReport.new(errors: ["err"])
     assert report.errors.frozen?
   end
-
-  def test_handles_malformed_run_if_gracefully
-    graph = DAG::Graph.new
-    graph.add_node(:a)
-
-    registry = DAG::Workflow::Registry.new
-    registry.register(DAG::Workflow::Step.new(name: :a, type: :exec, command: "echo a",
-      run_if: "not a hash"))
-
-    report = Validator.validate(graph, registry)
-    refute report.valid?
-    assert report.errors.size >= 1
-  end
 end

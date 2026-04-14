@@ -12,14 +12,11 @@ module DAG
 
     Step = Data.define(:name, :type, :config) do
       def initialize(name:, type:, **config)
-        # run_if: nil is semantically "no condition" — identical to absent.
-        # Strip it so round-tripping through Dumper/Loader is structurally
-        # equal. Other nil config values are preserved (they may be meaningful).
-        config.delete(:run_if) if config.key?(:run_if) && config[:run_if].nil?
+        sym_name = name.to_sym
         super(
-          name: name.to_sym,
+          name: sym_name,
           type: type.to_sym,
-          config: deep_copy_and_freeze(config, {})
+          config: deep_copy_and_freeze(canonicalize_run_if(config, node_name: sym_name), {})
         )
       end
 
@@ -27,6 +24,17 @@ module DAG
       def inspect = to_s
 
       private
+
+      def canonicalize_run_if(config, node_name:)
+        return config unless config.key?(:run_if)
+
+        run_if = config[:run_if]
+        # For Ruby construction APIs, `run_if: nil` is equivalent to omitting
+        # the condition entirely. YAML stays stricter in Loader.
+        return config.reject { |key, _| key == :run_if } if run_if.nil?
+
+        config.merge(run_if: Condition.normalize(run_if, context: "run_if for node '#{node_name}'"))
+      end
 
       def deep_copy_and_freeze(obj, seen)
         return seen[obj.object_id] if seen.key?(obj.object_id)

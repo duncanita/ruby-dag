@@ -470,11 +470,11 @@ class ConditionTest < Minitest::Test
     end
   end
 
-  def test_validate_bang_returns_normalized_on_success
+  def test_validate_bang_returns_canonical_condition_on_success
     graph = build_graph(:a, :b, edges: [[:a, :b]])
-    result = Condition.validate!({"from" => "a", "status" => "success"}, node_name: :b, graph: graph)
-    assert_equal :a, result[:from]
-    assert_equal :success, result[:status]
+    condition = {from: :a, status: :success}
+    result = Condition.validate!(condition, node_name: :b, graph: graph)
+    assert_same condition, result
   end
 
   # --- dumpable ---

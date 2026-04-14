@@ -148,7 +148,7 @@ module DAG
           input_keys = input.keys.sort
 
           begin
-            if skip?(step, input, condition_context)
+            if skip?(step, condition_context)
               immediate_results << [name, record_skip_result, input_keys, :skipped]
             else
               runnable << Parallel::Task.new(
@@ -185,16 +185,7 @@ module DAG
         end
       end
 
-      def skip?(step, input, condition_context)
-        run_if = step.config[:run_if]
-        return false unless run_if
-
-        if Condition.callable?(run_if)
-          !run_if.call(input)
-        else
-          !Condition.evaluate(run_if, condition_context)
-        end
-      end
+      def skip?(step, condition_context) = !Condition.evaluate(step.config[:run_if], condition_context)
 
       def record_immediate_results(entries, results, statuses, layer_index, trace)
         entries.each do |name, result, input_keys, status|

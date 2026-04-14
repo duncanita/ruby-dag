@@ -13,10 +13,10 @@ require_relative "dag/graph/builder"
 require_relative "dag/graph/validator"
 
 # Workflow layer
+require_relative "dag/workflow/condition"
 require_relative "dag/workflow/step"
 require_relative "dag/workflow/registry"
 require_relative "dag/workflow/definition"
-require_relative "dag/workflow/condition"
 require_relative "dag/workflow/validator"
 require_relative "dag/workflow/steps"
 require_relative "dag/workflow/run_callbacks"
