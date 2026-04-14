@@ -29,7 +29,7 @@ class ParallelTest < Minitest::Test
 
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: true).call
     assert result.failure?
-    assert_equal :bad, result.error[:error][:failed_node]
+    assert_equal :bad, result.error[:failed_node]
   end
 
   # 3. Layer-sequential guarantee: step in layer 2 sees outputs from layer 1
@@ -42,7 +42,7 @@ class ParallelTest < Minitest::Test
 
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: true).call
     assert result.success?
-    assert_equal "got: layer1_data", result.value[:outputs][:consumer].value
+    assert_equal "got: layer1_data", result.outputs[:consumer].value
   end
 
   # 4. Repeated runs for race detection: 10 runs, all succeed
@@ -73,7 +73,7 @@ class ParallelTest < Minitest::Test
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: true).call
     assert result.success?
 
-    trace = result.value[:trace]
+    trace = result.trace
     assert_equal 3, trace.size
     names = trace.map(&:name).sort
     assert_equal [:a, :b, :c], names
@@ -98,9 +98,9 @@ class ParallelTest < Minitest::Test
 
     assert seq.success?
     assert par.success?
-    assert_equal seq.value[:outputs][:x].value, par.value[:outputs][:x].value
-    assert_equal seq.value[:outputs][:y].value, par.value[:outputs][:y].value
-    assert_equal seq.value[:outputs][:z].value, par.value[:outputs][:z].value
+    assert_equal seq.outputs[:x].value, par.outputs[:x].value
+    assert_equal seq.outputs[:y].value, par.outputs[:y].value
+    assert_equal seq.outputs[:z].value, par.outputs[:z].value
   end
 
   # 7. max_parallelism caps the in-flight worker count but still completes all steps
@@ -117,9 +117,9 @@ class ParallelTest < Minitest::Test
       parallel: true, max_parallelism: 2).call
 
     assert result.success?
-    assert_equal 5, result.value[:outputs].size
+    assert_equal 5, result.outputs.size
     %i[a b c d e].each do |name|
-      assert_equal name.to_s, result.value[:outputs][name].value
+      assert_equal name.to_s, result.outputs[name].value
     end
   end
 
@@ -135,7 +135,7 @@ class ParallelTest < Minitest::Test
       parallel: true, max_parallelism: 1).call
 
     assert result.success?
-    %i[a b c].each { |n| assert_equal n.to_s, result.value[:outputs][n].value }
+    %i[a b c].each { |n| assert_equal n.to_s, result.outputs[n].value }
   end
 
   # 9. max_parallelism rejects nonsense values at construction time
@@ -208,7 +208,7 @@ class ParallelTest < Minitest::Test
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: :sequential).call
 
     assert result.success?
-    %i[a b c].each { |n| assert_equal n.to_s, result.value[:outputs][n].value }
+    %i[a b c].each { |n| assert_equal n.to_s, result.outputs[n].value }
   end
 
   # --- Threads strategy ---
@@ -234,7 +234,7 @@ class ParallelTest < Minitest::Test
     )
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: :threads).call
     assert result.failure?
-    assert_equal :bad, result.error[:error][:failed_node]
+    assert_equal :bad, result.error[:failed_node]
   end
 
   # Worker boundary: if anything below StandardError reaches the bottom of the
@@ -262,8 +262,8 @@ class ParallelTest < Minitest::Test
       result = DAG::Workflow::Runner.new(graph, registry, parallel: mode).call
 
       assert result.failure?, "expected failure on #{mode}"
-      assert_equal :bad, result.error[:error][:failed_node]
-      step_error = result.error[:error][:step_error]
+      assert_equal :bad, result.error[:failed_node]
+      step_error = result.error[:step_error]
       assert_equal :step_bad_return, step_error[:code], "wrong code on #{mode}"
       assert_equal "String", step_error[:returned_class]
       assert_equal mode, step_error[:strategy]
@@ -286,9 +286,9 @@ class ParallelTest < Minitest::Test
 
     result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
     assert result.failure?
-    assert_equal :producer, result.error[:error][:failed_node]
-    assert_equal :step_bad_return, result.error[:error][:step_error][:code]
-    refute result.error[:outputs].key?(:consumer), "consumer must not have run"
+    assert_equal :producer, result.error[:failed_node]
+    assert_equal :step_bad_return, result.error[:step_error][:code]
+    refute result.outputs.key?(:consumer), "consumer must not have run"
   end
 
   def test_threads_strategy_does_not_deadlock_when_worker_raises_below_standard_error
@@ -309,8 +309,8 @@ class ParallelTest < Minitest::Test
     end
 
     assert result.failure?
-    assert_equal :dies, result.error[:error][:failed_node]
-    step_error = result.error[:error][:step_error]
+    assert_equal :dies, result.error[:failed_node]
+    step_error = result.error[:step_error]
     assert_equal :worker_died, step_error[:code]
     assert_match(/worker for dies died/, step_error[:message])
     assert_equal :threads, step_error[:strategy]
@@ -324,7 +324,7 @@ class ParallelTest < Minitest::Test
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: :processes).call
 
     assert result.success?
-    (1..4).each { |i| assert_equal i.to_s, result.value[:outputs][:"n#{i}"].value }
+    (1..4).each { |i| assert_equal i.to_s, result.outputs[:"n#{i}"].value }
   end
 
   def test_processes_strategy_caps_concurrency
@@ -345,7 +345,7 @@ class ParallelTest < Minitest::Test
     )
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: :processes).call
     assert result.failure?
-    assert_equal :bad, result.error[:error][:failed_node]
+    assert_equal :bad, result.error[:failed_node]
   end
 
   # Pipe-buffer regression: a step whose stdout exceeds the OS pipe buffer
@@ -358,7 +358,7 @@ class ParallelTest < Minitest::Test
     )
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: :processes).call
     assert result.success?
-    assert_equal 200_000, result.value[:outputs][:big].value.length
+    assert_equal 200_000, result.outputs[:big].value.length
   end
 
   def test_processes_strategy_handles_multiple_large_payloads_concurrently
@@ -369,7 +369,7 @@ class ParallelTest < Minitest::Test
 
     assert result.success?
     (1..4).each do |i|
-      assert_equal 80_000, result.value[:outputs][:"big#{i}"].value.length
+      assert_equal 80_000, result.outputs[:"big#{i}"].value.length
     end
   end
 
@@ -495,7 +495,7 @@ class ParallelTest < Minitest::Test
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: :processes).call
 
     assert result.failure?
-    step_error = result.error[:error][:step_error]
+    step_error = result.error[:step_error]
     assert_equal :empty_child_payload, step_error[:code]
     assert_match(/exited without writing/, step_error[:message])
   end
