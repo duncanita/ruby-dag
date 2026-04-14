@@ -316,6 +316,12 @@ module DAG
       fetch_set(@reverse, name.to_sym).each(&block)
     end
 
+    # Read-only iteration over successors without duping the internal Set.
+    def each_successor(name, &block)
+      return enum_for(:each_successor, name) unless block
+      fetch_set(@adjacency, name.to_sym).each(&block)
+    end
+
     # --- Subgraph ---
 
     def subgraph(node_names)

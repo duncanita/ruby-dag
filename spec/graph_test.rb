@@ -340,6 +340,26 @@ class GraphTest < Minitest::Test
     assert_equal [:a], graph.each_predecessor(:b).to_a
   end
 
+  def test_each_successor
+    graph = build_graph([:a, :b, :c, :d], [[:a, :c], [:a, :d], [:b, :c]])
+    collected = []
+    graph.each_successor(:a) { |s| collected << s }
+    assert_equal [:c, :d], collected.sort
+  end
+
+  def test_each_successor_with_no_successors
+    graph = build_graph([:a, :b], [[:a, :b]])
+    collected = []
+    graph.each_successor(:b) { |s| collected << s }
+    assert_empty collected
+  end
+
+  def test_each_successor_returns_enumerator
+    graph = build_graph([:a, :b], [[:a, :b]])
+    assert_instance_of Enumerator, graph.each_successor(:a)
+    assert_equal [:b], graph.each_successor(:a).to_a
+  end
+
   # --- Immutability after freeze ---
 
   def test_frozen_graph_rejects_add_node
