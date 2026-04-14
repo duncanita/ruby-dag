@@ -31,7 +31,7 @@ module DAG
         run_if = config[:run_if]
         # For Ruby construction APIs, `run_if: nil` is equivalent to omitting
         # the condition entirely. YAML stays stricter in Loader.
-        return config.reject { |key, _| key == :run_if } if run_if.nil?
+        return config.except(:run_if) if run_if.nil?
 
         config.merge(run_if: Condition.normalize(run_if, context: "run_if for node '#{node_name}'"))
       end
