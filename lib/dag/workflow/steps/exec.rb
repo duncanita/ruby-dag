@@ -81,6 +81,15 @@ module DAG
             end
           end
 
+          # Note on EINTR: `read_nonblock(exception: false)` suppresses
+          # `IO::WaitReadable` and `EOFError` but NOT `Errno::EINTR`, which
+          # fires when a signal (typically SIGCHLD from a sibling child)
+          # lands mid-syscall. Under the Threads strategy with concurrent
+          # exec steps, each thread has its own spawn/drain/waitpid cycle and
+          # a SIGCHLD from any child can land on any thread. Unguarded
+          # `read_nonblock` crashes the thread; the strategy catches it as
+          # `:step_raised` but the step was otherwise healthy. The rescue
+          # retries: an interrupted read read nothing, pipe state unchanged.
           def drain_pipes(rd_out, rd_err, timeout)
             deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
             stdout_buf = +""
@@ -95,7 +104,15 @@ module DAG
               next unless ready
 
               ready[0].each do |io|
-                chunk = io.read_nonblock(READ_CHUNK, exception: false)
+                chunk =
+                  begin
+                    io.read_nonblock(READ_CHUNK, exception: false)
+                    # :nocov: EINTR from SIGCHLD during concurrent exec —
+                    # signal-triggered, not deterministically testable.
+                  rescue Errno::EINTR
+                    next
+                    # :nocov:
+                  end
                 case chunk
                 # :nocov: race between IO.select and read_nonblock — necessary
                 # for correctness but not deterministically testable.
