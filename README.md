@@ -76,34 +76,41 @@ untrusted YAML.
 | `<node-name>` | under `nodes` | mapping | yes | becomes the symbol node name in the graph |
 | `type` | under each node | string | yes | must be a registered, YAML-safe step type (`exec`, `ruby_script`, `file_read`, `file_write`, plus any custom types registered with `yaml_safe: true`) |
 | `depends_on` | under each node | array | no | each entry is either a string (the upstream node name) or a mapping with `from:` and optional metadata keys (e.g. `weight`) |
-| any other key | under each node | scalar | no | passed verbatim into the step's `config` (e.g. `command`, `path`, `timeout`, `mode`, `from`, `content`) |
+| `run_if` | under each node | mapping | no | declarative condition DSL using `all` / `any` / `not` and leaf predicates on direct dependencies |
+| any other key | under each node | scalar / array / mapping | no | passed verbatim into the step's `config` (e.g. `command`, `path`, `timeout`, `mode`, `from`, `content`) |
 
 The `:ruby` step type is **not** YAML-safe — its `callable` is a Proc that
 cannot live in YAML. Build those programmatically with `Loader.from_hash` or
 `Step.new` directly.
 
-`run_if` conditions are also Procs and cannot be expressed in YAML; they
-must be set programmatically.
+Programmatic workflows can still use a callable `run_if`, but YAML workflows
+must use the declarative DSL:
 
 ```yaml
 nodes:
-  fetch:
+  decide:
     type: exec
-    command: "curl -s https://api.example.com/data"
-    timeout: 30
+    command: "echo prod"
 
-  parse:
+  deploy_prod:
     type: exec
-    command: "jq '.results'"
+    command: "./deploy prod"
     depends_on:
-      - from: fetch
-        weight: 3       # edge metadata, picked up by path algorithms
+      - decide
+    run_if:
+      from: decide
+      value:
+        equals: "prod"
 
-  save:
-    type: file_write
-    path: "/tmp/out.json"
+  deploy_staging:
+    type: exec
+    command: "./deploy staging"
     depends_on:
-      - parse          # short form: just the upstream name
+      - decide
+    run_if:
+      from: decide
+      value:
+        equals: "staging"
 ```
 
 ### Load and Run
@@ -434,7 +441,34 @@ DAG::Workflow::Step.new(
 )
 ```
 
+YAML workflows use a declarative `run_if` DSL instead of a Proc:
+
+```yaml
+run_if:
+  all:
+    - from: tests
+      status: success
+    - from: decide
+      value:
+        equals: "prod"
+```
+
+Supported combinators are `all`, `any`, and `not`. Leaf predicates may only
+reference direct dependencies and can inspect:
+
+- `status`: `success` or `skipped`
+- `value.equals`
+- `value.in`
+- `value.present`
+- `value.nil`
+- `value.matches`
+
 Downstream steps receive `nil` for skipped dependencies.
+
+If the workflow finishes with no successful leaf nodes, the runner returns a
+structured failure with code `:workflow_dead_end`. In practice this means a
+branching workflow should model an explicit fallback or no-op leaf if "no
+branch selected" is a valid outcome.
 
 ## Dependencies
 
@@ -445,7 +479,8 @@ Nodes declare dependencies with `depends_on`. The runner:
 3. Builds `Parallel::Task`s for the runnable steps and hands them to the configured Strategy
 4. Receives results from the Strategy in completion order, builds trace entries, fires `on_step_finish` callbacks
 5. Stops the workflow on the first failure
-6. Returns a single `{outputs:, trace:, error:}` payload (wrapped in `Success` or `Failure`)
+6. Fails with `:workflow_dead_end` if every leaf node ends up skipped
+7. Returns a single `{outputs:, trace:, error:}` payload (wrapped in `Success` or `Failure`)
 
 Step inputs are **always** hashes keyed by dependency step name (e.g., `{ fetch: "data" }`). Zero-dependency steps receive `{}`.
 
