@@ -68,8 +68,8 @@ module DAG
               task = in_flight.delete(pid)
               pipes.delete(rd)
               rd.close
-              blocking_waitpid(pid)
-              yield(*decode_payload(task, info[:buffer]))
+              status = blocking_waitpid(pid)
+              yield(*decode_payload(task, info[:buffer], status))
               completed += 1
             end
           end
@@ -153,12 +153,26 @@ module DAG
         end
         # :nocov:
 
-        def decode_payload(task, payload)
+        # :nocov: OS-level edge cases (signal kill, ECHILD race) are not
+        # deterministically testable; the common case (clean exit) is tested.
+        def child_status_detail(name, status)
+          if status.nil?
+            "no status available"
+          elsif status.signaled?
+            "killed by signal #{status.termsig}"
+          else
+            "exited #{status.exitstatus}"
+          end
+        end
+        # :nocov:
+
+        def decode_payload(task, payload, child_status = nil)
           if payload.empty?
             now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            detail = child_status_detail(task.name, child_status)
             result = Failure.new(error: {
               code: :empty_child_payload,
-              message: "child for #{task.name} exited without writing a payload",
+              message: "child for #{task.name} exited without writing a payload (#{detail})",
               strategy: STRATEGY_SYM
             })
             return [task.name, result, now, now, 0.0]
@@ -217,9 +231,12 @@ module DAG
         end
 
         def blocking_waitpid(pid)
-          Process.waitpid(pid)
+          _, status = Process.waitpid2(pid)
+          status
         rescue Errno::ECHILD
-          # already reaped
+          # :nocov: requires child already reaped by concurrent path
+          nil
+          # :nocov:
         end
       end
     end
