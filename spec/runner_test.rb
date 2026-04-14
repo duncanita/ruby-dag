@@ -233,6 +233,96 @@ class RunnerTest < Minitest::Test
     refute_includes events, [:start, :skip]
   end
 
+  # --- Step middleware ---
+
+  def test_middleware_wraps_step_attempt_in_declaration_order
+    events = []
+
+    middleware_one = Class.new(DAG::Workflow::StepMiddleware) do
+      def initialize(events)
+        @events = events
+      end
+
+      def call(step, input, context:, execution:, next_step:)
+        @events << [:before, :one, step.name, execution.node_path, execution.attempt, execution.parallel]
+        result = next_step.call(step, input, context: context, execution: execution)
+        @events << [:after, :one]
+        DAG::Success.new(value: "#{result.value}|one")
+      end
+    end
+
+    middleware_two = Class.new(DAG::Workflow::StepMiddleware) do
+      def initialize(events)
+        @events = events
+      end
+
+      def call(step, input, context:, execution:, next_step:)
+        @events << [:before, :two, step.name, execution.node_path, execution.attempt, execution.parallel]
+        result = next_step.call(step, input, context: context, execution: execution)
+        @events << [:after, :two]
+        DAG::Success.new(value: "#{result.value}|two")
+      end
+    end
+
+    defn = build_test_workflow(
+      wrapped: {type: :ruby, callable: ->(_input) { DAG::Success.new(value: "core") }}
+    )
+
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry,
+      parallel: false,
+      middleware: [middleware_one.new(events), middleware_two.new(events)]).call
+
+    assert result.success?
+    assert_equal "core|two|one", result.outputs[:wrapped].value
+    assert_equal [
+      [:before, :one, :wrapped, [:wrapped], 1, :sequential],
+      [:before, :two, :wrapped, [:wrapped], 1, :sequential],
+      [:after, :two],
+      [:after, :one]
+    ], events
+  end
+
+  def test_middleware_can_short_circuit_step_attempt
+    middleware = Class.new(DAG::Workflow::StepMiddleware) do
+      def call(step, input, context:, execution:, next_step:)
+        DAG::Success.new(value: "short-circuited #{step.name} with #{input.inspect}")
+      end
+    end
+
+    defn = build_test_workflow(
+      wrapped: {type: :ruby, callable: ->(_input) { raise "should not run" }}
+    )
+
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry,
+      parallel: false,
+      middleware: [middleware.new]).call
+
+    assert result.success?
+    assert_equal "short-circuited wrapped with {}", result.outputs[:wrapped].value
+  end
+
+  def test_bad_middleware_return_fails_clearly
+    middleware = Class.new(DAG::Workflow::StepMiddleware) do
+      def call(step, input, context:, execution:, next_step:)
+        "not a result"
+      end
+    end
+
+    defn = build_test_workflow(
+      wrapped: {type: :ruby, callable: ->(_input) { DAG::Success.new(value: "never") }}
+    )
+
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry,
+      parallel: false,
+      middleware: [middleware.new]).call
+
+    assert result.failure?
+    assert_equal :wrapped, result.error[:failed_node]
+    assert_equal :middleware_bad_return, result.error[:step_error][:code]
+    assert_equal "String", result.error[:step_error][:returned_class]
+    assert_match(/middleware .* returned String/, result.error[:step_error][:message])
+  end
+
   # --- Definition convenience methods ---
 
   def test_definition_empty
