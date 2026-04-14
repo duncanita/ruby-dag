@@ -168,7 +168,7 @@ module DAG
 
         def decode_payload(task, payload, child_status = nil)
           if payload.empty?
-            now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+            now = @clock.monotonic_now
             detail = child_status_detail(task.name, child_status)
             result = Failure.new(error: {
               code: :empty_child_payload,
@@ -180,7 +180,7 @@ module DAG
 
           Marshal.load(payload)
         rescue => e
-          now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          now = @clock.monotonic_now
           result = Result.exception_failure(:decode_failed, e,
             message: "failed to decode payload from #{task.name}: #{e.message}",
             strategy: STRATEGY_SYM)
@@ -215,10 +215,10 @@ module DAG
         # Returns the list of pids still alive after the grace period.
         def reap_batch(pids, grace)
           remaining = pids.dup
-          deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + grace
+          deadline = @clock.monotonic_now + grace
           until remaining.empty?
             remaining.reject! { |pid| waitpid_nohang(pid) }
-            break if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+            break if @clock.monotonic_now >= deadline
             sleep 0.01
           end
           remaining

@@ -462,11 +462,41 @@ class ParallelTest < Minitest::Test
       name: :crash, step: step, input: {},
       executor_class: raising_executor, input_keys: []
     )
-    name, result, _started, _finished, _duration = DAG::Workflow::Parallel::Sequential.run_task(task)
+    strategy = DAG::Workflow::Parallel::Sequential.new
+    name, result, _started, _finished, _duration = strategy.run_task(task)
     assert_equal :crash, name
     assert result.failure?
     assert_equal :step_raised, result.error[:code]
     assert_match(/executor kaboom/, result.error[:message])
+  end
+
+  def test_strategy_run_task_uses_injected_clock_for_trace_timing
+    fake_clock = Class.new do
+      def initialize(times)
+        @times = times.dup
+      end
+
+      def wall_now = Time.utc(2026, 4, 14, 0, 0, 0)
+
+      def monotonic_now
+        @times.shift || @times.last || 0.0
+      end
+    end.new([10.0, 10.25])
+
+    step = DAG::Workflow::Step.new(name: :ok, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "done") })
+    task = DAG::Workflow::Parallel::Task.new(
+      name: :ok, step: step, input: {},
+      executor_class: DAG::Workflow::Steps::Ruby, input_keys: []
+    )
+
+    strategy = DAG::Workflow::Parallel::Sequential.new(clock: fake_clock)
+    _name, result, started_at, finished_at, duration_ms = strategy.run_task(task)
+
+    assert result.success?
+    assert_equal 10.0, started_at
+    assert_equal 10.25, finished_at
+    assert_equal 250.0, duration_ms
   end
 
   def test_processes_decode_payload_handles_corrupt_marshal_data

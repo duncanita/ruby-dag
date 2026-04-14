@@ -50,11 +50,11 @@ module DAG
       def build_strategy(parallel, max_parallelism)
         case parallel
         when false, :sequential
-          Parallel::Sequential.new
+          Parallel::Sequential.new(clock: @clock)
         when true, :threads
-          Parallel::Threads.new(max_parallelism: max_parallelism)
+          Parallel::Threads.new(max_parallelism: max_parallelism, clock: @clock)
         when :processes
-          Parallel::Processes.new(max_parallelism: max_parallelism)
+          Parallel::Processes.new(max_parallelism: max_parallelism, clock: @clock)
         else
           raise ArgumentError, "Unknown parallel mode: #{parallel.inspect}. " \
                                "Use true, false, :sequential, :threads, or :processes."

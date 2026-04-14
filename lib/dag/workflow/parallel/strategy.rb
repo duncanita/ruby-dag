@@ -20,10 +20,11 @@ module DAG
       class Strategy
         attr_reader :max_parallelism
 
-        def initialize(max_parallelism:)
+        def initialize(max_parallelism:, clock: Clock.new)
           raise ArgumentError, "max_parallelism must be >= 1" if max_parallelism < 1
 
           @max_parallelism = max_parallelism
+          @clock = clock
         end
 
         def execute(tasks, &block)
@@ -35,13 +36,9 @@ module DAG
         # The single place that stamps timings, rescues step errors into a
         # Failure, and enforces the executor return contract — so every
         # strategy produces identical trace shape and identical error shape.
-        # Inherited dispatch carries the subclass identity: a `Threads`
-        # instance calling `self.class.run_task(task)` runs the inherited
-        # class method with `self == Threads`, so `STRATEGY_SYM` resolves to
-        # `:threads` without parameter passing.
-        def self.run_task(task)
-          strategy_sym = const_get(:STRATEGY_SYM)
-          started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        def run_task(task)
+          strategy_sym = name
+          started_at = @clock.monotonic_now
           result =
             begin
               raw = task.executor_class.new.call(task.step, task.input)
@@ -61,13 +58,9 @@ module DAG
                 message: "step #{task.name} raised: #{e.message}",
                 strategy: strategy_sym)
             end
-          finished_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          finished_at = @clock.monotonic_now
           duration_ms = ((finished_at - started_at) * 1000).round(2)
           [task.name, result, started_at, finished_at, duration_ms]
-        end
-
-        def run_task(task)
-          self.class.run_task(task)
         end
       end
     end
