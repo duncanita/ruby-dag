@@ -4,7 +4,11 @@ require "etc"
 
 module DAG
   module Workflow
-    TraceEntry = Data.define(:name, :layer, :started_at, :finished_at, :duration_ms, :status, :input_keys)
+    TraceEntry = Data.define(:name, :layer, :started_at, :finished_at, :duration_ms, :status, :input_keys, :attempt, :retried) do
+      def initialize(name:, layer:, started_at:, finished_at:, duration_ms:, status:, input_keys:, attempt: 1, retried: false)
+        super
+      end
+    end
 
     class Runner
       DEFAULT_MAX_PARALLELISM = [Etc.nprocessors, 8].min
@@ -167,13 +171,15 @@ module DAG
               immediate_results << [name, record_skip_result, input_keys, :skipped]
             else
               execution = build_step_execution(name, current_attempt: 1, deadline: deadline)
+              attempt_log = []
               runnable << Parallel::Task.new(
                 name: name,
                 step: step,
                 input: input,
-                attempt: build_step_attempt(step, input, execution),
+                attempt: build_step_attempt(step, input, execution, attempt_log),
                 execution: execution,
-                input_keys: input_keys
+                input_keys: input_keys,
+                attempt_log: attempt_log
               )
             end
           rescue => e
@@ -191,14 +197,14 @@ module DAG
       def run_tasks(tasks, layer_index, trace, results, statuses)
         return if tasks.empty?
 
-        input_keys_by_name = tasks.to_h { |t| [t.name, t.input_keys] }
+        tasks_by_name = tasks.to_h { |task| [task.name, task] }
 
         @strategy.execute(tasks) do |name, result, started_at, finished_at, duration_ms|
-          entry = build_trace_entry(name, layer_index, result,
-            started_at: started_at, finished_at: finished_at, duration_ms: duration_ms,
-            input_keys: input_keys_by_name.fetch(name))
-          trace << entry
-          statuses[name] = entry.status
+          task = tasks_by_name.fetch(name)
+          entries = build_trace_entries_for_task(task, layer_index, result,
+            started_at: started_at, finished_at: finished_at, duration_ms: duration_ms)
+          trace.concat(entries)
+          statuses[name] = entries.last.status
           @callbacks.finish(name, result)
           results[name] = result
         end
@@ -217,18 +223,52 @@ module DAG
         )
       end
 
-      def build_step_attempt(step, input, execution)
-        chain = @middleware.reverse.reduce(core_step_invoker(step)) do |next_step, middleware|
+      def build_step_attempt(step, input, execution, attempt_log)
+        chain = @middleware.reverse.reduce(core_step_invoker(step, attempt_log)) do |next_step, middleware|
           build_middleware_invoker(middleware, next_step)
         end
 
         -> { chain.call(step, input, context: @context, execution: execution) }
       end
 
-      def core_step_invoker(step)
+      def core_step_invoker(step, attempt_log)
         executor = executor_class(step.type).new
         ->(current_step, current_input, context:, execution:) do
-          invoke_step_executor(executor, current_step, current_input, context: context)
+          started_at = @clock.monotonic_now
+          result = invoke_step_executor(executor, current_step, current_input, context: context)
+          unless result.is_a?(Result)
+            result = Failure.new(error: {
+              code: :step_bad_return,
+              message: "step #{current_step.name} returned #{result.class} instead of a DAG::Result. " \
+                       "Wrap the value in DAG::Success.new(value: ...) or DAG::Failure.new(error: ...).",
+              returned_class: result.class.name,
+              strategy: @strategy.name
+            })
+          end
+          finished_at = @clock.monotonic_now
+          attempt_log << {
+            attempt: execution.attempt,
+            started_at: started_at,
+            finished_at: finished_at,
+            duration_ms: ((finished_at - started_at) * 1000).round(2),
+            status: result.success? ? :success : :failure,
+            retried: false
+          }
+          result
+        rescue => e
+          finished_at = @clock.monotonic_now
+          failure = Result.exception_failure(:step_raised, e,
+            message: "step #{current_step.name} raised: #{e.message}",
+            strategy: @strategy.name)
+          attempt_log << {
+            attempt: execution.attempt,
+            started_at: started_at,
+            finished_at: finished_at,
+            duration_ms: ((finished_at - started_at) * 1000).round(2),
+            status: :failure,
+            retried: false
+          }
+          failure
         end
       end
 
@@ -280,13 +320,34 @@ module DAG
 
       def record_skip_result = Success.new(value: nil)
 
-      def build_trace_entry(name, layer_index, result, started_at:, finished_at:, duration_ms:, input_keys:, status: nil)
+      def build_trace_entries_for_task(task, layer_index, result, started_at:, finished_at:, duration_ms:)
+        if task.attempt_log.empty?
+          return [build_trace_entry(task.name, layer_index, result,
+            started_at: started_at, finished_at: finished_at, duration_ms: duration_ms,
+            input_keys: task.input_keys)]
+        end
+
+        task.attempt_log.each_with_index.map do |entry, index|
+          build_trace_entry(task.name, layer_index, result,
+            started_at: entry[:started_at],
+            finished_at: entry[:finished_at],
+            duration_ms: entry[:duration_ms],
+            input_keys: task.input_keys,
+            status: entry[:status],
+            attempt: entry[:attempt],
+            retried: index < (task.attempt_log.length - 1))
+        end
+      end
+
+      def build_trace_entry(name, layer_index, result, started_at:, finished_at:, duration_ms:, input_keys:, status: nil, attempt: 1, retried: false)
         TraceEntry.new(
           name: name, layer: layer_index,
           started_at: started_at, finished_at: finished_at,
           duration_ms: duration_ms,
           status: status || (result.success? ? :success : :failure),
-          input_keys: input_keys
+          input_keys: input_keys,
+          attempt: attempt,
+          retried: retried
         )
       end
 
