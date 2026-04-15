@@ -73,6 +73,7 @@ module DAG
         @register_execution_store = register_execution_store
         validate_context_parallelism!(parallel, context)
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
+        @attempt_trace_middleware = AttemptTraceMiddleware.new(clock: @clock)
         @trace_recorder = TraceRecorder.new(callbacks: @callbacks)
         @strategy = build_strategy(parallel, max_parallelism)
         validate_coverage!(graph, registry)
@@ -391,17 +392,18 @@ module DAG
       end
 
       def build_step_attempt(step, input, execution, attempt_log)
-        chain = @middleware.reverse.reduce(core_step_invoker(step, attempt_log)) do |next_step, middleware|
+        middleware_chain = @middleware + [@attempt_trace_middleware]
+        chain = middleware_chain.reverse.reduce(core_step_invoker(step)) do |next_step, middleware|
           build_middleware_invoker(middleware, next_step)
         end
 
-        -> { chain.call(step, input, context: @context, execution: execution) }
+        execution_with_trace_sink = execution.with(event_bus: attempt_log)
+        -> { chain.call(step, input, context: @context, execution: execution_with_trace_sink) }
       end
 
-      def core_step_invoker(step, attempt_log)
+      def core_step_invoker(step)
         executor = (step.type == :sub_workflow) ? nil : executor_class(step.type).new
         ->(current_step, current_input, context:, execution:) do
-          started_at = @clock.monotonic_now
           result = if current_step.type == :sub_workflow
             run_sub_workflow_step(current_step, current_input, context: context, execution: execution)
           else
@@ -417,36 +419,12 @@ module DAG
             })
           end
           result, child_trace = unwrap_sub_workflow_result(result)
-          attempt_log.concat(child_trace)
-          lifecycle = sub_workflow_lifecycle_payload(result)
-          finished_at = @clock.monotonic_now
-          unless lifecycle
-            attempt_log << {
-              attempt: execution.attempt,
-              node_path: execution.node_path,
-              started_at: started_at,
-              finished_at: finished_at,
-              duration_ms: ((finished_at - started_at) * 1000).round(2),
-              status: result.success? ? :success : :failure,
-              retried: false
-            }
-          end
+          Array(execution.event_bus).concat(child_trace)
           result
         rescue => e
-          finished_at = @clock.monotonic_now
-          failure = Result.exception_failure(:step_raised, e,
+          Result.exception_failure(:step_raised, e,
             message: "step #{current_step.name} raised: #{e.message}",
             strategy: @strategy.name)
-          attempt_log << {
-            attempt: execution.attempt,
-            node_path: execution.node_path,
-            started_at: started_at,
-            finished_at: finished_at,
-            duration_ms: ((finished_at - started_at) * 1000).round(2),
-            status: :failure,
-            retried: false
-          }
-          failure
         end
       end
 
