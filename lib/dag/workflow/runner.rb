@@ -182,7 +182,7 @@ module DAG
           :completed
         end
 
-        waiting_nodes = status == :waiting ? waiting_nodes : []
+        waiting_nodes = (status == :waiting) ? waiting_nodes : []
         build_run_result(outputs, trace,
           status,
           failed_name ? {failed_node: failed_name, step_error: failed_result.error} : nil,
