@@ -48,9 +48,12 @@ class ExamplesTest < Minitest::Test
       #{stderr}
     MSG
 
-    assert_includes stdout, "=== Parent Workflow ==="
-    assert_includes stdout, "=== Durable Run ==="
+    assert_includes stdout, "=== Programmatic Parent Workflow ==="
+    assert_includes stdout, "=== Durable Programmatic Run ==="
     assert_includes stdout, "Child calls: 1"
+    assert_includes stdout, "=== YAML Parent Workflow ==="
+    assert_includes stdout, "=== Durable YAML Run ==="
+    assert_includes stdout, "Stored YAML child output: yaml-grandchild"
   end
 
   private

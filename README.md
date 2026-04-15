@@ -233,9 +233,12 @@ Notes:
 
 ### Sub-workflow composition
 
-A step can run a nested programmatic `Definition` with type `:sub_workflow`.
+A step can run a nested workflow with type `:sub_workflow`. The child can come
+from either a programmatic `definition:` or a YAML-safe `definition_path:`.
 The child run inherits the parent runner's parallel mode, middleware, context,
 remaining timeout budget, workflow ID, and execution store.
+
+Programmatic form:
 
 ```ruby
 child = DAG::Workflow::Loader.from_hash(
@@ -272,12 +275,28 @@ puts result.outputs[:process].value  # => "HELLO!"
 puts result.trace.map(&:name)        # => [:fetch, :"process.analyze", :"process.summarize", :process]
 ```
 
+YAML-safe form:
+
+```yaml
+nodes:
+  process:
+    type: sub_workflow
+    definition_path: sub_workflows/child.yml
+    output_key: nested
+    resume_key: process-v1
+```
+
+`definition_path:` is resolved relative to the YAML file that declares it, so a
+child workflow can itself use relative `definition_path:` entries for deeper
+nesting.
+
 Notes:
-- this first slice supports programmatic `definition:` only
+- `:sub_workflow` must declare exactly one of `definition:` or `definition_path:`
 - child trace entries are flattened into the parent trace with names like `:"process.summarize"`
 - default sub-workflow output is a hash of child leaf values; `output_key:` selects one leaf
 - durable child outputs are stored under the parent node path, e.g. `[:process, :summarize]`
-- see `examples/sub_workflow.rb` for a runnable example that is exercised in the test suite
+- the dumper emits YAML-safe sub-workflows when they use `definition_path:` and rejects programmatic `definition:` children
+- see `examples/sub_workflow.rb` and `examples/sub_workflow_parent.yml` for runnable examples exercised in the test suite
 
 ## Graph API
 

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "tmpdir"
 
 class DumperTest < Minitest::Test
   include TestHelpers
@@ -203,6 +204,42 @@ class DumperTest < Minitest::Test
     defn2 = DAG::Workflow::Loader.from_yaml(dumped)
 
     assert_equal :strict, defn2.step(:task).config[:mode]
+  end
+
+  def test_round_trip_sub_workflow_with_definition_path_via_file
+    Dir.mktmpdir("dag-dumper-subworkflow") do |dir|
+      child_path = File.join(dir, "child.yml")
+      parent_path = File.join(dir, "parent.yml")
+
+      File.write(child_path, <<~YAML)
+        nodes:
+          summarize:
+            type: exec
+            command: "printf dumped-child"
+      YAML
+
+      graph = DAG::Graph.new.add_node(:process)
+      registry = DAG::Workflow::Registry.new
+      registry.register(DAG::Workflow::Step.new(name: :process, type: :sub_workflow,
+        definition_path: "child.yml", output_key: :summarize))
+      defn = DAG::Workflow::Definition.new(graph: graph, registry: registry, source_path: parent_path)
+
+      DAG::Workflow::Dumper.to_file(defn, parent_path)
+      loaded = DAG::Workflow::Loader.from_file(parent_path)
+      result = DAG::Workflow::Runner.new(loaded, parallel: false).call
+
+      assert result.success?
+      assert_equal "child.yml", loaded.step(:process).config[:definition_path]
+      assert_equal "dumped-child", result.outputs[:process].value
+    end
+  end
+
+  def test_raises_on_programmatic_sub_workflow_definition
+    child = build_test_workflow(done: {type: :exec, command: "printf ok"})
+    defn = build_test_workflow(process: {type: :sub_workflow, definition: child, output_key: :done})
+
+    error = assert_raises(DAG::SerializationError) { DAG::Workflow::Dumper.to_yaml(defn) }
+    assert_match(/definition_path/, error.message)
   end
 
   def test_empty_workflow

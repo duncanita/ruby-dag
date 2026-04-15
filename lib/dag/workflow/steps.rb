@@ -56,7 +56,7 @@ module DAG
       register(:file_read, FileRead, yaml_safe: true)
       register(:file_write, FileWrite, yaml_safe: true)
       register(:ruby, Ruby, yaml_safe: false)
-      register(:sub_workflow, SubWorkflow, yaml_safe: false)
+      register(:sub_workflow, SubWorkflow, yaml_safe: true)
     end
   end
 end

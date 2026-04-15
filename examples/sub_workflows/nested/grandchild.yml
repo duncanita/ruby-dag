@@ -1,0 +1,4 @@
+nodes:
+  summarize:
+    type: exec
+    command: "printf yaml-grandchild"
