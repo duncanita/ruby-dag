@@ -44,12 +44,7 @@ module DAG
 
         return unless step.type == :sub_workflow
 
-        definition = step.config[:definition]
-        definition_path = step.config[:definition_path]
-        return if definition.nil? && definition_path.is_a?(String) && !definition_path.empty?
-
-        raise SerializationError,
-          "Step #{name} (type: :sub_workflow) is YAML-serializable only when it uses definition_path"
+        SubWorkflowSupport.validate_yaml_serializable!(step, node_name: name)
       end
 
       def build_step(name, step)

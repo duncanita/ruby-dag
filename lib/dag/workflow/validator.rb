@@ -33,23 +33,7 @@ module DAG
       end
 
       def self.validate_sub_workflow(step, node_name:)
-        has_definition = step.config[:definition].is_a?(Definition)
-        has_definition_path = !blank?(step.config[:definition_path])
-        errors = []
-
-        unless has_definition ^ has_definition_path
-          errors << "Node '#{node_name}' type 'sub_workflow' must define exactly one of definition or definition_path"
-        end
-
-        if step.config.key?(:definition_path) && !step.config[:definition_path].is_a?(String)
-          errors << "Node '#{node_name}' definition_path must be a String"
-        end
-
-        errors
-      end
-
-      def self.blank?(value)
-        value.nil? || (value.respond_to?(:empty?) && value.empty?)
+        SubWorkflowSupport.validate(step, node_name: node_name)
       end
     end
   end

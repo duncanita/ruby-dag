@@ -460,33 +460,12 @@ module DAG
       end
 
       def resolve_sub_workflow_definition(step)
-        definition = step.config[:definition]
-        definition_path = step.config[:definition_path]
-
-        if definition.is_a?(Definition) && blank?(definition_path)
-          return Success.new(value: definition)
-        end
-
-        if definition.nil? && !blank?(definition_path)
-          return Success.new(value: Loader.from_file(resolve_sub_workflow_path(definition_path)))
-        end
-
-        Failure.new(error: {
-          code: :sub_workflow_invalid_definition,
-          message: "sub_workflow step #{step.name} must define exactly one of definition or definition_path"
-        })
+        Success.new(value: SubWorkflowSupport.resolve_definition(step, source_path: @definition_source_path))
       rescue ArgumentError, ValidationError => e
         Failure.new(error: {
           code: :sub_workflow_invalid_definition,
           message: e.message
         })
-      end
-
-      def resolve_sub_workflow_path(definition_path)
-        return definition_path if Pathname.new(definition_path).absolute?
-
-        base_dir = @definition_source_path && File.dirname(@definition_source_path)
-        File.expand_path(definition_path, base_dir || Dir.pwd)
       end
 
       def remaining_timeout_for(deadline)
