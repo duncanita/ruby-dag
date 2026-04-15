@@ -33,10 +33,27 @@ module DAG
             raise ValidationError, "Step #{step.name} (type: :ruby) requires resume_key when durable execution is enabled" if blank?(resume_key)
 
             {resume_key: resume_key.to_s}
+          elsif step.type == :sub_workflow
+            fingerprint_sub_workflow_step(step)
           else
             raise ValidationError,
               "Step #{step.name} (type: #{step.type}) cannot be fingerprinted for durable execution"
           end
+        end
+
+        def fingerprint_sub_workflow_step(step)
+          definition = step.config[:definition]
+          resume_key = step.config[:resume_key]
+
+          raise ValidationError, "Step #{step.name} (type: :sub_workflow) requires a programmatic definition for durable execution" unless definition.is_a?(Definition)
+          raise ValidationError, "Step #{step.name} (type: :sub_workflow) requires resume_key when durable execution is enabled" if blank?(resume_key)
+
+          {
+            resume_key: resume_key.to_s,
+            input_mapping: normalize(step.config[:input_mapping] || {}),
+            output_key: step.config[:output_key]&.to_sym,
+            definition_fingerprint: self.for(definition)
+          }
         end
 
         def normalize(value)
