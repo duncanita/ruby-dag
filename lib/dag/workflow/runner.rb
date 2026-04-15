@@ -40,9 +40,10 @@ module DAG
         root_input: {},
         register_execution_store: true,
         on_step_start: nil, on_step_finish: nil)
-        graph, registry = unpack_definition(graph_or_definition, registry)
+        graph, registry, definition_source_path = unpack_definition(graph_or_definition, registry)
         @graph = graph
         @registry = registry
+        @definition_source_path = definition_source_path
         @timeout = timeout
         @clock = clock
         @context = context
@@ -58,7 +59,7 @@ module DAG
         validate_coverage!(graph, registry)
         validate_workflow!(graph, registry)
         validate_durable_execution!
-        @definition_fingerprint = @execution_store ? DefinitionFingerprint.for(Definition.new(graph: @graph, registry: @registry)) : nil
+        @definition_fingerprint = @execution_store ? DefinitionFingerprint.for(Definition.new(graph: @graph, registry: @registry, source_path: @definition_source_path)) : nil
       end
 
       def call
@@ -119,10 +120,10 @@ module DAG
         case graph
         when Definition
           raise ArgumentError, "Runner.new(definition) takes no registry argument" if registry
-          graph.deconstruct
+          [graph.graph, graph.registry, graph.source_path]
         else
           raise ArgumentError, "Runner.new(graph, registry) requires a registry" if registry.nil?
-          [graph, registry]
+          [graph, registry, nil]
         end
       end
 
@@ -334,16 +335,10 @@ module DAG
       end
 
       def run_sub_workflow_step(step, input, context:, execution:)
-        definition = step.config[:definition]
-        definition_path = step.config[:definition_path]
+        definition_result = resolve_sub_workflow_definition(step)
+        return definition_result if definition_result.is_a?(Failure)
 
-        unless definition.is_a?(Definition) && definition_path.nil?
-          return Failure.new(error: {
-            code: :sub_workflow_invalid_definition,
-            message: "sub_workflow step #{step.name} requires a programmatic definition: and does not yet support definition_path:"
-          })
-        end
-
+        definition = definition_result.value
         mapped_input = map_sub_workflow_input(step, input)
         register_child_node_paths(definition, execution)
 
@@ -387,6 +382,36 @@ module DAG
           definition_fingerprint: fingerprint || @definition_fingerprint,
           node_paths: definition.graph.topological_sort.map { |name| execution.node_path + [name] }
         )
+      end
+
+      def resolve_sub_workflow_definition(step)
+        definition = step.config[:definition]
+        definition_path = step.config[:definition_path]
+
+        if definition.is_a?(Definition) && blank?(definition_path)
+          return Success.new(value: definition)
+        end
+
+        if definition.nil? && !blank?(definition_path)
+          return Success.new(value: Loader.from_file(resolve_sub_workflow_path(definition_path)))
+        end
+
+        Failure.new(error: {
+          code: :sub_workflow_invalid_definition,
+          message: "sub_workflow step #{step.name} must define exactly one of definition or definition_path"
+        })
+      rescue ArgumentError, ValidationError => e
+        Failure.new(error: {
+          code: :sub_workflow_invalid_definition,
+          message: e.message
+        })
+      end
+
+      def resolve_sub_workflow_path(definition_path)
+        return definition_path if Pathname.new(definition_path).absolute?
+
+        base_dir = @definition_source_path && File.dirname(@definition_source_path)
+        File.expand_path(definition_path, base_dir || Dir.pwd)
       end
 
       def remaining_timeout_for(deadline)
@@ -484,6 +509,10 @@ module DAG
         return path.first if path.length == 1
 
         path.join(".").to_sym
+      end
+
+      def blank?(value)
+        value.nil? || (value.respond_to?(:empty?) && value.empty?)
       end
 
       def normalize_initial_outputs(initial_outputs)

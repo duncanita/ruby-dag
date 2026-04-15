@@ -8,7 +8,11 @@ module DAG
     #   definition = DAG::Loader.from_file("workflow.yml")
     #   result = DAG::Runner.new(definition.graph, definition.registry).call
 
-    Definition = Data.define(:graph, :registry) do
+    Definition = Data.define(:graph, :registry, :source_path) do
+      def initialize(graph:, registry:, source_path: nil)
+        super(graph: graph, registry: registry, source_path: source_path&.to_s)
+      end
+
       def size = graph.size
       def empty? = graph.empty? && registry.empty?
       def steps = registry.steps
@@ -16,6 +20,8 @@ module DAG
       def execution_order = graph.topological_layers
 
       def step(name) = registry[name]
+
+      def source_dir = source_path && File.dirname(source_path)
 
       def replace_step(old_name, new_step)
         old_sym = old_name.to_sym
@@ -31,7 +37,7 @@ module DAG
           new_registry.replace(new_step)
         end
 
-        Definition.new(graph: new_graph, registry: new_registry)
+        Definition.new(graph: new_graph, registry: new_registry, source_path: source_path)
       end
 
       private

@@ -1,0 +1,6 @@
+nodes:
+  nested:
+    type: sub_workflow
+    definition_path: nested/grandchild.yml
+    output_key: summarize
+    resume_key: nested-v1

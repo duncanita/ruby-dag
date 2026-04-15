@@ -15,7 +15,7 @@ module DAG
               {
                 name: step.name,
                 type: step.type,
-                fingerprint: fingerprint_step(step)
+                fingerprint: fingerprint_step(step, source_path: definition.source_path)
               }
             end
           }
@@ -25,34 +25,42 @@ module DAG
 
         private
 
-        def fingerprint_step(step)
-          if Steps.yaml_types.include?(step.type)
-            normalize(step.config)
+        def fingerprint_step(step, source_path: nil)
+          if step.type == :sub_workflow
+            fingerprint_sub_workflow_step(step, source_path: source_path)
           elsif step.type == :ruby
             resume_key = step.config[:resume_key]
             raise ValidationError, "Step #{step.name} (type: :ruby) requires resume_key when durable execution is enabled" if blank?(resume_key)
 
             {resume_key: resume_key.to_s}
-          elsif step.type == :sub_workflow
-            fingerprint_sub_workflow_step(step)
+          elsif Steps.yaml_types.include?(step.type)
+            normalize(step.config)
           else
             raise ValidationError,
               "Step #{step.name} (type: #{step.type}) cannot be fingerprinted for durable execution"
           end
         end
 
-        def fingerprint_sub_workflow_step(step)
+        def fingerprint_sub_workflow_step(step, source_path: nil)
           definition = step.config[:definition]
+          definition_path = step.config[:definition_path]
           resume_key = step.config[:resume_key]
 
-          raise ValidationError, "Step #{step.name} (type: :sub_workflow) requires a programmatic definition for durable execution" unless definition.is_a?(Definition)
           raise ValidationError, "Step #{step.name} (type: :sub_workflow) requires resume_key when durable execution is enabled" if blank?(resume_key)
+
+          child_definition = if definition.is_a?(Definition) && blank?(definition_path)
+            definition
+          elsif definition.nil? && !blank?(definition_path)
+            Loader.from_file(resolve_path(definition_path, source_path: source_path))
+          else
+            raise ValidationError, "Step #{step.name} (type: :sub_workflow) must define exactly one of definition or definition_path"
+          end
 
           {
             resume_key: resume_key.to_s,
             input_mapping: normalize(step.config[:input_mapping] || {}),
             output_key: step.config[:output_key]&.to_sym,
-            definition_fingerprint: self.for(definition)
+            definition_fingerprint: self.for(child_definition)
           }
         end
 
@@ -67,6 +75,13 @@ module DAG
           else
             value
           end
+        end
+
+        def resolve_path(path, source_path: nil)
+          return path if Pathname.new(path).absolute?
+
+          base_dir = source_path && File.dirname(source_path)
+          File.expand_path(path, base_dir || Dir.pwd)
         end
 
         def blank?(value)

@@ -1,0 +1,6 @@
+nodes:
+  process:
+    type: sub_workflow
+    definition_path: sub_workflows/child.yml
+    output_key: nested
+    resume_key: process-v1

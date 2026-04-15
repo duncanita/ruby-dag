@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
-# Sub-workflow composition: a parent step can execute a child Definition,
-# flatten child trace entries, and optionally persist child outputs under the
-# parent node path.
+# Sub-workflow composition: a parent step can execute either a programmatic
+# child Definition or a YAML child loaded via definition_path. Child trace
+# entries are flattened into the parent trace, and durable outputs stay
+# namespaced under the parent node path.
 #
 # Run: ruby -Ilib examples/sub_workflow.rb
 
@@ -42,7 +43,7 @@ parent_definition = DAG::Workflow::Loader.from_hash(
   }
 )
 
-puts "=== Parent Workflow ==="
+puts "=== Programmatic Parent Workflow ==="
 parent_result = DAG::Workflow::Runner.new(parent_definition,
   parallel: false,
   context: {suffix: "!"}).call
@@ -51,7 +52,7 @@ puts "Output: #{parent_result.outputs[:process].value}"
 puts "Trace names: #{parent_result.trace.map(&:name).inspect}"
 puts
 
-puts "=== Durable Run ==="
+puts "=== Durable Programmatic Run ==="
 child_calls = 0
 store = DAG::Workflow::ExecutionStore::MemoryStore.new
 runner = lambda do
@@ -68,3 +69,28 @@ puts "First output: #{first.outputs[:process].value}"
 puts "Second output: #{second.outputs[:process].value}"
 puts "Child calls: #{child_calls}"
 puts "Stored child output: #{store.load_output(workflow_id: "example-sub-workflow", node_path: [:process, :summarize])[:result].value}"
+puts
+
+puts "=== YAML Parent Workflow ==="
+yaml_parent = File.expand_path("sub_workflow_parent.yml", __dir__)
+yaml_definition = DAG::Workflow::Loader.from_file(yaml_parent)
+yaml_result = DAG::Workflow::Runner.new(yaml_definition, parallel: false).call
+puts "Status: #{yaml_result.status}"
+puts "Output: #{yaml_result.outputs[:process].value}"
+puts "Trace names: #{yaml_result.trace.map(&:name).inspect}"
+puts
+
+puts "=== Durable YAML Run ==="
+yaml_store = DAG::Workflow::ExecutionStore::MemoryStore.new
+yaml_runner = lambda do
+  DAG::Workflow::Runner.new(yaml_definition,
+    parallel: false,
+    workflow_id: "example-yaml-sub-workflow",
+    execution_store: yaml_store)
+end
+
+yaml_first = yaml_runner.call.call
+yaml_second = yaml_runner.call.call
+puts "First YAML output: #{yaml_first.outputs[:process].value}"
+puts "Second YAML output: #{yaml_second.outputs[:process].value}"
+puts "Stored YAML child output: #{yaml_store.load_output(workflow_id: "example-yaml-sub-workflow", node_path: [:process, :nested, :summarize])[:result].value}"

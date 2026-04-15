@@ -1,9 +1,108 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "fileutils"
+require "tmpdir"
 
 class SubWorkflowTest < Minitest::Test
   include TestHelpers
+
+  def test_yaml_sub_workflow_definition_path_executes_child_workflow_from_parent_file
+    Dir.mktmpdir("dag-subworkflow") do |dir|
+      child_path = File.join(dir, "child.yml")
+      File.write(child_path, <<~YAML)
+        nodes:
+          summarize:
+            type: exec
+            command: "printf yaml-child"
+      YAML
+
+      parent_path = File.join(dir, "parent.yml")
+      File.write(parent_path, <<~YAML)
+        nodes:
+          process:
+            type: sub_workflow
+            definition_path: child.yml
+            output_key: summarize
+      YAML
+
+      definition = DAG::Workflow::Loader.from_file(parent_path)
+      result = DAG::Workflow::Runner.new(definition, parallel: false).call
+
+      assert result.success?
+      assert_equal "yaml-child", result.outputs[:process].value
+      assert_includes result.trace.map(&:name), :"process.summarize"
+    end
+  end
+
+  def test_nested_definition_paths_resolve_relative_to_each_caller_file
+    Dir.mktmpdir("dag-subworkflow-nested") do |dir|
+      workflows_dir = File.join(dir, "workflows")
+      nested_dir = File.join(workflows_dir, "nested")
+      FileUtils.mkdir_p(nested_dir)
+
+      File.write(File.join(nested_dir, "grandchild.yml"), <<~YAML)
+        nodes:
+          summarize:
+            type: exec
+            command: "printf nested-child"
+      YAML
+
+      File.write(File.join(workflows_dir, "child.yml"), <<~YAML)
+        nodes:
+          nested:
+            type: sub_workflow
+            definition_path: nested/grandchild.yml
+            output_key: summarize
+      YAML
+
+      parent_path = File.join(dir, "parent.yml")
+      File.write(parent_path, <<~YAML)
+        nodes:
+          process:
+            type: sub_workflow
+            definition_path: workflows/child.yml
+            output_key: nested
+      YAML
+
+      definition = DAG::Workflow::Loader.from_file(parent_path)
+      result = DAG::Workflow::Runner.new(definition, parallel: false).call
+
+      assert result.success?
+      assert_equal "nested-child", result.outputs[:process].value
+      assert_includes result.trace.map(&:name), :"process.nested.summarize"
+    end
+  end
+
+  def test_sub_workflow_requires_exactly_one_definition_source
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Loader.from_hash(
+        process: {
+          type: :sub_workflow,
+          output_key: :done
+        }
+      )
+    end
+
+    assert_match(/exactly one/, error.message)
+  end
+
+  def test_sub_workflow_rejects_both_definition_and_definition_path
+    child = DAG::Workflow::Loader.from_hash(done: {type: :exec, command: "printf ok"})
+
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Loader.from_hash(
+        process: {
+          type: :sub_workflow,
+          definition: child,
+          definition_path: "child.yml",
+          output_key: :done
+        }
+      )
+    end
+
+    assert_match(/exactly one/, error.message)
+  end
 
   def test_programmatic_sub_workflow_returns_child_leaf_outputs_and_namespaced_trace
     child = DAG::Workflow::Loader.from_hash(
@@ -155,5 +254,47 @@ class SubWorkflowTest < Minitest::Test
     assert_equal 1, child_calls
     assert_includes run[:node_paths], [:process, :inner_fetch]
     assert_equal "hello!", store.load_output(workflow_id: "wf-sub", node_path: [:process, :inner_fetch])[:result].value
+  end
+
+  def test_definition_path_supports_durable_execution_fingerprints_and_child_namespaces
+    Dir.mktmpdir("dag-subworkflow-store") do |dir|
+      File.write(File.join(dir, "child.yml"), <<~YAML)
+        nodes:
+          summarize:
+            type: exec
+            command: "printf stored-child"
+      YAML
+
+      parent_path = File.join(dir, "parent.yml")
+      File.write(parent_path, <<~YAML)
+        nodes:
+          process:
+            type: sub_workflow
+            definition_path: child.yml
+            output_key: summarize
+            resume_key: process-v1
+      YAML
+
+      definition = DAG::Workflow::Loader.from_file(parent_path)
+      store = DAG::Workflow::ExecutionStore::MemoryStore.new
+
+      runner = lambda do
+        DAG::Workflow::Runner.new(definition,
+          parallel: false,
+          workflow_id: "wf-yaml-sub",
+          execution_store: store)
+      end
+
+      first = runner.call.call
+      second = runner.call.call
+      run = store.load_run("wf-yaml-sub")
+
+      assert first.success?
+      assert second.success?
+      assert_equal "stored-child", first.outputs[:process].value
+      assert_equal "stored-child", second.outputs[:process].value
+      assert_includes run[:node_paths], [:process, :summarize]
+      assert_equal "stored-child", store.load_output(workflow_id: "wf-yaml-sub", node_path: [:process, :summarize])[:result].value
+    end
   end
 end

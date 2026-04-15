@@ -30,7 +30,7 @@ module DAG
         data = {}
         @graph.topological_sort.each do |name|
           step = @registry[name]
-          raise SerializationError, "Step #{name} (type: #{step.type}) is not YAML-serializable" if NON_SERIALIZABLE_TYPES.include?(step.type)
+          validate_serializable_step!(name, step)
 
           data[name.to_s] = build_step(name, step)
         end
@@ -38,6 +38,19 @@ module DAG
       end
 
       private
+
+      def validate_serializable_step!(name, step)
+        raise SerializationError, "Step #{name} (type: #{step.type}) is not YAML-serializable" if NON_SERIALIZABLE_TYPES.include?(step.type)
+
+        return unless step.type == :sub_workflow
+
+        definition = step.config[:definition]
+        definition_path = step.config[:definition_path]
+        return if definition.nil? && definition_path.is_a?(String) && !definition_path.empty?
+
+        raise SerializationError,
+          "Step #{name} (type: :sub_workflow) is YAML-serializable only when it uses definition_path"
+      end
 
       def build_step(name, step)
         node = {"type" => step.type.to_s}

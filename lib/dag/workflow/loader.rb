@@ -12,22 +12,23 @@ module DAG
 
     class Loader
       def self.from_file(path)
-        from_yaml(File.read(path))
+        expanded_path = File.expand_path(path)
+        from_yaml(File.read(expanded_path), source_path: expanded_path)
       rescue Errno::ENOENT
         raise ArgumentError, "File not found: #{path}"
       end
 
       # Symbols permitted so step configs with `:symbol` values round-trip
       # through Dumper. Nothing else — keep the surface tight.
-      def self.from_yaml(yaml_string)
+      def self.from_yaml(yaml_string, source_path: nil)
         data = YAML.safe_load(yaml_string, permitted_classes: [Symbol])
         raise ValidationError, "YAML must contain a 'nodes' mapping" unless data.is_a?(Hash) && data["nodes"].is_a?(Hash)
 
-        build_definition(normalize_entries(data["nodes"], string_keys: true))
+        build_definition(normalize_entries(data["nodes"], string_keys: true), source_path: source_path)
       end
 
       def self.from_hash(**node_defs)
-        build_definition(normalize_entries(node_defs, string_keys: false))
+        build_definition(normalize_entries(node_defs, string_keys: false), source_path: nil)
       end
 
       def self.normalize_entries(node_defs, string_keys:)
@@ -61,7 +62,7 @@ module DAG
       # and edges second makes declaration order irrelevant; the resulting
       # error for a typoed dependency is also clearer (`unknown node X`) than
       # the bare `UnknownNodeError` you'd get from edge insertion mid-pass.
-      def self.build_definition(entries)
+      def self.build_definition(entries, source_path: nil)
         graph = Graph.new
         registry = Registry.new
         deferred_edges = []
@@ -85,7 +86,7 @@ module DAG
         end
 
         Validator.validate!(graph, registry)
-        Definition.new(graph: graph, registry: registry)
+        Definition.new(graph: graph, registry: registry, source_path: source_path)
       end
 
       def self.validate_type!(name, type, valid_types: Steps.types)
