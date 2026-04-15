@@ -55,6 +55,8 @@ module DAG
         @execution_persistence = ExecutionPersistence.new(
           execution_store: @execution_store,
           workflow_id: @workflow_id,
+          registry: @registry,
+          clock: @clock,
           node_path_prefix: @node_path_prefix
         )
         @root_input = root_input.transform_keys(&:to_sym).freeze
@@ -587,6 +589,38 @@ module DAG
 
       def pause_requested?
         @execution_persistence.pause_requested?
+      end
+
+      def reusable_output_expired?(name, stored)
+        ttl = normalized_schedule_ttl(@registry[name])
+        return false unless ttl && stored[:saved_at]
+
+        stored[:saved_at] <= (@clock.wall_now - ttl)
+      end
+
+      def normalized_schedule_ttl(step)
+        raw = step.config.dig(:schedule, :ttl)
+        case raw
+        when nil
+          nil
+        when Numeric
+          raw
+        else
+          Float(raw)
+        end
+      end
+
+      def mark_reusable_output_stale(name, stored)
+        return unless @execution_store && @workflow_id
+
+        cause = {
+          code: :ttl_expired,
+          message: "reusable output for step #{name} expired after schedule.ttl",
+          saved_at: stored[:saved_at].utc.iso8601,
+          ttl_seconds: normalized_schedule_ttl(@registry[name])
+        }
+
+        @execution_store.mark_stale(workflow_id: @workflow_id, node_paths: [node_path_for(name)], cause: cause)
       end
 
       def blank?(value)

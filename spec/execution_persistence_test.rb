@@ -94,9 +94,19 @@ class ExecutionPersistenceTest < Minitest::Test
   private
 
   def build_persistence(execution_store: nil, node_path_prefix: [])
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(
+      name: :fetch,
+      type: :ruby,
+      resume_key: "fetch-v1",
+      callable: ->(_input) { DAG::Success.new(value: "ok") }
+    ))
+
     DAG::Workflow::ExecutionPersistence.new(
       execution_store: execution_store,
       workflow_id: execution_store ? "wf-persist" : nil,
+      registry: registry,
+      clock: build_clock,
       node_path_prefix: node_path_prefix
     )
   end

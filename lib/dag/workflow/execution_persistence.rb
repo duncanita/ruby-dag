@@ -3,9 +3,11 @@
 module DAG
   module Workflow
     class ExecutionPersistence
-      def initialize(execution_store:, workflow_id:, node_path_prefix: [])
+      def initialize(execution_store:, workflow_id:, registry:, clock:, node_path_prefix: [])
         @execution_store = execution_store
         @workflow_id = workflow_id
+        @registry = registry
+        @clock = clock
         @node_path_prefix = Array(node_path_prefix).map(&:to_sym).freeze
       end
 
@@ -56,7 +58,19 @@ module DAG
         return nil unless enabled?
 
         stored = @execution_store.load_output(workflow_id: @workflow_id, node_path: node_path_for(name))
-        stored && stored[:result]
+        return nil unless stored
+
+        schedule_policy = SchedulePolicy.new(@registry[name], clock: @clock)
+        if schedule_policy.reusable_output_expired?(stored)
+          @execution_store.mark_stale(
+            workflow_id: @workflow_id,
+            node_paths: [node_path_for(name)],
+            cause: schedule_policy.ttl_expired_cause(name, stored)
+          )
+          return nil
+        end
+
+        stored[:result]
       end
 
       def persist_step_result(task, result, entries, skip_result: false)
@@ -79,7 +93,8 @@ module DAG
             version: task.execution.attempt,
             result: result,
             reusable: true,
-            superseded: false
+            superseded: false,
+            saved_at: @clock.wall_now
           )
         else
           @execution_store.set_node_state(

@@ -222,4 +222,87 @@ class SchedulingTest < Minitest::Test
     refute result.outputs.key?(:waiting)
     refute result.outputs.key?(:expired)
   end
+
+  def test_ttl_expiry_reexecutes_instead_of_reusing_output
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
+    store = build_memory_store
+    calls = 0
+
+    definition = DAG::Workflow::Loader.from_hash(
+      cached: {
+        type: :ruby,
+        resume_key: "cached-v1",
+        schedule: {ttl: 300},
+        callable: ->(_input) do
+          calls += 1
+          DAG::Success.new(value: "run-#{calls}")
+        end
+      }
+    )
+
+    first = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      clock: clock,
+      workflow_id: "wf-ttl",
+      execution_store: store).call
+
+    clock.advance_wall(120)
+    second = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      clock: clock,
+      workflow_id: "wf-ttl",
+      execution_store: store).call
+
+    clock.advance_wall(240)
+    third = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      clock: clock,
+      workflow_id: "wf-ttl",
+      execution_store: store).call
+
+    node = store.load_node(workflow_id: "wf-ttl", node_path: [:cached])
+
+    assert_equal "run-1", first.outputs[:cached].value
+    assert_equal "run-1", second.outputs[:cached].value
+    assert_equal "run-2", third.outputs[:cached].value
+    assert_equal 2, calls
+    assert_equal :completed, node[:state]
+    assert_equal :ttl_expired, node[:stale_cause][:code]
+  end
+
+  def test_ttl_string_values_are_supported
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
+    store = build_memory_store
+    calls = 0
+
+    definition = DAG::Workflow::Loader.from_hash(
+      cached: {
+        type: :ruby,
+        resume_key: "cached-v1",
+        schedule: {ttl: "5"},
+        callable: ->(_input) do
+          calls += 1
+          DAG::Success.new(value: "run-#{calls}")
+        end
+      }
+    )
+
+    first = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      clock: clock,
+      workflow_id: "wf-ttl-string",
+      execution_store: store).call
+
+    clock.advance_wall(10)
+
+    second = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      clock: clock,
+      workflow_id: "wf-ttl-string",
+      execution_store: store).call
+
+    assert_equal "run-1", first.outputs[:cached].value
+    assert_equal "run-2", second.outputs[:cached].value
+    assert_equal 2, calls
+  end
 end
