@@ -119,7 +119,25 @@ module DAG
 
       def self.normalize_config_keys(opts, node_name:)
         opts.each_with_object({}) do |(key, value), h|
-          h[coerce_symbol!(key, context: "config key for node '#{node_name}'")] = value
+          key_sym = coerce_symbol!(key, context: "config key for node '#{node_name}'")
+          h[key_sym] = normalize_config_value(key_sym, value, node_name: node_name)
+        end
+      end
+
+      def self.normalize_config_value(key, value, node_name:)
+        case key
+        when :schedule
+          normalize_schedule_config(value, node_name: node_name)
+        else
+          value
+        end
+      end
+
+      def self.normalize_schedule_config(value, node_name:)
+        raise ValidationError, "Node '#{node_name}' schedule must be a mapping, got #{value.inspect}" unless value.is_a?(Hash)
+
+        value.each_with_object({}) do |(key, nested), h|
+          h[coerce_symbol!(key, context: "schedule key for node '#{node_name}'")] = nested
         end
       end
 
@@ -130,7 +148,7 @@ module DAG
       end
 
       private_class_method :build_definition, :validate_type!, :parse_depends_on, :normalize_entries,
-        :normalize_config_keys, :coerce_symbol!
+        :normalize_config_keys, :normalize_config_value, :normalize_schedule_config, :coerce_symbol!
     end
   end
 end

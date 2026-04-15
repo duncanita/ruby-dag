@@ -67,6 +67,41 @@ class LoaderTest < Minitest::Test
     assert_equal "custom_value", defn.step(:task).config[:custom_key]
   end
 
+  def test_symbolizes_schedule_metadata_keys_from_yaml
+    defn = load_yaml(<<~YAML)
+      nodes:
+        task:
+          type: exec
+          command: "echo x"
+          schedule:
+            not_before: "2026-04-15T09:00:00Z"
+            not_after: "2026-04-15T10:00:00Z"
+            ttl: 3600
+            cron: "0 * * * *"
+    YAML
+
+    assert_equal({
+      not_before: "2026-04-15T09:00:00Z",
+      not_after: "2026-04-15T10:00:00Z",
+      ttl: 3600,
+      cron: "0 * * * *"
+    }, defn.step(:task).config[:schedule])
+  end
+
+  def test_rejects_non_hash_schedule_config
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          task:
+            type: exec
+            command: "echo x"
+            schedule: later
+      YAML
+    end
+
+    assert_match(/schedule must be a mapping/, error.message)
+  end
+
   def test_loads_declarative_run_if_from_yaml
     defn = load_yaml(<<~YAML)
       nodes:

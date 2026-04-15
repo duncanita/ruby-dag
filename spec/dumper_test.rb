@@ -206,6 +206,35 @@ class DumperTest < Minitest::Test
     assert_equal :strict, defn2.step(:task).config[:mode]
   end
 
+  def test_round_trip_schedule_metadata_with_yaml_safe_values
+    defn1 = build_test_workflow(task: {
+      type: :exec,
+      command: "echo x",
+      schedule: {
+        not_before: Time.utc(2026, 4, 15, 9, 0, 0),
+        not_after: Time.utc(2026, 4, 15, 10, 0, 0),
+        ttl: 3600,
+        cron: "0 * * * *"
+      }
+    })
+
+    dumped = DAG::Workflow::Dumper.to_yaml(defn1)
+    parsed = YAML.safe_load(dumped)
+    schedule = parsed.fetch("nodes").fetch("task").fetch("schedule")
+    defn2 = DAG::Workflow::Loader.from_yaml(dumped)
+
+    assert_equal "2026-04-15T09:00:00Z", schedule["not_before"]
+    assert_equal "2026-04-15T10:00:00Z", schedule["not_after"]
+    assert_equal 3600, schedule["ttl"]
+    assert_equal "0 * * * *", schedule["cron"]
+    assert_equal({
+      not_before: "2026-04-15T09:00:00Z",
+      not_after: "2026-04-15T10:00:00Z",
+      ttl: 3600,
+      cron: "0 * * * *"
+    }, defn2.step(:task).config[:schedule])
+  end
+
   def test_round_trip_sub_workflow_with_definition_path_via_file
     Dir.mktmpdir("dag-dumper-subworkflow") do |dir|
       child_path = File.join(dir, "child.yml")

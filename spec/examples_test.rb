@@ -110,6 +110,27 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Scheduled calls: 0"
   end
 
+  def test_schedule_metadata_roundtrip_example_executes_successfully
+    stdout, stderr, status = run_example("examples/schedule_metadata_roundtrip.rb")
+
+    assert status.success?, <<~MSG
+      expected schedule_metadata_roundtrip example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== Dumped Schedule Metadata ==="
+    assert_includes stdout, "2026-04-15T10:00:00Z"
+    assert_includes stdout, "2026-04-15T11:00:00Z"
+    assert_includes stdout, "0 * * * *"
+    assert_includes stdout, "=== Loaded Schedule Metadata ==="
+    assert_includes stdout, "Status: waiting"
+    assert_includes stdout, "Status: completed"
+    assert_includes stdout, "Output: payload"
+  end
+
   private
 
   def run_example(path)
