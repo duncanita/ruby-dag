@@ -592,6 +592,32 @@ class RunnerTest < Minitest::Test
     assert result.success?
   end
 
+  def test_workflow_timeout_uses_injected_clock_without_sleeping
+    fake_clock = Class.new do
+      def initialize(times)
+        @times = times.dup
+      end
+
+      def wall_now = Time.utc(2026, 4, 14, 0, 0, 0)
+
+      def monotonic_now
+        @times.shift || @times.last || 0.0
+      end
+    end.new([0.0, 0.0, 1.0])
+
+    defn = build_test_workflow(
+      first: {type: :ruby, callable: ->(_) { DAG::Success.new(value: "done") }},
+      second: {type: :ruby, depends_on: [:first], callable: ->(_) { DAG::Success.new(value: "never") }}
+    )
+
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry,
+      parallel: false, timeout: 0.1, clock: fake_clock).call
+
+    assert result.failure?
+    assert_equal :workflow_timeout, result.error[:failed_node]
+    refute result.outputs.key?(:second)
+  end
+
   # --- Registry mutations ---
 
   def test_registry_register_rejects_duplicate
