@@ -34,6 +34,8 @@ module DAG
         clock: Clock.new,
         context: nil,
         middleware: [],
+        workflow_id: nil,
+        execution_store: nil,
         on_step_start: nil, on_step_finish: nil)
         graph, registry = unpack_definition(graph_or_definition, registry)
         @graph = graph
@@ -42,19 +44,46 @@ module DAG
         @clock = clock
         @context = context
         @middleware = Array(middleware).freeze
+        @workflow_id = workflow_id
+        @execution_store = execution_store
         validate_context_parallelism!(parallel, context)
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
         @strategy = build_strategy(parallel, max_parallelism)
         validate_coverage!(graph, registry)
         validate_workflow!(graph, registry)
+        validate_durable_execution!
+        @definition_fingerprint = @execution_store ? DefinitionFingerprint.for(Definition.new(graph: @graph, registry: @registry)) : nil
       end
 
       def call
         deadline = @timeout ? @clock.monotonic_now + @timeout : nil
+        prepare_execution_store!
         execute_layers(@graph.topological_layers, deadline)
       end
 
       private
+
+      def validate_durable_execution!
+        return unless @execution_store
+
+        raise ValidationError, "Runner requires workflow_id when execution_store is enabled" if @workflow_id.nil? || @workflow_id.to_s.empty?
+      end
+
+      def prepare_execution_store!
+        return unless @execution_store
+
+        existing = @execution_store.load_run(@workflow_id)
+        if existing && existing[:definition_fingerprint] != @definition_fingerprint
+          raise ValidationError,
+            "Stored fingerprint for workflow_id #{@workflow_id.inspect} does not match the current definition fingerprint"
+        end
+
+        @execution_store.begin_run(
+          workflow_id: @workflow_id,
+          definition_fingerprint: @definition_fingerprint,
+          node_paths: @graph.topological_sort.zip
+        )
+      end
 
       def validate_context_parallelism!(parallel, context)
         return if context.nil? || parallel != :processes
@@ -128,9 +157,11 @@ module DAG
       end
 
       def build_run_result(outputs, trace, status, error)
+        @execution_store&.set_workflow_status(workflow_id: @workflow_id, status: status, waiting_nodes: [])
+
         RunResult.new(
           status: status,
-          workflow_id: nil,
+          workflow_id: @workflow_id,
           outputs: outputs,
           trace: trace,
           error: error,
@@ -169,6 +200,8 @@ module DAG
           begin
             if skip?(step, condition_context)
               immediate_results << [name, record_skip_result, input_keys, :skipped]
+            elsif (reused_result = load_reusable_result(name))
+              immediate_results << [name, reused_result, input_keys, :success]
             else
               execution = build_step_execution(name, current_attempt: 1, deadline: deadline)
               attempt_log = []
@@ -204,6 +237,7 @@ module DAG
           entries = build_trace_entries_for_task(task, layer_index, result,
             started_at: started_at, finished_at: finished_at, duration_ms: duration_ms)
           trace.concat(entries)
+          persist_step_result!(task, result, entries)
           statuses[name] = entries.last.status
           @callbacks.finish(name, result)
           results[name] = result
@@ -212,13 +246,13 @@ module DAG
 
       def build_step_execution(name, current_attempt:, deadline:)
         StepExecution.new(
-          workflow_id: nil,
+          workflow_id: @workflow_id,
           node_path: [name],
           attempt: current_attempt,
           deadline: deadline,
           depth: 0,
           parallel: @strategy.name,
-          execution_store: nil,
+          execution_store: @execution_store,
           event_bus: nil
         )
       end
@@ -319,6 +353,41 @@ module DAG
       end
 
       def record_skip_result = Success.new(value: nil)
+
+      def load_reusable_result(name)
+        return nil unless @execution_store
+
+        stored = @execution_store.load_output(workflow_id: @workflow_id, node_path: [name])
+        stored && stored[:result]
+      end
+
+      def persist_step_result!(task, result, entries)
+        return unless @execution_store
+
+        entries.each do |entry|
+          @execution_store.append_trace(workflow_id: @workflow_id, entry: entry)
+        end
+
+        if result.success?
+          @execution_store.set_node_state(workflow_id: @workflow_id, node_path: task.execution.node_path, state: :completed)
+          @execution_store.save_output(
+            workflow_id: @workflow_id,
+            node_path: task.execution.node_path,
+            version: task.execution.attempt,
+            result: result,
+            reusable: true,
+            superseded: false
+          )
+        else
+          @execution_store.set_node_state(
+            workflow_id: @workflow_id,
+            node_path: task.execution.node_path,
+            state: :failed,
+            reason: result.error,
+            metadata: {}
+          )
+        end
+      end
 
       def build_trace_entries_for_task(task, layer_index, result, started_at:, finished_at:, duration_ms:)
         if task.attempt_log.empty?

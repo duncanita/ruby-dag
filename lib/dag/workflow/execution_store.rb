@@ -1,0 +1,147 @@
+# frozen_string_literal: true
+
+module DAG
+  module Workflow
+    module ExecutionStore
+      class MemoryStore
+        def initialize
+          @runs = {}
+        end
+
+        def begin_run(workflow_id:, definition_fingerprint:, node_paths:)
+          run = @runs[workflow_id]
+          if run
+            run[:node_paths] |= normalized_node_paths(node_paths)
+          else
+            run = {
+              workflow_id: workflow_id,
+              definition_fingerprint: definition_fingerprint,
+              node_paths: normalized_node_paths(node_paths),
+              workflow_status: nil,
+              waiting_nodes: [],
+              paused: false,
+              trace: [],
+              nodes: {}
+            }
+            @runs[workflow_id] = run
+          end
+          deep_copy(run)
+        end
+
+        def load_run(workflow_id)
+          run = @runs[workflow_id]
+          run ? deep_copy(run) : nil
+        end
+
+        def load_node(workflow_id:, node_path:)
+          node = fetch_node(@runs[workflow_id], node_path)
+          node ? deep_copy(node) : nil
+        end
+
+        def set_node_state(workflow_id:, node_path:, state:, reason: nil, metadata: {})
+          node = ensure_node(workflow_id, node_path)
+          node[:state] = state
+          node[:reason] = reason
+          node[:metadata] = deep_copy(metadata)
+          nil
+        end
+
+        def append_trace(workflow_id:, entry:)
+          run = ensure_run(workflow_id)
+          run[:trace] << entry
+          nil
+        end
+
+        def save_output(workflow_id:, node_path:, version:, result:, reusable:, superseded:)
+          node = ensure_node(workflow_id, node_path)
+          node[:outputs] ||= []
+          node[:outputs] << {
+            version: version,
+            result: result,
+            reusable: reusable,
+            superseded: superseded,
+            saved_at: Time.now.utc
+          }
+          nil
+        end
+
+        def load_output(workflow_id:, node_path:, version: :latest)
+          node = fetch_node(ensure_run(workflow_id), node_path)
+          return nil unless node
+
+          outputs = Array(node[:outputs]).reject { |entry| entry[:superseded] }
+          output = if version == :latest
+            # standard:disable Style/ReverseFind -- Array#rfind is unavailable on Ruby 3.2, which this gem still tests against.
+            outputs.reverse_each.find { |entry| entry[:reusable] }
+            # standard:enable Style/ReverseFind
+          else
+            outputs.find { |entry| entry[:version] == version }
+          end
+          output ? deep_copy(output) : nil
+        end
+
+        def mark_stale(workflow_id:, node_paths:, cause:)
+          Array(node_paths).each do |node_path|
+            node = ensure_node(workflow_id, node_path)
+            node[:state] = :stale
+            node[:stale_cause] = cause
+          end
+          nil
+        end
+
+        def set_workflow_status(workflow_id:, status:, waiting_nodes: [])
+          run = ensure_run(workflow_id)
+          run[:workflow_status] = status
+          run[:waiting_nodes] = normalized_node_paths(waiting_nodes)
+          nil
+        end
+
+        def set_pause_flag(workflow_id:, paused:)
+          ensure_run(workflow_id)[:paused] = paused
+          nil
+        end
+
+        private
+
+        def ensure_run(workflow_id)
+          @runs.fetch(workflow_id) do
+            raise ArgumentError, "unknown workflow_id: #{workflow_id.inspect}"
+          end
+        end
+
+        def ensure_node(workflow_id, node_path)
+          run = ensure_run(workflow_id)
+          key = normalize_node_path(node_path)
+          run[:nodes][key] ||= {node_path: key, outputs: []}
+        end
+
+        def fetch_node(run, node_path)
+          return nil unless run
+
+          run[:nodes][normalize_node_path(node_path)]
+        end
+
+        def normalize_node_path(node_path)
+          Array(node_path).map(&:to_sym).freeze
+        end
+
+        def normalized_node_paths(node_paths)
+          Array(node_paths).map { |node_path| normalize_node_path(node_path) }
+        end
+
+        def deep_copy(value)
+          case value
+          when Hash
+            value.each_with_object({}) do |(key, nested), copy|
+              copy[deep_copy(key)] = deep_copy(nested)
+            end
+          when Array
+            value.map { |nested| deep_copy(nested) }
+          else
+            value
+          end
+        end
+      end
+    end
+  end
+end
