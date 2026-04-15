@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "etc"
+require "time"
 
 module DAG
   module Workflow
@@ -136,6 +137,7 @@ module DAG
         failed_name = nil
         failed_result = nil
         paused = false
+        waiting_nodes = []
 
         layers.each_with_index do |layer, layer_index|
           break if failed_name
@@ -155,34 +157,42 @@ module DAG
             break
           end
 
-          execute_layer(layer, layer_index, outputs, statuses, trace, deadline).each do |name, result|
+          layer_results, layer_waiting_nodes = execute_layer(layer, layer_index, outputs, statuses, trace, deadline)
+          waiting_nodes.concat(layer_waiting_nodes)
+
+          layer_results.each do |name, result|
             outputs[name] = result
             if result.failure? && failed_name.nil?
               failed_name = name
               failed_result = result
             end
           end
+
+          break if layer_waiting_nodes.any? && !failed_name
         end
 
         status = if failed_name
           :failed
         elsif paused
           :paused
+        elsif waiting_nodes.any?
+          :waiting
         else
           :completed
         end
 
         build_run_result(outputs, trace,
           status,
-          failed_name ? {failed_node: failed_name, step_error: failed_result.error} : nil)
+          failed_name ? {failed_node: failed_name, step_error: failed_result.error} : nil,
+          waiting_nodes)
       end
 
       def deadline_passed?(deadline)
         deadline && @clock.monotonic_now >= deadline
       end
 
-      def build_run_result(outputs, trace, status, error)
-        @execution_store&.set_workflow_status(workflow_id: @workflow_id, status: status, waiting_nodes: [])
+      def build_run_result(outputs, trace, status, error, waiting_nodes)
+        @execution_store&.set_workflow_status(workflow_id: @workflow_id, status: status, waiting_nodes: waiting_nodes)
 
         RunResult.new(
           status: status,
@@ -190,7 +200,7 @@ module DAG
           outputs: outputs,
           trace: trace,
           error: error,
-          waiting_nodes: []
+          waiting_nodes: waiting_nodes
         )
       end
 
@@ -202,19 +212,20 @@ module DAG
       # consumer querying strategy identity from inside :start sees the
       # one actually running.
       def execute_layer(layer, layer_index, previous_outputs, statuses, trace, deadline)
-        runnable, immediate_results = partition_layer(layer, previous_outputs, statuses, deadline)
+        runnable, immediate_results, waiting_nodes = partition_layer(layer, previous_outputs, statuses, deadline)
         results = {}
 
         runnable.each { |t| @callbacks.start(t.name, t.step) }
         record_immediate_results(immediate_results, results, statuses, layer_index, trace)
         run_tasks(runnable, layer_index, trace, results, statuses)
 
-        results
+        [results, waiting_nodes]
       end
 
       def partition_layer(layer, previous_outputs, statuses, deadline)
         runnable = []
         immediate_results = []
+        waiting_nodes = []
 
         layer.each do |name|
           step = @registry[name]
@@ -223,7 +234,10 @@ module DAG
           input_keys = input.keys.sort
 
           begin
-            if skip?(step, condition_context)
+            if waiting_for_schedule?(step)
+              waiting_nodes << node_path_for(name)
+              persist_waiting_node(name)
+            elsif skip?(step, condition_context)
               immediate_results << [name, record_skip_result, input_keys, :skipped]
             elsif (reused_result = load_reusable_result(name))
               immediate_results << [name, reused_result, input_keys, :success]
@@ -246,7 +260,7 @@ module DAG
           end
         end
 
-        [runnable, immediate_results]
+        [runnable, immediate_results, waiting_nodes]
       end
 
       # Short-circuits on an empty task list (a layer in which every step
@@ -527,6 +541,34 @@ module DAG
 
       def pause_requested?
         @execution_store && @workflow_id && @execution_store.load_run(@workflow_id)&.fetch(:paused, false)
+      end
+
+      def waiting_for_schedule?(step)
+        not_before = normalized_not_before(step)
+        not_before && @clock.wall_now < not_before
+      end
+
+      def normalized_not_before(step)
+        raw = step.config.dig(:schedule, :not_before)
+        case raw
+        when nil
+          nil
+        when Time
+          raw
+        else
+          Time.parse(raw.to_s)
+        end
+      end
+
+      def persist_waiting_node(name)
+        return unless @execution_store && @workflow_id
+
+        @execution_store.set_node_state(
+          workflow_id: @workflow_id,
+          node_path: node_path_for(name),
+          state: :waiting,
+          metadata: {}
+        )
       end
 
       def blank?(value)
