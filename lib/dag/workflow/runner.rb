@@ -289,6 +289,7 @@ module DAG
           if lifecycle
             waiting_nodes.concat(lifecycle[:waiting_nodes]) if lifecycle[:status] == :waiting
             paused ||= lifecycle[:status] == :paused
+            @callbacks.finish(name, callback_result_for_lifecycle(lifecycle))
             next
           end
 
@@ -537,6 +538,10 @@ module DAG
           trace: result.value[:__sub_workflow_trace__] || [],
           waiting_nodes: result.value[:__sub_workflow_waiting_nodes__] || []
         }
+      end
+
+      def callback_result_for_lifecycle(_lifecycle)
+        Success.new(value: nil)
       end
 
       def accepts_context_keyword?(call_method)
