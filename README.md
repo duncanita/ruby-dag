@@ -261,10 +261,11 @@ result = DAG::Workflow::Runner.new(definition,
 
 Notes:
 - `schedule[:not_before]` uses `clock.wall_now`
+- `schedule[:not_after]` fails the step with `code: :deadline_exceeded` before late work starts
 - waiting nodes do not emit `Success(nil)` outputs
 - waiting nodes do not block independent branches that are still runnable later in the same invocation
 - waiting runs persist `workflow_status: :waiting` plus `waiting_nodes` in the execution store
-- see `examples/waiting_not_before.rb` for a runnable example exercised in the test suite
+- see `examples/waiting_not_before.rb` and `examples/not_after_deadline.rb` for runnable examples exercised in the test suite
 
 ### Pause and resume
 

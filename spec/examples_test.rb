@@ -92,6 +92,24 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "READY"
   end
 
+  def test_not_after_deadline_example_executes_successfully
+    stdout, stderr, status = run_example("examples/not_after_deadline.rb")
+
+    assert status.success?, <<~MSG
+      expected not_after_deadline example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== Run (expired) ==="
+    assert_includes stdout, "Status: failed"
+    assert_includes stdout, "Failed node: scheduled"
+    assert_includes stdout, "Error code: deadline_exceeded"
+    assert_includes stdout, "Scheduled calls: 0"
+  end
+
   private
 
   def run_example(path)
