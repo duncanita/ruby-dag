@@ -262,11 +262,12 @@ result = DAG::Workflow::Runner.new(definition,
 Notes:
 - `schedule[:not_before]` uses `clock.wall_now`
 - `schedule[:not_after]` fails the step with `code: :deadline_exceeded` before late work starts
+- `schedule[:ttl]` expires reusable outputs relative to `clock.wall_now`, marks them stale in the execution store, and forces re-execution on the next run
 - YAML Loader/Dumper round-trip `schedule.not_before`, `schedule.not_after`, `schedule.ttl`, and `schedule.cron` with YAML-safe scalar values
 - waiting nodes do not emit `Success(nil)` outputs
 - waiting nodes do not block independent branches that are still runnable later in the same invocation
 - waiting runs persist `workflow_status: :waiting` plus `waiting_nodes` in the execution store
-- see `examples/waiting_not_before.rb`, `examples/not_after_deadline.rb`, and `examples/schedule_metadata_roundtrip.rb` for runnable examples exercised in the test suite
+- see `examples/waiting_not_before.rb`, `examples/not_after_deadline.rb`, `examples/schedule_metadata_roundtrip.rb`, and `examples/ttl_expiry.rb` for runnable examples exercised in the test suite
 
 ### Pause and resume
 

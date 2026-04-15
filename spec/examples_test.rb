@@ -131,6 +131,26 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Output: payload"
   end
 
+  def test_ttl_expiry_example_executes_successfully
+    stdout, stderr, status = run_example("examples/ttl_expiry.rb")
+
+    assert status.success?, <<~MSG
+      expected ttl_expiry example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== First Run ==="
+    assert_includes stdout, "Output: run-1"
+    assert_includes stdout, "=== Second Run (reuse within ttl) ==="
+    assert_includes stdout, "=== Third Run (ttl expired) ==="
+    assert_includes stdout, "Output: run-2"
+    assert_includes stdout, "Calls: 2"
+    assert_includes stdout, "Stale cause: ttl_expired"
+  end
+
   private
 
   def run_example(path)
