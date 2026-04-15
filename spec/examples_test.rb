@@ -2,9 +2,10 @@
 
 require_relative "test_helper"
 require "open3"
-require "tmpdir"
 
 class ExamplesTest < Minitest::Test
+  include TestHelpers
+
   def test_workflow_runner_example_executes_successfully
     stdout, stderr, status = run_example("examples/workflow_runner.rb")
 
@@ -131,15 +132,48 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Output: payload"
   end
 
+  def test_graph_basics_example_executes_successfully
+    stdout, stderr, status = run_example("examples/graph_basics.rb")
+
+    assert status.success?, <<~MSG
+      expected graph_basics example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== Graph Overview ==="
+    assert_includes stdout, "=== Topological Ordering ==="
+    assert_includes stdout, "fetch -> store?  true"
+    assert_includes stdout, "=== Cycle Detection ==="
+    assert_includes stdout, "Caught:"
+    assert_includes stdout, "=== Empty Graph ==="
+  end
+
+  def test_builder_and_immutability_example_executes_successfully
+    stdout, stderr, status = run_example("examples/builder_and_immutability.rb")
+
+    assert status.success?, <<~MSG
+      expected builder_and_immutability example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== Builder ==="
+    assert_includes stdout, "Frozen? true"
+    assert_includes stdout, "=== Dup (mutable copy) ==="
+    assert_includes stdout, "=== Copy-on-Write (with_node / with_edge) ==="
+    assert_includes stdout, "Same structure: true"
+    assert_includes stdout, "=== Validation ==="
+  end
+
   private
 
   def run_example(path)
-    env = {
-      "TMPDIR" => Dir.tmpdir,
-      "HOME" => ENV.fetch("HOME", Dir.pwd)
-    }
-
-    Open3.capture3(env,
+    Open3.capture3(example_env,
       Gem.ruby, "-Ilib", path,
       chdir: File.expand_path("..", __dir__))
   end

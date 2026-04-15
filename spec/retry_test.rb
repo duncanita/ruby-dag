@@ -5,12 +5,6 @@ require_relative "test_helper"
 class RetryTest < Minitest::Test
   include TestHelpers
 
-  FakeClock = Struct.new(:now) do
-    def wall_now = Time.utc(2026, 4, 15, 0, 0, 0)
-    def monotonic_now = now
-    def advance(seconds) = self.now += seconds
-  end
-
   def test_retry_middleware_retries_until_success_and_records_each_attempt
     attempts = 0
     defn = build_test_workflow(
@@ -84,7 +78,7 @@ class RetryTest < Minitest::Test
   end
 
   def test_retry_middleware_returns_timeout_failure_when_backoff_exceeds_deadline
-    clock = FakeClock.new(0.0)
+    clock = build_clock(mono_time: 0.0)
     attempts = 0
     defn = build_test_workflow(
       deadline: {

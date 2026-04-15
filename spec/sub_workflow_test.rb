@@ -206,10 +206,7 @@ class SubWorkflowTest < Minitest::Test
   end
 
   def test_sub_workflow_propagates_waiting_status_and_namespaced_waiting_nodes
-    clock = Struct.new(:wall_time, :mono_time) do
-      def wall_now = wall_time
-      def monotonic_now = mono_time
-    end.new(Time.utc(2026, 4, 15, 9, 0, 0), 0.0)
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
     future_time = Time.utc(2026, 4, 15, 10, 0, 0)
 
     child = DAG::Workflow::Loader.from_hash(
@@ -243,10 +240,7 @@ class SubWorkflowTest < Minitest::Test
   end
 
   def test_sub_workflow_waiting_still_fires_finish_callback_with_nil_success
-    clock = Struct.new(:wall_time, :mono_time) do
-      def wall_now = wall_time
-      def monotonic_now = mono_time
-    end.new(Time.utc(2026, 4, 15, 9, 0, 0), 0.0)
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
     future_time = Time.utc(2026, 4, 15, 10, 0, 0)
     started = []
     finished = []
@@ -282,7 +276,7 @@ class SubWorkflowTest < Minitest::Test
   end
 
   def test_sub_workflow_propagates_paused_status_without_parent_output
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
 
     child = DAG::Workflow::Loader.from_hash(
       inner_fetch: {
@@ -325,7 +319,7 @@ class SubWorkflowTest < Minitest::Test
   end
 
   def test_sub_workflow_paused_still_fires_finish_callback_with_nil_success
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
     started = []
     finished = []
 
@@ -400,7 +394,7 @@ class SubWorkflowTest < Minitest::Test
       }
     )
 
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
     runner = lambda do
       DAG::Workflow::Runner.new(parent,
         parallel: false,
@@ -442,7 +436,7 @@ class SubWorkflowTest < Minitest::Test
       YAML
 
       definition = DAG::Workflow::Loader.from_file(parent_path)
-      store = DAG::Workflow::ExecutionStore::MemoryStore.new
+      store = build_memory_store
 
       runner = lambda do
         DAG::Workflow::Runner.new(definition,

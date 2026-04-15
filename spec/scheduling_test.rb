@@ -5,16 +5,10 @@ require_relative "test_helper"
 class SchedulingTest < Minitest::Test
   include TestHelpers
 
-  FakeClock = Struct.new(:wall_time, :mono_time) do
-    def wall_now = wall_time
-    def monotonic_now = mono_time
-    def advance_wall(seconds) = self.wall_time += seconds
-  end
-
   def test_not_before_returns_waiting_status_and_waiting_nodes
-    clock = FakeClock.new(Time.utc(2026, 4, 15, 9, 0, 0), 0.0)
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
     future_time = Time.utc(2026, 4, 15, 10, 0, 0)
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
 
     definition = DAG::Workflow::Loader.from_hash(
       scheduled: {
@@ -42,7 +36,7 @@ class SchedulingTest < Minitest::Test
   end
 
   def test_not_before_does_not_block_other_runnable_layers
-    clock = FakeClock.new(Time.utc(2026, 4, 15, 9, 0, 0), 0.0)
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
     future_time = Time.utc(2026, 4, 15, 10, 0, 0)
 
     definition = DAG::Workflow::Loader.from_hash(
@@ -67,7 +61,7 @@ class SchedulingTest < Minitest::Test
   end
 
   def test_waiting_nodes_do_not_stop_independent_runnable_future_layers
-    clock = FakeClock.new(Time.utc(2026, 4, 15, 9, 0, 0), 0.0)
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
     future_time = Time.utc(2026, 4, 15, 10, 0, 0)
 
     definition = DAG::Workflow::Loader.from_hash(
@@ -97,7 +91,7 @@ class SchedulingTest < Minitest::Test
   end
 
   def test_failure_takes_precedence_over_waiting_and_clears_waiting_nodes
-    clock = FakeClock.new(Time.utc(2026, 4, 15, 9, 0, 0), 0.0)
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
     future_time = Time.utc(2026, 4, 15, 10, 0, 0)
 
     definition = DAG::Workflow::Loader.from_hash(
@@ -128,9 +122,9 @@ class SchedulingTest < Minitest::Test
   end
 
   def test_not_before_run_completes_after_clock_advances_past_gate
-    clock = FakeClock.new(Time.utc(2026, 4, 15, 9, 0, 0), 0.0)
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
     future_time = Time.utc(2026, 4, 15, 10, 0, 0)
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
     calls = 0
 
     definition = DAG::Workflow::Loader.from_hash(
@@ -166,8 +160,8 @@ class SchedulingTest < Minitest::Test
   end
 
   def test_not_after_fails_before_executing_late_work
-    clock = FakeClock.new(Time.utc(2026, 4, 15, 10, 0, 1), 0.0)
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 10, 0, 1))
+    store = build_memory_store
     calls = 0
 
     definition = DAG::Workflow::Loader.from_hash(
@@ -204,7 +198,7 @@ class SchedulingTest < Minitest::Test
   end
 
   def test_not_after_failure_wins_over_waiting_nodes
-    clock = FakeClock.new(Time.utc(2026, 4, 15, 10, 0, 1), 0.0)
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 10, 0, 1))
 
     definition = DAG::Workflow::Loader.from_hash(
       waiting: {
