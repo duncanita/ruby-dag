@@ -40,16 +40,21 @@ module TestHelpers
       depends_on = Array(opts.delete(:depends_on))
       type = opts.delete(:type) || :exec
       opts[:command] ||= "echo #{name}" if type == :exec
+      external_dependencies = []
 
-      graph.add_node(name)
-      registry.register(DAG::Workflow::Step.new(name: name, type: type, **opts))
       depends_on.each do |dep|
-        deferred_edges << if dep.is_a?(Hash)
-          dep.transform_keys(&:to_sym).merge(to: name)
+        descriptor = dep.is_a?(Hash) ? dep.transform_keys(&:to_sym) : {from: dep}
+        if descriptor.key?(:from)
+          deferred_edges << descriptor.merge(to: name)
         else
-          {from: dep, to: name}
+          descriptor[:workflow_id] = descriptor.delete(:workflow)
+          external_dependencies << descriptor
         end
       end
+
+      opts[:external_dependencies] = external_dependencies unless external_dependencies.empty?
+      graph.add_node(name)
+      registry.register(DAG::Workflow::Step.new(name: name, type: type, **opts))
     end
 
     deferred_edges.each do |edge|

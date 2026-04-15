@@ -371,7 +371,29 @@ class LoaderTest < Minitest::Test
     assert_match(/must be a mapping/, error.message)
   end
 
-  def test_rejects_depends_on_hash_missing_from
+  def test_loads_cross_workflow_dependency_descriptor
+    defn = load_yaml(<<~YAML)
+      nodes:
+        fetch:
+          type: exec
+          command: "echo a"
+        consume:
+          type: exec
+          command: "echo b"
+          depends_on:
+            - fetch
+            - workflow: pipeline-a
+              node: validated_output
+              version: latest
+              as: validated
+    YAML
+
+    assert_equal [[:fetch], [:consume]], defn.execution_order
+    assert_equal [{workflow_id: "pipeline-a", node: :validated_output, version: :latest, as: :validated}],
+      defn.step(:consume).config[:external_dependencies]
+  end
+
+  def test_rejects_depends_on_hash_missing_source_descriptor
     error = assert_raises(DAG::ValidationError) do
       load_yaml(<<~YAML)
         nodes:
@@ -385,7 +407,26 @@ class LoaderTest < Minitest::Test
               - weight: 3
       YAML
     end
-    assert_match(/missing.*from/, error.message)
+    assert_match(/either 'from' or both 'workflow' and 'node'/, error.message)
+  end
+
+  def test_rejects_depends_on_hash_mixing_local_and_cross_workflow_keys
+    error = assert_raises(DAG::ValidationError) do
+      load_yaml(<<~YAML)
+        nodes:
+          a:
+            type: exec
+            command: "echo a"
+          b:
+            type: exec
+            command: "echo b"
+            depends_on:
+              - from: a
+                workflow: pipeline-a
+                node: external
+      YAML
+    end
+    assert_match(/cannot mix 'from' with cross-workflow keys/, error.message)
   end
 
   def test_from_hash_rejects_nil_node_definition
@@ -395,14 +436,14 @@ class LoaderTest < Minitest::Test
     assert_match(/must be a mapping/, error.message)
   end
 
-  def test_from_hash_rejects_depends_on_hash_missing_from
+  def test_from_hash_rejects_depends_on_hash_missing_source_descriptor
     error = assert_raises(DAG::ValidationError) do
       DAG::Workflow::Loader.from_hash(
         a: {type: :exec, command: "echo a"},
         b: {type: :exec, command: "echo b", depends_on: [{weight: 3}]}
       )
     end
-    assert_match(/missing.*from/, error.message)
+    assert_match(/either 'from' or both 'workflow' and 'node'/, error.message)
   end
 
   def test_rejects_non_symbolizable_node_name

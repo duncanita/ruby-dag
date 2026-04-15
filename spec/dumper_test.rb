@@ -172,6 +172,23 @@ class DumperTest < Minitest::Test
     assert_equal({version: :all, as: :history}, defn2.graph.edge_metadata(:source, :consume_history))
   end
 
+  def test_round_trip_with_cross_workflow_dependency_metadata
+    defn1 = build_test_workflow(
+      source: {type: :exec, command: "echo data"},
+      consume_external: {
+        type: :exec,
+        command: "echo use-external",
+        depends_on: [{workflow: "pipeline-a", node: :validated_output, version: 3, as: :validated}]
+      }
+    )
+
+    dumped = DAG::Workflow::Dumper.to_yaml(defn1)
+    defn2 = DAG::Workflow::Loader.from_yaml(dumped)
+
+    assert_equal [{workflow_id: "pipeline-a", node: :validated_output, version: 3, as: :validated}],
+      defn2.step(:consume_external).config[:external_dependencies]
+  end
+
   def test_round_trip_with_declarative_run_if
     yaml = <<~YAML
       nodes:

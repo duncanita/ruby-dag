@@ -71,10 +71,21 @@ module DAG
           opts = opts.dup
           depends_on = opts.delete(:depends_on)
           type = opts.delete(:type)
+          external_dependencies = []
 
+          depends_on.each do |dep|
+            if dep.key?(:from)
+              deferred_edges << dep.merge(to: name)
+            else
+              external_dependency = dep.dup
+              external_dependency[:workflow_id] = external_dependency.delete(:workflow)
+              external_dependencies << external_dependency
+            end
+          end
+
+          opts[:external_dependencies] = external_dependencies unless external_dependencies.empty?
           graph.add_node(name)
           registry.register(Step.new(name: name, type: type, **opts))
-          depends_on.each { |dep| deferred_edges << dep.merge(to: name) }
         end
 
         deferred_edges.each do |edge|
@@ -104,10 +115,10 @@ module DAG
           case dep
           when Hash
             dep.each_with_object({}) do |(key, value), h|
-              h[coerce_symbol!(key, context: "depends_on key in #{dep.inspect}")] = value
+              key_sym = coerce_symbol!(key, context: "depends_on key in #{dep.inspect}")
+              h[key_sym] = normalize_depends_on_value(key_sym, value, dep: dep)
             end.tap do |h|
-              raise ValidationError, "depends_on entry #{dep.inspect} missing required 'from' key" unless h.key?(:from)
-              h[:from] = coerce_symbol!(h[:from], context: "depends_on :from in #{dep.inspect}")
+              validate_depends_on_descriptor!(h, dep)
             end
           when String, Symbol
             {from: dep.to_sym}
@@ -122,6 +133,43 @@ module DAG
           key_sym = coerce_symbol!(key, context: "config key for node '#{node_name}'")
           h[key_sym] = normalize_config_value(key_sym, value, node_name: node_name)
         end
+      end
+
+      def self.normalize_depends_on_value(key, value, dep:)
+        case key
+        when :from, :node
+          coerce_symbol!(value, context: "depends_on :#{key} in #{dep.inspect}")
+        when :workflow
+          value.to_s
+        when :version
+          normalize_version_selector(value, dep: dep)
+        when :as
+          coerce_symbol!(value, context: "depends_on :as in #{dep.inspect}")
+        else
+          value
+        end
+      end
+
+      def self.normalize_version_selector(value, dep:)
+        return value if value.is_a?(Integer)
+        return value if value == :latest || value == :all
+
+        string = value.to_s
+        return string.to_sym if %w[latest all].include?(string)
+
+        Integer(string, exception: false) || value
+      end
+
+      def self.validate_depends_on_descriptor!(descriptor, raw_dep)
+        if descriptor.key?(:from)
+          raise ValidationError, "depends_on entry #{raw_dep.inspect} cannot mix 'from' with cross-workflow keys" if descriptor.key?(:workflow) || descriptor.key?(:node)
+
+          return descriptor
+        end
+
+        return descriptor if descriptor.key?(:workflow) && descriptor.key?(:node)
+
+        raise ValidationError, "depends_on entry #{raw_dep.inspect} must provide either 'from' or both 'workflow' and 'node'"
       end
 
       def self.normalize_config_value(key, value, node_name:)
@@ -148,7 +196,8 @@ module DAG
       end
 
       private_class_method :build_definition, :validate_type!, :parse_depends_on, :normalize_entries,
-        :normalize_config_keys, :normalize_config_value, :normalize_schedule_config, :coerce_symbol!
+        :normalize_config_keys, :normalize_depends_on_value, :normalize_version_selector,
+        :validate_depends_on_descriptor!, :normalize_config_value, :normalize_schedule_config, :coerce_symbol!
     end
   end
 end

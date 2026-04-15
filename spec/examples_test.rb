@@ -173,6 +173,25 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Stored versions: [1, 2]"
   end
 
+  def test_missing_requested_version_waiting_example_executes_successfully
+    stdout, stderr, status = run_example("examples/missing_requested_version_waiting.rb")
+
+    assert status.success?, <<~MSG
+      expected missing_requested_version_waiting example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== Cross-Workflow First Run ==="
+    assert_includes stdout, "Status: waiting"
+    assert_includes stdout, "=== Cross-Workflow Second Run ==="
+    assert_includes stdout, "Output: external-v2"
+    assert_includes stdout, "=== Local Historical Version ==="
+    assert_includes stdout, "Error code: missing_dependency_version"
+  end
+
   def test_graph_basics_example_executes_successfully
     stdout, stderr, status = run_example("examples/graph_basics.rb")
 

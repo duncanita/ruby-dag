@@ -37,6 +37,7 @@ module DAG
         middleware: [],
         workflow_id: nil,
         execution_store: nil,
+        cross_workflow_resolver: nil,
         node_path_prefix: [],
         root_input: {},
         register_execution_store: true,
@@ -51,6 +52,7 @@ module DAG
         @middleware = Array(middleware).freeze
         @workflow_id = workflow_id
         @execution_store = execution_store
+        @cross_workflow_resolver = cross_workflow_resolver
         @node_path_prefix = Array(node_path_prefix).map(&:to_sym).freeze
         @execution_persistence = ExecutionPersistence.new(
           execution_store: @execution_store,
@@ -64,6 +66,7 @@ module DAG
           graph: @graph,
           execution_store: @execution_store,
           workflow_id: @workflow_id,
+          cross_workflow_resolver: @cross_workflow_resolver,
           root_input: @root_input,
           node_path_prefix: @node_path_prefix
         )
@@ -259,7 +262,7 @@ module DAG
           condition_context = resolve_condition_context(name, previous_outputs, statuses)
 
           begin
-            input = resolve_step_input(name, previous_outputs)
+            input = resolve_step_input(name, step, previous_outputs)
             input_keys = input.keys.sort
             schedule_policy = SchedulePolicy.new(step, clock: @clock)
 
@@ -302,6 +305,19 @@ module DAG
               name: name,
               result: Failure.new(error: {
                 code: :missing_dependency_version,
+                message: e.message
+              }),
+              input_keys: [],
+              status: nil
+            )
+          rescue DependencyInputResolver::WaitingForDependencyError
+            waiting_nodes << node_path_for(name)
+            @execution_persistence.persist_waiting_node(name)
+          rescue DependencyInputResolver::ResolverError => e
+            immediate_results << ImmediateResult.new(
+              name: name,
+              result: Failure.new(error: {
+                code: :cross_workflow_resolution_failed,
                 message: e.message
               }),
               input_keys: [],
@@ -460,6 +476,7 @@ module DAG
           middleware: @middleware,
           workflow_id: execution.workflow_id,
           execution_store: execution.execution_store,
+          cross_workflow_resolver: @cross_workflow_resolver,
           node_path_prefix: execution.node_path,
           root_input: mapped_input,
           register_execution_store: false).call
@@ -643,8 +660,8 @@ module DAG
         end)
       end
 
-      def resolve_step_input(name, outputs)
-        @dependency_input_resolver.resolve(name: name, outputs: outputs)
+      def resolve_step_input(name, step, outputs)
+        @dependency_input_resolver.resolve(name: name, step: step, outputs: outputs)
       end
 
       def validate_coverage!(graph, registry)

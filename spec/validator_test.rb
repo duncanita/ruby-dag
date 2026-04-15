@@ -122,6 +122,26 @@ class ValidatorTest < Minitest::Test
     assert_match(/positive Integer/, report.errors.first)
   end
 
+  def test_rejects_duplicate_effective_input_keys_across_local_and_external_dependencies
+    defn = build_test_workflow(
+      source: {},
+      consumer: {
+        type: :ruby,
+        depends_on: [
+          {from: :source, as: :shared},
+          {workflow: "pipeline-a", node: :validated_output, as: :shared}
+        ],
+        callable: ->(input) { DAG::Success.new(value: input) }
+      }
+    )
+
+    report = Validator.validate(defn.graph, defn.registry)
+
+    refute report.valid?
+    assert_match(/duplicate effective input key/i, report.errors.first)
+    assert_match(/shared/, report.errors.first)
+  end
+
   def test_skips_nodes_not_in_registry
     graph = DAG::Graph.new
     graph.add_node(:a)

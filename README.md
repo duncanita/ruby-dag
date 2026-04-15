@@ -266,10 +266,13 @@ Notes:
 - successful outputs now get monotonic per-node versions instead of reusing the retry attempt number
 - `depends_on` metadata supports `as:` to rename the local input key
 - `version: :all` resolves to an array of raw values ordered by ascending version
-- `version: N` fails explicitly with `code: :missing_dependency_version` when that version does not exist
-- versioned dependency inputs require durable execution (`execution_store:` plus `workflow_id:`)
-- loader/dumper round-trip `version:` and `as:` metadata
-- see `examples/versioned_dependency_inputs.rb` for a runnable example exercised in the test suite
+- missing local historical versions fail explicitly with `code: :missing_dependency_version`
+- cross-workflow descriptors use `workflow:` plus `node:` instead of `from:` and resolve through `cross_workflow_resolver:`
+- when a cross-workflow requested version is unavailable, the node becomes waiting so a later invocation can satisfy it
+- resolver exceptions fail explicitly with `code: :cross_workflow_resolution_failed`
+- versioned dependency inputs require durable execution (`execution_store:` plus `workflow_id:`); cross-workflow ones additionally require `cross_workflow_resolver:`
+- loader/dumper round-trip `version:` and `as:` metadata for both local and cross-workflow dependencies
+- see `examples/versioned_dependency_inputs.rb` and `examples/missing_requested_version_waiting.rb` for runnable examples exercised in the test suite
 
 ### Waiting and not_before scheduling
 
