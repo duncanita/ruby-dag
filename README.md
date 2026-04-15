@@ -231,6 +231,38 @@ Notes:
 - changing the workflow fingerprint for an existing `workflow_id` raises `DAG::ValidationError` before any step runs
 - see `examples/checkpoint_resume.rb` for a runnable end-to-end example that is exercised in the test suite
 
+### Pause and resume
+
+Pause is coordinator-driven through the execution store. The runner checks the
+pause flag between layers, never in the middle of a running layer.
+
+```ruby
+store = DAG::Workflow::ExecutionStore::MemoryStore.new
+
+first = DAG::Workflow::Runner.new(definition,
+  parallel: false,
+  workflow_id: "demo-pause",
+  execution_store: store,
+  on_step_finish: lambda do |name, _result|
+    store.set_pause_flag(workflow_id: "demo-pause", paused: true) if name == :fetch
+  end).call
+
+store.set_pause_flag(workflow_id: "demo-pause", paused: false)
+second = DAG::Workflow::Runner.new(definition,
+  parallel: false,
+  workflow_id: "demo-pause",
+  execution_store: store).call
+
+puts first.status   # => :paused
+puts second.status  # => :completed
+```
+
+Notes:
+- pause is observed before the next layer starts
+- completed reusable outputs are reused after resume
+- paused runs persist `workflow_status: :paused` in the execution store
+- see `examples/pause_resume.rb` for a runnable end-to-end example exercised in the test suite
+
 ### Sub-workflow composition
 
 A step can run a nested workflow with type `:sub_workflow`. The child can come
