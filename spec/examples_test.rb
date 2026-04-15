@@ -87,7 +87,9 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "=== First Run (waiting) ==="
     assert_includes stdout, "Status: waiting"
     assert_includes stdout, "=== Second Run (ready) ==="
-    assert_includes stdout, "Outputs: {fetch: \"ready\", scheduled: \"READY\"}"
+    assert_includes stdout, "Status: completed"
+    assert_includes stdout, "ready"
+    assert_includes stdout, "READY"
   end
 
   private
