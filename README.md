@@ -4,7 +4,7 @@ Lightweight DAG workflow runner in pure Ruby. Zero runtime dependencies.
 
 Define multi-step workflows as YAML or build them programmatically. Automatic dependency resolution and parallel execution via a pluggable Strategy (Threads, Processes, or Sequential).
 
-**Version:** 0.3.1 | **License:** MIT | **Ruby:** >= 3.2
+**Version:** 0.4.0 | **License:** MIT | **Ruby:** >= 3.2
 
 ## Install
 
@@ -120,21 +120,26 @@ nodes:
 require_relative "lib/dag"
 
 definition = DAG::Workflow::Loader.from_file("deploy.yml")
-runner = DAG::Workflow::Runner.new(definition.graph, definition.registry)
+runner = DAG::Workflow::Runner.new(definition)
 result = runner.call
 
 if result.success?
-  payload = result.value             # { outputs:, trace:, error: nil }
-  puts "Done! Steps: #{payload[:outputs].keys}, Trace: #{payload[:trace].size} entries"
+  puts "Done! Steps: #{result.outputs.keys}, Trace: #{result.trace.size} entries"
 else
-  payload = result.error             # { outputs:, trace:, error: { failed_node:, step_error: } }
-  puts "Failed at #{payload[:error][:failed_node]}: #{payload[:error][:step_error]}"
+  puts "Failed at #{result.error[:failed_node]}: #{result.error[:step_error]}"
 end
 ```
 
-Both branches use the same `{outputs:, trace:, error:}` shape — `error` is `nil`
-on success and a `{failed_node:, step_error:}` hash on failure. You can read
-`outputs` and `trace` the same way regardless of which branch you're on.
+`Runner#call` returns a `DAG::Workflow::RunResult`, not a workflow-level
+`DAG::Success` / `DAG::Failure`. The step-level monad is still used inside
+`result.outputs`, but the workflow result itself exposes:
+
+- `result.status` — `:completed`, `:failed`, `:waiting`, or `:paused`
+- `result.success?` / `result.failure?`
+- `result.outputs` — completed step results keyed by node name
+- `result.trace` — append-only attempt trace
+- `result.error` — `nil` on success, `{failed_node:, step_error:}` on failure
+- `result.workflow_id` — `nil` for in-memory runs unless you set one explicitly
 
 ### Build Programmatically and Dump to YAML
 
@@ -175,6 +180,56 @@ definition = DAG::Workflow::Loader.from_hash(
 
 result = DAG::Workflow::Runner.new(definition.graph, definition.registry).call
 ```
+
+### Checkpointing and Resume
+
+For durable execution, pass both a `workflow_id` and an `execution_store`.
+The smallest built-in store today is the in-memory `MemoryStore`, which is good
+for tests and runnable examples.
+
+```ruby
+require_relative "lib/dag"
+
+store = DAG::Workflow::ExecutionStore::MemoryStore.new
+fetch_calls = 0
+
+definition = DAG::Workflow::Loader.from_hash(
+  fetch: {
+    type: :ruby,
+    resume_key: "fetch-v1",
+    callable: ->(_input) do
+      fetch_calls += 1
+      DAG::Success.new(value: "payload-#{fetch_calls}")
+    end
+  },
+  transform: {
+    type: :ruby,
+    depends_on: [:fetch],
+    resume_key: "transform-v1",
+    callable: ->(input) { DAG::Success.new(value: input[:fetch].upcase) }
+  }
+)
+
+runner = -> {
+  DAG::Workflow::Runner.new(definition,
+    parallel: false,
+    workflow_id: "demo-run",
+    execution_store: store)
+}
+
+first = runner.call.call
+second = runner.call.call
+
+puts first.outputs[:transform].value   # => "PAYLOAD-1"
+puts second.outputs[:transform].value  # => "PAYLOAD-1"
+puts fetch_calls                       # => 1 (the second run reused the stored output)
+```
+
+Notes:
+- durable execution currently requires `workflow_id:`
+- `:ruby` steps must declare a deterministic `resume_key:` when durable execution is enabled
+- changing the workflow fingerprint for an existing `workflow_id` raises `DAG::ValidationError` before any step runs
+- see `examples/checkpoint_resume.rb` for a runnable end-to-end example that is exercised in the test suite
 
 ## Graph API
 
@@ -491,8 +546,8 @@ Step inputs are **always** hashes keyed by dependency step name (e.g., `{ fetch:
 - Step output constraints depend on which Strategy you pick (see [Step result constraints by strategy](#step-result-constraints-by-strategy)). Default `:threads` has none; `:processes` requires Marshal-able results.
 - Callback ordering is per-step but not globally deterministic across nodes in the same parallel layer. `on_step_start` fires when the runner submits a step to the strategy (before actual execution begins); `on_step_finish` fires when the strategy yields back the completed result.
 - On first step failure the workflow halts. Already-completed outputs from earlier layers (and from sibling steps in the same layer that finished before the failure was observed) are still returned.
-- The runner result has the same shape on both branches: `{outputs:, trace:, error:}`. On success it lives in `result.value` with `error: nil`; on failure it lives in `result.error` with `error: {failed_node:, step_error:}`. Trace and outputs are always at the top level — you never need to branch on success/failure to read them.
-- Trace entries are `TraceEntry` records with `:name`, `:layer`, `:started_at`, `:finished_at`, `:duration_ms`, `:status` (`:success`, `:failure`, or `:skipped`), and `:input_keys`. Skipped steps record `nil` timestamps and `0` duration.
+- The runner returns `DAG::Workflow::RunResult`, so outputs and trace always live directly on `result.outputs` and `result.trace`. Failure details, when present, live in `result.error` as `{failed_node:, step_error:}`.
+- Trace entries are `TraceEntry` records with `:name`, `:layer`, `:started_at`, `:finished_at`, `:duration_ms`, `:status` (`:success`, `:failure`, or `:skipped`), `:input_keys`, `:attempt`, and `:retried`. Skipped steps record `nil` timestamps and `0` duration.
 
 ## Error Handling
 
