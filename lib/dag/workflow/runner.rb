@@ -61,6 +61,7 @@ module DAG
         @register_execution_store = register_execution_store
         validate_context_parallelism!(parallel, context)
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
+        @trace_recorder = TraceRecorder.new(callbacks: @callbacks)
         @strategy = build_strategy(parallel, max_parallelism)
         validate_coverage!(graph, registry)
         validate_workflow!(graph, registry)
@@ -219,13 +220,20 @@ module DAG
       # consumer querying strategy identity from inside :start sees the
       # one actually running.
       def execute_layer(layer, layer_index, previous_outputs, statuses, trace, deadline)
-        runnable, immediate_results, waiting_nodes = partition_layer(layer, previous_outputs, statuses, deadline)
+        partition = partition_layer(layer, previous_outputs, statuses, deadline)
         results = {}
 
-        runnable.each { |t| @callbacks.start(t.name, t.step) }
-        record_immediate_results(immediate_results, results, statuses, layer_index, trace)
-        task_waiting_nodes, paused = run_tasks(runnable, layer_index, trace, results, statuses)
-        waiting_nodes.concat(task_waiting_nodes)
+        partition.runnable.each { |task| @callbacks.start(task.name, task.step) }
+        @trace_recorder.record_immediate_results(
+          entries: partition.immediate_results,
+          results: results,
+          statuses: statuses,
+          layer_index: layer_index,
+          trace: trace,
+          node_path_for: method(:node_path_for)
+        )
+        task_waiting_nodes, paused = run_tasks(partition.runnable, layer_index, trace, results, statuses)
+        waiting_nodes = partition.waiting_nodes + task_waiting_nodes
 
         [results, waiting_nodes, paused]
       end
@@ -252,11 +260,11 @@ module DAG
             elsif schedule_policy.expired?
               result = schedule_policy.deadline_exceeded_result(name)
               @execution_persistence.persist_expired_schedule_node(name, result.error)
-              immediate_results << [name, result, input_keys, nil]
+              immediate_results << ImmediateResult.new(name: name, result: result, input_keys: input_keys, status: nil)
             elsif skip?(step, condition_context)
-              immediate_results << [name, record_skip_result, input_keys, :skipped]
+              immediate_results << ImmediateResult.new(name: name, result: record_skip_result, input_keys: input_keys, status: :skipped)
             elsif (reused_result = @execution_persistence.load_reusable_result(name))
-              immediate_results << [name, reused_result, input_keys, :success]
+              immediate_results << ImmediateResult.new(name: name, result: reused_result, input_keys: input_keys, status: :success)
             else
               execution = build_step_execution(name, current_attempt: 1, deadline: deadline)
               attempt_log = []
@@ -271,12 +279,17 @@ module DAG
               )
             end
           rescue => e
-            immediate_results << [name, Result.exception_failure(:run_if_error, e,
-              message: "run_if for step #{name} raised: #{e.message}"), input_keys, nil]
+            immediate_results << ImmediateResult.new(
+              name: name,
+              result: Result.exception_failure(:run_if_error, e,
+                message: "run_if for step #{name} raised: #{e.message}"),
+              input_keys: input_keys,
+              status: nil
+            )
           end
         end
 
-        [runnable, immediate_results, waiting_nodes]
+        LayerPartition.new(runnable: runnable, immediate_results: immediate_results, waiting_nodes: waiting_nodes)
       end
 
       # Short-circuits on an empty task list (a layer in which every step
@@ -292,8 +305,15 @@ module DAG
         @strategy.execute(tasks) do |name, result, started_at, finished_at, duration_ms|
           task = tasks_by_name.fetch(name)
           lifecycle = sub_workflow_lifecycle_payload(result)
-          entries = build_trace_entries_for_task(task, layer_index, result,
-            started_at: started_at, finished_at: finished_at, duration_ms: duration_ms)
+          entries = @trace_recorder.build_trace_entries_for_task(
+            task: task,
+            layer_index: layer_index,
+            result: result,
+            started_at: started_at,
+            finished_at: finished_at,
+            duration_ms: duration_ms,
+            lifecycle_payload: lifecycle
+          )
           trace.concat(entries)
           @execution_persistence.persist_step_result(task, result, entries, skip_result: !lifecycle.nil?)
 
@@ -559,29 +579,10 @@ module DAG
 
       def skip?(step, condition_context) = !Condition.evaluate(step.config[:run_if], condition_context)
 
-      def record_immediate_results(entries, results, statuses, layer_index, trace)
-        entries.each do |name, result, input_keys, status|
-          entry = build_trace_entry(node_path_for(name), layer_index, result,
-            started_at: nil, finished_at: nil, duration_ms: 0,
-            input_keys: input_keys, status: status)
-          trace << entry
-          statuses[name] = entry.status
-          @callbacks.finish(name, result)
-          results[name] = result
-        end
-      end
-
       def record_skip_result = Success.new(value: nil)
 
       def node_path_for(name)
         @execution_persistence.node_path_for(name)
-      end
-
-      def trace_name_for(node_path)
-        path = Array(node_path).map(&:to_sym)
-        return path.first if path.length == 1
-
-        path.join(".").to_sym
       end
 
       def pause_requested?
@@ -600,41 +601,6 @@ module DAG
 
       def dependency_outputs_ready?(name, outputs)
         @graph.each_predecessor(name).all? { |dep| outputs.key?(dep) }
-      end
-
-      def build_trace_entries_for_task(task, layer_index, result, started_at:, finished_at:, duration_ms:)
-        if task.attempt_log.empty?
-          return [] if sub_workflow_lifecycle_payload(result)
-
-          return [build_trace_entry(task.execution.node_path, layer_index, result,
-            started_at: started_at, finished_at: finished_at, duration_ms: duration_ms,
-            input_keys: task.input_keys)]
-        end
-
-        task.attempt_log.each_with_index.map do |entry, index|
-          next entry if entry.is_a?(TraceEntry)
-
-          build_trace_entry(entry[:node_path] || task.execution.node_path, layer_index, result,
-            started_at: entry[:started_at],
-            finished_at: entry[:finished_at],
-            duration_ms: entry[:duration_ms],
-            input_keys: entry[:input_keys] || task.input_keys,
-            status: entry[:status],
-            attempt: entry[:attempt],
-            retried: index < (task.attempt_log.length - 1))
-        end
-      end
-
-      def build_trace_entry(node_path, layer_index, result, started_at:, finished_at:, duration_ms:, input_keys:, status: nil, attempt: 1, retried: false)
-        TraceEntry.new(
-          name: trace_name_for(node_path), layer: layer_index,
-          started_at: started_at, finished_at: finished_at,
-          duration_ms: duration_ms,
-          status: status || (result.success? ? :success : :failure),
-          input_keys: input_keys,
-          attempt: attempt,
-          retried: retried
-        )
       end
 
       # Downstream layers only resolve nodes whose direct predecessors already
