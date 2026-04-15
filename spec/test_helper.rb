@@ -12,6 +12,7 @@ end
 require "minitest/autorun"
 require "securerandom"
 require "tempfile"
+require "tmpdir"
 
 require_relative "../lib/dag"
 
@@ -55,8 +56,7 @@ module TestHelpers
   end
 
   def temp_path(prefix: "dag_test", suffix: ".txt")
-    dir = File.expand_path("~/tmp")
-    Dir.mkdir(dir) unless Dir.exist?(dir)
+    dir = Dir.tmpdir
     File.join(dir, "#{prefix}_#{$$}_#{SecureRandom.hex(6)}#{suffix}")
   end
 end

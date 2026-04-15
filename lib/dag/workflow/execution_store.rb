@@ -137,6 +137,22 @@ module DAG
             end
           when Array
             value.map { |nested| deep_copy(nested) }
+          when Success
+            Success.new(value: deep_copy(value.value))
+          when Failure
+            Failure.new(error: deep_copy(value.error))
+          when TraceEntry
+            TraceEntry.new(
+              name: deep_copy(value.name),
+              layer: deep_copy(value.layer),
+              started_at: deep_copy(value.started_at),
+              finished_at: deep_copy(value.finished_at),
+              duration_ms: deep_copy(value.duration_ms),
+              status: deep_copy(value.status),
+              input_keys: deep_copy(value.input_keys),
+              attempt: deep_copy(value.attempt),
+              retried: deep_copy(value.retried)
+            )
           else
             value
           end

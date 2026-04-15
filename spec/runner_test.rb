@@ -66,6 +66,26 @@ class RunnerTest < Minitest::Test
     assert_equal 42, result.error[:step_error][:exit_status]
   end
 
+  def test_failed_nodes_are_not_exposed_in_outputs
+    definition = build_test_workflow(
+      fetch: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "ready") }
+      },
+      explode: {
+        type: :ruby,
+        depends_on: [:fetch],
+        callable: ->(_input) { DAG::Failure.new(error: {code: :boom, message: "explode"}) }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(definition, parallel: false).call
+
+    assert_equal :failed, result.status
+    assert_equal "ready", result.outputs[:fetch].value
+    refute result.outputs.key?(:explode)
+  end
+
   def test_runner_returns_workflow_run_result
     success = run_workflow({good: {command: "echo good"}})
     failure = run_workflow({bad: {command: "exit 1"}})

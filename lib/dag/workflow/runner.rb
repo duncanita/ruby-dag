@@ -157,18 +157,19 @@ module DAG
             break
           end
 
-          layer_results, layer_waiting_nodes = execute_layer(layer, layer_index, outputs, statuses, trace, deadline)
+          layer_results, layer_waiting_nodes, layer_paused = execute_layer(layer, layer_index, outputs, statuses, trace, deadline)
           waiting_nodes.concat(layer_waiting_nodes)
 
           layer_results.each do |name, result|
-            outputs[name] = result
             if result.failure? && failed_name.nil?
               failed_name = name
               failed_result = result
+            elsif !result.failure?
+              outputs[name] = result
             end
           end
 
-          break if layer_waiting_nodes.any? && !failed_name
+          paused ||= layer_paused
         end
 
         status = if failed_name
@@ -181,6 +182,7 @@ module DAG
           :completed
         end
 
+        waiting_nodes = (status == :waiting) ? waiting_nodes : []
         build_run_result(outputs, trace,
           status,
           failed_name ? {failed_node: failed_name, step_error: failed_result.error} : nil,
@@ -217,9 +219,10 @@ module DAG
 
         runnable.each { |t| @callbacks.start(t.name, t.step) }
         record_immediate_results(immediate_results, results, statuses, layer_index, trace)
-        run_tasks(runnable, layer_index, trace, results, statuses)
+        task_waiting_nodes, paused = run_tasks(runnable, layer_index, trace, results, statuses)
+        waiting_nodes.concat(task_waiting_nodes)
 
-        [results, waiting_nodes]
+        [results, waiting_nodes, paused]
       end
 
       def partition_layer(layer, previous_outputs, statuses, deadline)
@@ -228,6 +231,8 @@ module DAG
         waiting_nodes = []
 
         layer.each do |name|
+          next unless dependency_outputs_ready?(name, previous_outputs)
+
           step = @registry[name]
           condition_context = resolve_condition_context(name, previous_outputs, statuses)
           input = extract_input(condition_context)
@@ -267,20 +272,33 @@ module DAG
       # was filtered by `run_if`): no point handing an empty array to the
       # strategy, and it keeps the trace ordering tidy.
       def run_tasks(tasks, layer_index, trace, results, statuses)
-        return if tasks.empty?
+        return [[], false] if tasks.empty?
 
         tasks_by_name = tasks.to_h { |task| [task.name, task] }
+        waiting_nodes = []
+        paused = false
 
         @strategy.execute(tasks) do |name, result, started_at, finished_at, duration_ms|
           task = tasks_by_name.fetch(name)
+          lifecycle = sub_workflow_lifecycle_payload(result)
           entries = build_trace_entries_for_task(task, layer_index, result,
             started_at: started_at, finished_at: finished_at, duration_ms: duration_ms)
           trace.concat(entries)
           persist_step_result!(task, result, entries)
+
+          if lifecycle
+            waiting_nodes.concat(lifecycle[:waiting_nodes]) if lifecycle[:status] == :waiting
+            paused ||= lifecycle[:status] == :paused
+            @callbacks.finish(name, callback_result_for_lifecycle(lifecycle))
+            next
+          end
+
           statuses[name] = entries.last.status
           @callbacks.finish(name, result)
           results[name] = result
         end
+
+        [waiting_nodes, paused]
       end
 
       def build_step_execution(name, current_attempt:, deadline:)
@@ -324,16 +342,19 @@ module DAG
           end
           result, child_trace = unwrap_sub_workflow_result(result)
           attempt_log.concat(child_trace)
+          lifecycle = sub_workflow_lifecycle_payload(result)
           finished_at = @clock.monotonic_now
-          attempt_log << {
-            attempt: execution.attempt,
-            node_path: execution.node_path,
-            started_at: started_at,
-            finished_at: finished_at,
-            duration_ms: ((finished_at - started_at) * 1000).round(2),
-            status: result.success? ? :success : :failure,
-            retried: false
-          }
+          unless lifecycle
+            attempt_log << {
+              attempt: execution.attempt,
+              node_path: execution.node_path,
+              started_at: started_at,
+              finished_at: finished_at,
+              duration_ms: ((finished_at - started_at) * 1000).round(2),
+              status: result.success? ? :success : :failure,
+              retried: false
+            }
+          end
           result
         rescue => e
           finished_at = @clock.monotonic_now
@@ -389,6 +410,21 @@ module DAG
             message: "sub_workflow step #{step.name} failed",
             child_error: child_result.error,
             child_trace: child_result.trace
+          })
+        end
+
+        if child_result.waiting?
+          return Success.new(value: {
+            __sub_workflow_status__: :waiting,
+            __sub_workflow_trace__: child_result.trace,
+            __sub_workflow_waiting_nodes__: child_result.waiting_nodes
+          })
+        end
+
+        if child_result.paused?
+          return Success.new(value: {
+            __sub_workflow_status__: :paused,
+            __sub_workflow_trace__: child_result.trace
           })
         end
 
@@ -480,13 +516,32 @@ module DAG
       end
 
       def unwrap_sub_workflow_result(result)
-        if result.success? && result.value.is_a?(Hash) && result.value[:__sub_workflow_output__]
+        if (payload = sub_workflow_lifecycle_payload(result))
+          [result, payload[:trace]]
+        elsif result.success? && result.value.is_a?(Hash) && result.value[:__sub_workflow_output__]
           [Success.new(value: result.value[:__sub_workflow_output__]), result.value[:__sub_workflow_trace__] || []]
         elsif result.failure? && result.error.is_a?(Hash) && result.error[:child_trace]
           [Failure.new(error: result.error.except(:child_trace)), result.error[:child_trace] || []]
         else
           [result, []]
         end
+      end
+
+      def sub_workflow_lifecycle_payload(result)
+        return nil unless result.success? && result.value.is_a?(Hash)
+
+        status = result.value[:__sub_workflow_status__]
+        return nil unless %i[waiting paused].include?(status)
+
+        {
+          status: status,
+          trace: result.value[:__sub_workflow_trace__] || [],
+          waiting_nodes: result.value[:__sub_workflow_waiting_nodes__] || []
+        }
+      end
+
+      def callback_result_for_lifecycle(_lifecycle)
+        Success.new(value: nil)
       end
 
       def accepts_context_keyword?(call_method)
@@ -581,6 +636,10 @@ module DAG
         end
       end
 
+      def dependency_outputs_ready?(name, outputs)
+        @graph.each_predecessor(name).all? { |dep| outputs.key?(dep) }
+      end
+
       def load_reusable_result(name)
         return nil unless @execution_store
 
@@ -590,6 +649,7 @@ module DAG
 
       def persist_step_result!(task, result, entries)
         return unless @execution_store
+        return if sub_workflow_lifecycle_payload(result)
 
         entries.each do |entry|
           @execution_store.append_trace(workflow_id: @workflow_id, entry: entry)
@@ -618,6 +678,8 @@ module DAG
 
       def build_trace_entries_for_task(task, layer_index, result, started_at:, finished_at:, duration_ms:)
         if task.attempt_log.empty?
+          return [] if sub_workflow_lifecycle_payload(result)
+
           return [build_trace_entry(task.execution.node_path, layer_index, result,
             started_at: started_at, finished_at: finished_at, duration_ms: duration_ms,
             input_keys: task.input_keys)]
@@ -649,8 +711,9 @@ module DAG
         )
       end
 
-      # Predecessors always have a Result in `outputs` by the time we
-      # resolve a downstream layer — skipped steps still record Success(nil).
+      # Downstream layers only resolve nodes whose direct predecessors already
+      # produced outputs in this invocation or via reuse. Waiting/paused nodes
+      # intentionally do not materialize placeholder outputs.
       def resolve_condition_context(name, outputs, statuses)
         dependency_context = @root_input.transform_values { |value| {value: value, status: :success} }
 

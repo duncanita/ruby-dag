@@ -136,7 +136,7 @@ end
 
 - `result.status` — `:completed`, `:failed`, `:waiting`, or `:paused`
 - `result.success?` / `result.failure?`
-- `result.outputs` — completed step results keyed by node name
+- `result.outputs` — completed or intentionally skipped step results keyed by node name
 - `result.trace` — append-only attempt trace
 - `result.error` — `nil` on success, `{failed_node:, step_error:}` on failure
 - `result.workflow_id` — `nil` for in-memory runs unless you set one explicitly
@@ -262,6 +262,7 @@ result = DAG::Workflow::Runner.new(definition,
 Notes:
 - `schedule[:not_before]` uses `clock.wall_now`
 - waiting nodes do not emit `Success(nil)` outputs
+- waiting nodes do not block independent branches that are still runnable later in the same invocation
 - waiting runs persist `workflow_status: :waiting` plus `waiting_nodes` in the execution store
 - see `examples/waiting_not_before.rb` for a runnable example exercised in the test suite
 
@@ -360,6 +361,7 @@ Notes:
 - `:sub_workflow` must declare exactly one of `definition:` or `definition_path:`
 - child trace entries are flattened into the parent trace with names like `:"process.summarize"`
 - default sub-workflow output is a hash of child leaf values; `output_key:` selects one leaf
+- if the child run returns `:waiting` or `:paused`, the parent run propagates that workflow status and the parent step does not emit an output
 - durable child outputs are stored under the parent node path, e.g. `[:process, :summarize]`
 - the dumper emits YAML-safe sub-workflows when they use `definition_path:` and rejects programmatic `definition:` children
 - see `examples/sub_workflow.rb` and `examples/sub_workflow_parent.yml` for runnable examples exercised in the test suite
@@ -677,7 +679,8 @@ Step inputs are **always** hashes keyed by dependency step name (e.g., `{ fetch:
 
 - Step inputs are always hashes keyed by dependency step name. Zero-dependency steps receive `{}`.
 - Step output constraints depend on which Strategy you pick (see [Step result constraints by strategy](#step-result-constraints-by-strategy)). Default `:threads` has none; `:processes` requires Marshal-able results.
-- Callback ordering is per-step but not globally deterministic across nodes in the same parallel layer. `on_step_start` fires when the runner submits a step to the strategy (before actual execution begins); `on_step_finish` fires when the strategy yields back the completed result.
+- Callback ordering is per-step but not globally deterministic across nodes in the same parallel layer. `on_step_start` fires when the runner submits a step to the strategy (before actual execution begins); every started step gets a matching `on_step_finish`.
+- For parent `:sub_workflow` steps that propagate child `:waiting` or `:paused`, `on_step_finish` receives `Success(nil)`. This is observational only: the parent step still emits no parent output and no parent trace entry for that invocation.
 - On first step failure the workflow halts. Already-completed outputs from earlier layers (and from sibling steps in the same layer that finished before the failure was observed) are still returned.
 - The runner returns `DAG::Workflow::RunResult`, so outputs and trace always live directly on `result.outputs` and `result.trace`. Failure details, when present, live in `result.error` as `{failed_node:, step_error:}`.
 - Trace entries are `TraceEntry` records with `:name`, `:layer`, `:started_at`, `:finished_at`, `:duration_ms`, `:status` (`:success`, `:failure`, or `:skipped`), `:input_keys`, `:attempt`, and `:retried`. Skipped steps record `nil` timestamps and `0` duration.
