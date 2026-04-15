@@ -75,6 +75,15 @@ module DAG
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
         @attempt_trace_middleware = AttemptTraceMiddleware.new(clock: @clock)
         @trace_recorder = TraceRecorder.new(callbacks: @callbacks)
+        @layer_admitter = LayerAdmitter.new(
+          graph: @graph,
+          registry: @registry,
+          clock: @clock,
+          execution_persistence: @execution_persistence,
+          dependency_input_resolver: @dependency_input_resolver,
+          root_input: @root_input,
+          task_builder: method(:build_runnable_task)
+        )
         @strategy = build_strategy(parallel, max_parallelism)
         validate_coverage!(graph, registry)
         validate_workflow!(graph, registry)
@@ -233,7 +242,12 @@ module DAG
       # consumer querying strategy identity from inside :start sees the
       # one actually running.
       def execute_layer(layer, layer_index, previous_outputs, statuses, trace, deadline)
-        partition = partition_layer(layer, previous_outputs, statuses, deadline)
+        partition = @layer_admitter.call(
+          layer: layer,
+          previous_outputs: previous_outputs,
+          statuses: statuses,
+          deadline: deadline
+        )
         results = {}
 
         partition.runnable.each { |task| @callbacks.start(task.name, task.step) }
@@ -251,91 +265,19 @@ module DAG
         [results, waiting_nodes, paused]
       end
 
-      def partition_layer(layer, previous_outputs, statuses, deadline)
-        runnable = []
-        immediate_results = []
-        waiting_nodes = []
+      def build_runnable_task(name:, step:, input:, input_keys:, deadline:)
+        execution = build_step_execution(name, current_attempt: 1, deadline: deadline)
+        attempt_log = []
 
-        layer.each do |name|
-          next unless dependency_outputs_ready?(name, previous_outputs)
-
-          step = @registry[name]
-          condition_context = resolve_condition_context(name, previous_outputs, statuses)
-
-          begin
-            input = resolve_step_input(name, step, previous_outputs)
-            input_keys = input.keys.sort
-            schedule_policy = SchedulePolicy.new(step, clock: @clock)
-
-            if schedule_policy.waiting?
-              waiting_nodes << node_path_for(name)
-              @execution_persistence.persist_waiting_node(name)
-            elsif schedule_policy.expired?
-              result = schedule_policy.deadline_exceeded_result(name)
-              @execution_persistence.persist_expired_schedule_node(name, result.error)
-              immediate_results << ImmediateResult.new(name: name, result: result, input_keys: input_keys, status: nil)
-            elsif skip?(step, condition_context)
-              immediate_results << ImmediateResult.new(name: name, result: record_skip_result, input_keys: input_keys, status: :skipped)
-            elsif (reused_result = @execution_persistence.load_reusable_result(name))
-              immediate_results << ImmediateResult.new(name: name, result: reused_result, input_keys: input_keys, status: :success)
-            else
-              execution = build_step_execution(name, current_attempt: 1, deadline: deadline)
-              attempt_log = []
-              runnable << Parallel::Task.new(
-                name: name,
-                step: step,
-                input: input,
-                attempt: build_step_attempt(step, input, execution, attempt_log),
-                execution: execution,
-                input_keys: input_keys,
-                attempt_log: attempt_log
-              )
-            end
-          rescue DependencyInputResolver::MissingExecutionStoreError => e
-            immediate_results << ImmediateResult.new(
-              name: name,
-              result: Failure.new(error: {
-                code: :versioned_dependency_requires_execution_store,
-                message: e.message
-              }),
-              input_keys: [],
-              status: nil
-            )
-          rescue DependencyInputResolver::MissingVersionError => e
-            immediate_results << ImmediateResult.new(
-              name: name,
-              result: Failure.new(error: {
-                code: :missing_dependency_version,
-                message: e.message
-              }),
-              input_keys: [],
-              status: nil
-            )
-          rescue DependencyInputResolver::WaitingForDependencyError
-            waiting_nodes << node_path_for(name)
-            @execution_persistence.persist_waiting_node(name)
-          rescue DependencyInputResolver::ResolverError => e
-            immediate_results << ImmediateResult.new(
-              name: name,
-              result: Failure.new(error: {
-                code: :cross_workflow_resolution_failed,
-                message: e.message
-              }),
-              input_keys: [],
-              status: nil
-            )
-          rescue => e
-            immediate_results << ImmediateResult.new(
-              name: name,
-              result: Result.exception_failure(:run_if_error, e,
-                message: "run_if for step #{name} raised: #{e.message}"),
-              input_keys: [],
-              status: nil
-            )
-          end
-        end
-
-        LayerPartition.new(runnable: runnable, immediate_results: immediate_results, waiting_nodes: waiting_nodes)
+        Parallel::Task.new(
+          name: name,
+          step: step,
+          input: input,
+          attempt: build_step_attempt(step, input, execution, attempt_log),
+          execution: execution,
+          input_keys: input_keys,
+          attempt_log: attempt_log
+        )
       end
 
       # Short-circuits on an empty task list (a layer in which every step
@@ -601,10 +543,6 @@ module DAG
         })
       end
 
-      def skip?(step, condition_context) = !Condition.evaluate(step.config[:run_if], condition_context)
-
-      def record_skip_result = Success.new(value: nil)
-
       def node_path_for(name)
         @execution_persistence.node_path_for(name)
       end
@@ -621,25 +559,6 @@ module DAG
         initial_outputs.transform_values do |value|
           value.is_a?(Result) ? value : Success.new(value: value)
         end
-      end
-
-      def dependency_outputs_ready?(name, outputs)
-        @graph.each_predecessor(name).all? { |dep| outputs.key?(dep) }
-      end
-
-      # Downstream layers only resolve nodes whose direct predecessors already
-      # produced outputs in this invocation or via reuse. Waiting/paused nodes
-      # intentionally do not materialize placeholder outputs.
-      def resolve_condition_context(name, outputs, statuses)
-        dependency_context = @root_input.transform_values { |value| {value: value, status: :success} }
-
-        dependency_context.merge(@graph.each_predecessor(name).to_h do |dep|
-          [dep, {value: outputs.fetch(dep).value, status: statuses.fetch(dep)}]
-        end)
-      end
-
-      def resolve_step_input(name, step, outputs)
-        @dependency_input_resolver.resolve(name: name, step: step, outputs: outputs)
       end
 
       def validate_coverage!(graph, registry)
