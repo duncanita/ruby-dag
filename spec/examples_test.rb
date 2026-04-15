@@ -37,6 +37,22 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Fetch calls: 1"
   end
 
+  def test_sub_workflow_example_executes_successfully
+    stdout, stderr, status = run_example("examples/sub_workflow.rb")
+
+    assert status.success?, <<~MSG
+      expected sub_workflow example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== Parent Workflow ==="
+    assert_includes stdout, "=== Durable Run ==="
+    assert_includes stdout, "Child calls: 1"
+  end
+
   private
 
   def run_example(path)

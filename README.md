@@ -231,6 +231,54 @@ Notes:
 - changing the workflow fingerprint for an existing `workflow_id` raises `DAG::ValidationError` before any step runs
 - see `examples/checkpoint_resume.rb` for a runnable end-to-end example that is exercised in the test suite
 
+### Sub-workflow composition
+
+A step can run a nested programmatic `Definition` with type `:sub_workflow`.
+The child run inherits the parent runner's parallel mode, middleware, context,
+remaining timeout budget, workflow ID, and execution store.
+
+```ruby
+child = DAG::Workflow::Loader.from_hash(
+  analyze: {
+    type: :ruby,
+    callable: ->(input) { DAG::Success.new(value: input[:raw].upcase) }
+  },
+  summarize: {
+    type: :ruby,
+    depends_on: [:analyze],
+    callable: ->(input, context) { DAG::Success.new(value: "#{input[:analyze]}#{context[:suffix]}") }
+  }
+)
+
+parent = DAG::Workflow::Loader.from_hash(
+  fetch: {
+    type: :ruby,
+    callable: ->(_input) { DAG::Success.new(value: "hello") }
+  },
+  process: {
+    type: :sub_workflow,
+    definition: child,
+    depends_on: [:fetch],
+    input_mapping: {fetch: :raw},
+    output_key: :summarize
+  }
+)
+
+result = DAG::Workflow::Runner.new(parent,
+  parallel: false,
+  context: {suffix: "!"}).call
+
+puts result.outputs[:process].value  # => "HELLO!"
+puts result.trace.map(&:name)        # => [:fetch, :"process.analyze", :"process.summarize", :process]
+```
+
+Notes:
+- this first slice supports programmatic `definition:` only
+- child trace entries are flattened into the parent trace with names like `:"process.summarize"`
+- default sub-workflow output is a hash of child leaf values; `output_key:` selects one leaf
+- durable child outputs are stored under the parent node path, e.g. `[:process, :summarize]`
+- see `examples/sub_workflow.rb` for a runnable example that is exercised in the test suite
+
 ## Graph API
 
 Pure DAG with no workflow awareness. The ONLY iteration entry points are

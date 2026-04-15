@@ -36,6 +36,9 @@ module DAG
         middleware: [],
         workflow_id: nil,
         execution_store: nil,
+        node_path_prefix: [],
+        root_input: {},
+        register_execution_store: true,
         on_step_start: nil, on_step_finish: nil)
         graph, registry = unpack_definition(graph_or_definition, registry)
         @graph = graph
@@ -46,6 +49,9 @@ module DAG
         @middleware = Array(middleware).freeze
         @workflow_id = workflow_id
         @execution_store = execution_store
+        @node_path_prefix = Array(node_path_prefix).map(&:to_sym).freeze
+        @root_input = root_input.transform_keys(&:to_sym).freeze
+        @register_execution_store = register_execution_store
         validate_context_parallelism!(parallel, context)
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
         @strategy = build_strategy(parallel, max_parallelism)
@@ -56,9 +62,13 @@ module DAG
       end
 
       def call
+        call_with_initial_outputs({})
+      end
+
+      def call_with_initial_outputs(initial_outputs)
         deadline = @timeout ? @clock.monotonic_now + @timeout : nil
         prepare_execution_store!
-        execute_layers(@graph.topological_layers, deadline)
+        execute_layers(@graph.topological_layers, deadline, initial_outputs: initial_outputs)
       end
 
       private
@@ -70,7 +80,7 @@ module DAG
       end
 
       def prepare_execution_store!
-        return unless @execution_store
+        return unless @execution_store && @register_execution_store
 
         existing = @execution_store.load_run(@workflow_id)
         if existing && existing[:definition_fingerprint] != @definition_fingerprint
@@ -81,7 +91,7 @@ module DAG
         @execution_store.begin_run(
           workflow_id: @workflow_id,
           definition_fingerprint: @definition_fingerprint,
-          node_paths: @graph.topological_sort.zip
+          node_paths: @graph.topological_sort.map { |name| node_path_for(name) }
         )
       end
 
@@ -118,9 +128,9 @@ module DAG
 
       def executor_class(type) = Steps.class_for(type)
 
-      def execute_layers(layers, deadline)
-        outputs = {}
-        statuses = {}
+      def execute_layers(layers, deadline, initial_outputs: {})
+        outputs = normalize_initial_outputs(initial_outputs)
+        statuses = outputs.transform_values { |_result| :success }
         trace = []
         failed_name = nil
         failed_result = nil
@@ -247,10 +257,10 @@ module DAG
       def build_step_execution(name, current_attempt:, deadline:)
         StepExecution.new(
           workflow_id: @workflow_id,
-          node_path: [name],
+          node_path: node_path_for(name),
           attempt: current_attempt,
           deadline: deadline,
-          depth: 0,
+          depth: @node_path_prefix.length,
           parallel: @strategy.name,
           execution_store: @execution_store,
           event_bus: nil
@@ -266,10 +276,14 @@ module DAG
       end
 
       def core_step_invoker(step, attempt_log)
-        executor = executor_class(step.type).new
+        executor = (step.type == :sub_workflow) ? nil : executor_class(step.type).new
         ->(current_step, current_input, context:, execution:) do
           started_at = @clock.monotonic_now
-          result = invoke_step_executor(executor, current_step, current_input, context: context)
+          result = if current_step.type == :sub_workflow
+            run_sub_workflow_step(current_step, current_input, context: context, execution: execution)
+          else
+            invoke_step_executor(executor, current_step, current_input, context: context)
+          end
           unless result.is_a?(Result)
             result = Failure.new(error: {
               code: :step_bad_return,
@@ -279,9 +293,12 @@ module DAG
               strategy: @strategy.name
             })
           end
+          result, child_trace = unwrap_sub_workflow_result(result)
+          attempt_log.concat(child_trace)
           finished_at = @clock.monotonic_now
           attempt_log << {
             attempt: execution.attempt,
+            node_path: execution.node_path,
             started_at: started_at,
             finished_at: finished_at,
             duration_ms: ((finished_at - started_at) * 1000).round(2),
@@ -296,6 +313,7 @@ module DAG
             strategy: @strategy.name)
           attempt_log << {
             attempt: execution.attempt,
+            node_path: execution.node_path,
             started_at: started_at,
             finished_at: finished_at,
             duration_ms: ((finished_at - started_at) * 1000).round(2),
@@ -312,6 +330,109 @@ module DAG
           executor.call(step, input, context: context)
         else
           executor.call(step, input)
+        end
+      end
+
+      def run_sub_workflow_step(step, input, context:, execution:)
+        definition = step.config[:definition]
+        definition_path = step.config[:definition_path]
+
+        unless definition.is_a?(Definition) && definition_path.nil?
+          return Failure.new(error: {
+            code: :sub_workflow_invalid_definition,
+            message: "sub_workflow step #{step.name} requires a programmatic definition: and does not yet support definition_path:"
+          })
+        end
+
+        mapped_input = map_sub_workflow_input(step, input)
+        register_child_node_paths(definition, execution)
+
+        child_result = Runner.new(definition,
+          parallel: execution.parallel,
+          max_parallelism: @strategy.max_parallelism,
+          timeout: remaining_timeout_for(execution.deadline),
+          clock: @clock,
+          context: context,
+          middleware: @middleware,
+          workflow_id: execution.workflow_id,
+          execution_store: execution.execution_store,
+          node_path_prefix: execution.node_path,
+          root_input: mapped_input,
+          register_execution_store: false).call
+
+        if child_result.failure?
+          return Failure.new(error: {
+            code: :sub_workflow_failed,
+            message: "sub_workflow step #{step.name} failed",
+            child_error: child_result.error,
+            child_trace: child_result.trace
+          })
+        end
+
+        selected_output = select_sub_workflow_output(step, definition, child_result.outputs)
+        return selected_output if selected_output.is_a?(Failure)
+
+        Success.new(value: {
+          __sub_workflow_output__: selected_output,
+          __sub_workflow_trace__: child_result.trace
+        })
+      end
+
+      def register_child_node_paths(definition, execution)
+        return unless execution.execution_store && execution.workflow_id
+
+        fingerprint = execution.execution_store.load_run(execution.workflow_id)&.fetch(:definition_fingerprint)
+        execution.execution_store.begin_run(
+          workflow_id: execution.workflow_id,
+          definition_fingerprint: fingerprint || @definition_fingerprint,
+          node_paths: definition.graph.topological_sort.map { |name| execution.node_path + [name] }
+        )
+      end
+
+      def remaining_timeout_for(deadline)
+        return nil unless deadline
+
+        remaining = deadline - @clock.monotonic_now
+        remaining.positive? ? remaining : 0
+      end
+
+      def map_sub_workflow_input(step, input)
+        mapping = step.config[:input_mapping]
+        return input unless mapping
+
+        mapping.each_with_object({}) do |(from, to), mapped|
+          mapped[to.to_sym] = input.fetch(from.to_sym)
+        end
+      end
+
+      def select_sub_workflow_output(step, definition, outputs)
+        leaves = definition.graph.leaves.to_a.sort
+        output_key = step.config[:output_key]&.to_sym
+
+        if output_key
+          unless leaves.include?(output_key)
+            raise ValidationError,
+              "sub_workflow step #{step.name} output_key #{output_key.inspect} must reference a leaf node (leaves: #{leaves.inspect})"
+          end
+
+          return outputs.fetch(output_key).value
+        end
+
+        leaves.to_h { |leaf| [leaf, outputs.fetch(leaf).value] }
+      rescue ValidationError => e
+        Failure.new(error: {
+          code: :sub_workflow_invalid_output_key,
+          message: e.message
+        })
+      end
+
+      def unwrap_sub_workflow_result(result)
+        if result.success? && result.value.is_a?(Hash) && result.value[:__sub_workflow_output__]
+          [Success.new(value: result.value[:__sub_workflow_output__]), result.value[:__sub_workflow_trace__] || []]
+        elsif result.failure? && result.error.is_a?(Hash) && result.error[:child_trace]
+          [Failure.new(error: result.error.except(:child_trace)), result.error[:child_trace] || []]
+        else
+          [result, []]
         end
       end
 
@@ -342,7 +463,7 @@ module DAG
 
       def record_immediate_results(entries, results, statuses, layer_index, trace)
         entries.each do |name, result, input_keys, status|
-          entry = build_trace_entry(name, layer_index, result,
+          entry = build_trace_entry(node_path_for(name), layer_index, result,
             started_at: nil, finished_at: nil, duration_ms: 0,
             input_keys: input_keys, status: status)
           trace << entry
@@ -354,10 +475,27 @@ module DAG
 
       def record_skip_result = Success.new(value: nil)
 
+      def node_path_for(name)
+        @node_path_prefix + [name.to_sym]
+      end
+
+      def trace_name_for(node_path)
+        path = Array(node_path).map(&:to_sym)
+        return path.first if path.length == 1
+
+        path.join(".").to_sym
+      end
+
+      def normalize_initial_outputs(initial_outputs)
+        initial_outputs.transform_values do |value|
+          value.is_a?(Result) ? value : Success.new(value: value)
+        end
+      end
+
       def load_reusable_result(name)
         return nil unless @execution_store
 
-        stored = @execution_store.load_output(workflow_id: @workflow_id, node_path: [name])
+        stored = @execution_store.load_output(workflow_id: @workflow_id, node_path: node_path_for(name))
         stored && stored[:result]
       end
 
@@ -391,26 +529,28 @@ module DAG
 
       def build_trace_entries_for_task(task, layer_index, result, started_at:, finished_at:, duration_ms:)
         if task.attempt_log.empty?
-          return [build_trace_entry(task.name, layer_index, result,
+          return [build_trace_entry(task.execution.node_path, layer_index, result,
             started_at: started_at, finished_at: finished_at, duration_ms: duration_ms,
             input_keys: task.input_keys)]
         end
 
         task.attempt_log.each_with_index.map do |entry, index|
-          build_trace_entry(task.name, layer_index, result,
+          next entry if entry.is_a?(TraceEntry)
+
+          build_trace_entry(entry[:node_path] || task.execution.node_path, layer_index, result,
             started_at: entry[:started_at],
             finished_at: entry[:finished_at],
             duration_ms: entry[:duration_ms],
-            input_keys: task.input_keys,
+            input_keys: entry[:input_keys] || task.input_keys,
             status: entry[:status],
             attempt: entry[:attempt],
             retried: index < (task.attempt_log.length - 1))
         end
       end
 
-      def build_trace_entry(name, layer_index, result, started_at:, finished_at:, duration_ms:, input_keys:, status: nil, attempt: 1, retried: false)
+      def build_trace_entry(node_path, layer_index, result, started_at:, finished_at:, duration_ms:, input_keys:, status: nil, attempt: 1, retried: false)
         TraceEntry.new(
-          name: name, layer: layer_index,
+          name: trace_name_for(node_path), layer: layer_index,
           started_at: started_at, finished_at: finished_at,
           duration_ms: duration_ms,
           status: status || (result.success? ? :success : :failure),
@@ -423,9 +563,11 @@ module DAG
       # Predecessors always have a Result in `outputs` by the time we
       # resolve a downstream layer — skipped steps still record Success(nil).
       def resolve_condition_context(name, outputs, statuses)
-        @graph.each_predecessor(name).to_h do |dep|
+        dependency_context = @root_input.transform_values { |value| {value: value, status: :success} }
+
+        dependency_context.merge(@graph.each_predecessor(name).to_h do |dep|
           [dep, {value: outputs.fetch(dep).value, status: statuses.fetch(dep)}]
-        end
+        end)
       end
 
       def extract_input(condition_context)

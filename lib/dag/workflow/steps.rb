@@ -5,6 +5,7 @@ require_relative "steps/ruby_script"
 require_relative "steps/file_read"
 require_relative "steps/file_write"
 require_relative "steps/ruby"
+require_relative "steps/sub_workflow"
 
 module DAG
   module Workflow
@@ -55,6 +56,7 @@ module DAG
       register(:file_read, FileRead, yaml_safe: true)
       register(:file_write, FileWrite, yaml_safe: true)
       register(:ruby, Ruby, yaml_safe: false)
+      register(:sub_workflow, SubWorkflow, yaml_safe: false)
     end
   end
 end
