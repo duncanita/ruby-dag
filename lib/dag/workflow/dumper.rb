@@ -66,7 +66,7 @@ module DAG
               "reserved YAML key (#{RESERVED_YAML_KEYS.join(", ")}). " \
               "Rename the config key before dumping."
           end
-          node[key] = v
+          node[key] = dumpable_config_value(k, v)
         end
         deps = @graph.predecessors(name).to_a.sort
         unless deps.empty?
@@ -80,6 +80,32 @@ module DAG
           }
         end
         node
+      end
+
+      def dumpable_config_value(key, value)
+        case key.to_sym
+        when :schedule
+          dumpable_schedule(value)
+        else
+          value
+        end
+      end
+
+      def dumpable_schedule(value)
+        raise SerializationError, "schedule must be a mapping to dump as YAML" unless value.is_a?(Hash)
+
+        value.each_with_object({}) do |(key, nested), dumped|
+          dumped[key.to_s] = dumpable_schedule_value(nested)
+        end
+      end
+
+      def dumpable_schedule_value(value)
+        case value
+        when Time
+          value.utc.iso8601
+        else
+          value
+        end
       end
     end
   end
