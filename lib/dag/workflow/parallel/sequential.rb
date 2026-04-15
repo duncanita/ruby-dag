@@ -11,8 +11,8 @@ module DAG
       class Sequential < Strategy
         STRATEGY_SYM = :sequential
 
-        def initialize(max_parallelism: 1)
-          super(max_parallelism: 1)
+        def initialize(max_parallelism: 1, clock: Clock.new)
+          super(max_parallelism: 1, clock: clock)
         end
 
         def execute(tasks)

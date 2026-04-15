@@ -60,7 +60,7 @@ module DAG
             pushed = true
           ensure
             unless pushed
-              now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+              now = @clock.monotonic_now
               failure = Failure.new(error: {
                 code: :worker_died,
                 message: "worker for #{task.name} died without producing a result",
