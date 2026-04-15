@@ -205,6 +205,86 @@ class SubWorkflowTest < Minitest::Test
     assert_equal :sub_workflow_invalid_output_key, result.error[:step_error][:code]
   end
 
+  def test_sub_workflow_propagates_waiting_status_and_namespaced_waiting_nodes
+    clock = Struct.new(:wall_time, :mono_time) do
+      def wall_now = wall_time
+      def monotonic_now = mono_time
+    end.new(Time.utc(2026, 4, 15, 9, 0, 0), 0.0)
+    future_time = Time.utc(2026, 4, 15, 10, 0, 0)
+
+    child = DAG::Workflow::Loader.from_hash(
+      gated: {
+        type: :ruby,
+        schedule: {not_before: future_time},
+        callable: ->(_input) { DAG::Success.new(value: "later") }
+      }
+    )
+
+    parent = DAG::Workflow::Loader.from_hash(
+      fetch: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "hello") }
+      },
+      process: {
+        type: :sub_workflow,
+        definition: child,
+        depends_on: [:fetch]
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(parent, parallel: false, clock: clock).call
+
+    assert_equal :waiting, result.status
+    assert_equal "hello", result.outputs[:fetch].value
+    refute result.outputs.key?(:process)
+    assert_equal [[:process, :gated]], result.waiting_nodes
+    refute_includes result.trace.map(&:name), :process
+    refute_includes result.trace.map(&:name), :"process.gated"
+  end
+
+  def test_sub_workflow_propagates_paused_status_without_parent_output
+    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+
+    child = DAG::Workflow::Loader.from_hash(
+      inner_fetch: {
+        type: :ruby,
+        resume_key: "inner-fetch-v1",
+        callable: ->(_input) do
+          store.set_pause_flag(workflow_id: "wf-child-pause", paused: true)
+          DAG::Success.new(value: "raw")
+        end
+      },
+      inner_transform: {
+        type: :ruby,
+        depends_on: [:inner_fetch],
+        resume_key: "inner-transform-v1",
+        callable: ->(input) { DAG::Success.new(value: input[:inner_fetch].upcase) }
+      }
+    )
+
+    parent = DAG::Workflow::Loader.from_hash(
+      process: {
+        type: :sub_workflow,
+        definition: child,
+        output_key: :inner_transform,
+        resume_key: "process-v1"
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(parent,
+      parallel: false,
+      workflow_id: "wf-child-pause",
+      execution_store: store).call
+
+    assert_equal :paused, result.status
+    assert result.paused?
+    refute result.outputs.key?(:process)
+    assert_equal [], result.waiting_nodes
+    assert_includes result.trace.map(&:name), :"process.inner_fetch"
+    refute_includes result.trace.map(&:name), :process
+    refute_includes result.trace.map(&:name), :"process.inner_transform"
+  end
+
   def test_sub_workflow_uses_parent_context_and_execution_store_namespace
     child_calls = 0
     child = DAG::Workflow::Loader.from_hash(

@@ -326,7 +326,7 @@ milestone, not Feature 0.
 - Time-based tests can run against a fake clock without real sleeping.
 - Trace and node-path invariants hold across retries and nested sub-workflows.
 
-**Status:** `not-started` | **Complexity:** large
+**Status:** `partial` | **Complexity:** large
 
 ---
 
@@ -382,7 +382,7 @@ runner = Runner.new(definition, middleware: [DAG::Workflow::RetryMiddleware.new]
 - With `max_parallelism: 1`, a step in backoff prevents another runnable step
   from starting until that retry chain completes or fails.
 
-**Status:** `not-started` | **Priority:** high
+**Status:** `implemented` | **Priority:** high
 
 ---
 
@@ -443,7 +443,7 @@ Minimum `FileStore` guarantees in v1:
 - Expired reusable output is ignored.
 - Two runs with the same `workflow_id` but different graph structure do not silently share checkpoints.
 
-**Status:** `not-started` | **Priority:** high
+**Status:** `partial` | **Priority:** high
 
 ---
 
@@ -518,7 +518,7 @@ nodes:
 - Child persistence uses the same logical `workflow_id` as the parent run.
 - Inline `definition:` is rejected by YAML dumper.
 
-**Status:** `not-started` | **Priority:** high
+**Status:** `partial` | **Priority:** high
 
 ---
 
@@ -560,7 +560,7 @@ end
   present and no explicit context-serialization strategy exists.
 - Built-in steps that do not accept context still run unchanged.
 
-**Status:** `not-started` | **Priority:** high
+**Status:** `implemented` | **Priority:** high
 
 ---
 
@@ -606,7 +606,7 @@ runner = Runner.new(definition, clock: my_clock)
 - `cron` metadata round-trips through Loader/Dumper for YAML-safe step types.
 - Scheduling tests can run against a fake clock without real sleeping.
 
-**Status:** `not-started` | **Priority:** medium
+**Status:** `partial` | **Priority:** medium
 
 ---
 
@@ -933,7 +933,7 @@ result = Runner.new(definition,
 - Resume does not rerun completed nodes.
 - A paused workflow can later move to `:completed`, `:failed`, or `:waiting`.
 
-**Status:** `not-started` | **Priority:** medium
+**Status:** `implemented` | **Priority:** medium
 
 ---
 
@@ -992,7 +992,7 @@ runner = Runner.new(definition,
 - Short-circuit middleware still produces valid trace/state transitions.
 - Non-`DAG::Result` middleware returns are treated as contract violations.
 
-**Status:** `not-started` | **Priority:** medium
+**Status:** `implemented` | **Priority:** medium
 
 ---
 
@@ -1004,24 +1004,24 @@ The feature table below assumes Milestone 0 has landed first.
 
 | Milestone | Scope | Status | Complexity |
 |-----------|-------|--------|------------|
-| 0 | `RunResult`, `ExecutionStore`, fingerprinting, `Clock`, middleware handoff | `not-started` | large |
+| 0 | `RunResult`, `ExecutionStore`, fingerprinting, `Clock`, middleware handoff | `partial` | large |
 
 ### Feature summary
 
 | # | Feature | Priority | Status | Complexity |
 |---|---------|----------|--------|------------|
-| 1 | Step retry with backoff | high | `not-started` | small |
-| 2 | Checkpointing and resume | high | `not-started` | medium |
-| 3 | Sub-workflow composition | high | `not-started` | medium |
-| 4 | Runner context injection | high | `not-started` | small |
-| 5 | Node scheduling constraints | medium | `not-started` | medium |
+| 1 | Step retry with backoff | high | `implemented` | small |
+| 2 | Checkpointing and resume | high | `partial` | medium |
+| 3 | Sub-workflow composition | high | `partial` | medium |
+| 4 | Runner context injection | high | `implemented` | small |
+| 5 | Node scheduling constraints | medium | `partial` | medium |
 | 6 | Versioned step outputs | medium | `not-started` | medium |
 | 7 | Invalidation cascade | medium | `not-started` | small |
 | 8 | Dynamic graph mutation | medium | `not-started` | large |
 | 9 | Event emission from steps | low | `not-started` | small |
 | 10 | Cross-workflow dependencies | low | `not-started` | medium |
-| 11 | Pause and resume | medium | `not-started` | medium |
-| 12 | Step middleware | medium | `not-started` | small |
+| 11 | Pause and resume | medium | `implemented` | medium |
+| 12 | Step middleware | medium | `implemented` | small |
 
 ## Dependency graph
 

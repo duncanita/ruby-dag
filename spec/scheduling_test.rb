@@ -66,6 +66,67 @@ class SchedulingTest < Minitest::Test
     assert_equal [[:scheduled]], result.waiting_nodes
   end
 
+  def test_waiting_nodes_do_not_stop_independent_runnable_future_layers
+    clock = FakeClock.new(Time.utc(2026, 4, 15, 9, 0, 0), 0.0)
+    future_time = Time.utc(2026, 4, 15, 10, 0, 0)
+
+    definition = DAG::Workflow::Loader.from_hash(
+      gated: {
+        type: :ruby,
+        schedule: {not_before: future_time},
+        callable: ->(_input) { DAG::Success.new(value: "later") }
+      },
+      fetch: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "ready") }
+      },
+      transform: {
+        type: :ruby,
+        depends_on: [:fetch],
+        callable: ->(input) { DAG::Success.new(value: input[:fetch].upcase) }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(definition, parallel: false, clock: clock).call
+
+    assert_equal :waiting, result.status
+    assert_equal "ready", result.outputs[:fetch].value
+    assert_equal "READY", result.outputs[:transform].value
+    refute result.outputs.key?(:gated)
+    assert_equal [[:gated]], result.waiting_nodes
+  end
+
+  def test_failure_takes_precedence_over_waiting_and_clears_waiting_nodes
+    clock = FakeClock.new(Time.utc(2026, 4, 15, 9, 0, 0), 0.0)
+    future_time = Time.utc(2026, 4, 15, 10, 0, 0)
+
+    definition = DAG::Workflow::Loader.from_hash(
+      gated: {
+        type: :ruby,
+        schedule: {not_before: future_time},
+        callable: ->(_input) { DAG::Success.new(value: "later") }
+      },
+      fetch: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "ready") }
+      },
+      explode: {
+        type: :ruby,
+        depends_on: [:fetch],
+        callable: ->(_input) { DAG::Failure.new(error: {code: :boom, message: "explode"}) }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(definition, parallel: false, clock: clock).call
+
+    assert_equal :failed, result.status
+    assert_equal :explode, result.error[:failed_node]
+    assert_equal [], result.waiting_nodes
+    assert_equal "ready", result.outputs[:fetch].value
+    refute result.outputs.key?(:explode)
+    refute result.outputs.key?(:gated)
+  end
+
   def test_not_before_run_completes_after_clock_advances_past_gate
     clock = FakeClock.new(Time.utc(2026, 4, 15, 9, 0, 0), 0.0)
     future_time = Time.utc(2026, 4, 15, 10, 0, 0)
