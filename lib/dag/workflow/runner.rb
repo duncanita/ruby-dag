@@ -52,6 +52,11 @@ module DAG
         @workflow_id = workflow_id
         @execution_store = execution_store
         @node_path_prefix = Array(node_path_prefix).map(&:to_sym).freeze
+        @execution_persistence = ExecutionPersistence.new(
+          execution_store: @execution_store,
+          workflow_id: @workflow_id,
+          node_path_prefix: @node_path_prefix
+        )
         @root_input = root_input.transform_keys(&:to_sym).freeze
         @register_execution_store = register_execution_store
         validate_context_parallelism!(parallel, context)
@@ -194,7 +199,7 @@ module DAG
       end
 
       def build_run_result(outputs, trace, status, error, waiting_nodes)
-        @execution_store&.set_workflow_status(workflow_id: @workflow_id, status: status, waiting_nodes: waiting_nodes)
+        @execution_persistence.set_workflow_status(status: status, waiting_nodes: waiting_nodes)
 
         RunResult.new(
           status: status,
@@ -243,14 +248,14 @@ module DAG
 
             if schedule_policy.waiting?
               waiting_nodes << node_path_for(name)
-              persist_waiting_node(name)
+              @execution_persistence.persist_waiting_node(name)
             elsif schedule_policy.expired?
               result = schedule_policy.deadline_exceeded_result(name)
-              persist_expired_schedule_node(name, result.error)
+              @execution_persistence.persist_expired_schedule_node(name, result.error)
               immediate_results << [name, result, input_keys, nil]
             elsif skip?(step, condition_context)
               immediate_results << [name, record_skip_result, input_keys, :skipped]
-            elsif (reused_result = load_reusable_result(name))
+            elsif (reused_result = @execution_persistence.load_reusable_result(name))
               immediate_results << [name, reused_result, input_keys, :success]
             else
               execution = build_step_execution(name, current_attempt: 1, deadline: deadline)
@@ -290,7 +295,7 @@ module DAG
           entries = build_trace_entries_for_task(task, layer_index, result,
             started_at: started_at, finished_at: finished_at, duration_ms: duration_ms)
           trace.concat(entries)
-          persist_step_result!(task, result, entries)
+          @execution_persistence.persist_step_result(task, result, entries, skip_result: !lifecycle.nil?)
 
           if lifecycle
             waiting_nodes.concat(lifecycle[:waiting_nodes]) if lifecycle[:status] == :waiting
@@ -590,7 +595,7 @@ module DAG
       def record_skip_result = Success.new(value: nil)
 
       def node_path_for(name)
-        @node_path_prefix + [name.to_sym]
+        @execution_persistence.node_path_for(name)
       end
 
       def trace_name_for(node_path)
@@ -601,30 +606,7 @@ module DAG
       end
 
       def pause_requested?
-        @execution_store && @workflow_id && @execution_store.load_run(@workflow_id)&.fetch(:paused, false)
-      end
-
-      def persist_waiting_node(name)
-        return unless @execution_store && @workflow_id
-
-        @execution_store.set_node_state(
-          workflow_id: @workflow_id,
-          node_path: node_path_for(name),
-          state: :waiting,
-          metadata: {}
-        )
-      end
-
-      def persist_expired_schedule_node(name, error)
-        return unless @execution_store && @workflow_id
-
-        @execution_store.set_node_state(
-          workflow_id: @workflow_id,
-          node_path: node_path_for(name),
-          state: :failed,
-          reason: error,
-          metadata: {}
-        )
+        @execution_persistence.pause_requested?
       end
 
       def blank?(value)
@@ -639,42 +621,6 @@ module DAG
 
       def dependency_outputs_ready?(name, outputs)
         @graph.each_predecessor(name).all? { |dep| outputs.key?(dep) }
-      end
-
-      def load_reusable_result(name)
-        return nil unless @execution_store
-
-        stored = @execution_store.load_output(workflow_id: @workflow_id, node_path: node_path_for(name))
-        stored && stored[:result]
-      end
-
-      def persist_step_result!(task, result, entries)
-        return unless @execution_store
-        return if sub_workflow_lifecycle_payload(result)
-
-        entries.each do |entry|
-          @execution_store.append_trace(workflow_id: @workflow_id, entry: entry)
-        end
-
-        if result.success?
-          @execution_store.set_node_state(workflow_id: @workflow_id, node_path: task.execution.node_path, state: :completed)
-          @execution_store.save_output(
-            workflow_id: @workflow_id,
-            node_path: task.execution.node_path,
-            version: task.execution.attempt,
-            result: result,
-            reusable: true,
-            superseded: false
-          )
-        else
-          @execution_store.set_node_state(
-            workflow_id: @workflow_id,
-            node_path: task.execution.node_path,
-            state: :failed,
-            reason: result.error,
-            metadata: {}
-          )
-        end
       end
 
       def build_trace_entries_for_task(task, layer_index, result, started_at:, finished_at:, duration_ms:)
