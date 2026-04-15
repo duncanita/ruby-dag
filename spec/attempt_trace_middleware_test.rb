@@ -20,13 +20,12 @@ class AttemptTraceMiddlewareTest < Minitest::Test
 
     assert result.success?
     assert_equal 1, events.size
-    assert_equal 2, events.first[:attempt]
-    assert_equal [:demo], events.first[:node_path]
-    assert_equal 10.0, events.first[:started_at]
-    assert_equal 10.25, events.first[:finished_at]
-    assert_equal 250.0, events.first[:duration_ms]
-    assert_equal :success, events.first[:status]
-    assert_equal false, events.first[:retried]
+    assert_equal 2, events.first.attempt
+    assert_equal [:demo], events.first.node_path
+    assert_equal 10.0, events.first.started_at
+    assert_equal 10.25, events.first.finished_at
+    assert_equal 250.0, events.first.duration_ms
+    assert_equal :success, events.first.status
   end
 
   def test_records_failure_attempt_into_execution_event_bus
@@ -44,8 +43,8 @@ class AttemptTraceMiddlewareTest < Minitest::Test
 
     assert result.failure?
     assert_equal 1, events.size
-    assert_equal :failure, events.first[:status]
-    assert_equal 100.0, events.first[:duration_ms]
+    assert_equal :failure, events.first.status
+    assert_equal 100.0, events.first.duration_ms
   end
 
   def test_skips_lifecycle_payload_results

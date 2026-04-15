@@ -37,21 +37,37 @@ module DAG
             input_keys: task.input_keys)]
         end
 
-        task.attempt_log.each_with_index.map do |entry, index|
-          next entry if entry.is_a?(TraceEntry)
-
-          build_trace_entry(entry[:node_path] || task.execution.node_path, layer_index, result,
-            started_at: entry[:started_at],
-            finished_at: entry[:finished_at],
-            duration_ms: entry[:duration_ms],
-            input_keys: entry[:input_keys] || task.input_keys,
-            status: entry[:status],
-            attempt: entry[:attempt],
-            retried: index < (task.attempt_log.length - 1))
+        attempt_entries, passthrough_entries = partition_attempt_entries(task.attempt_log)
+        attempt_trace = attempt_entries.each_with_index.map do |entry, index|
+          build_trace_entry(entry.node_path, layer_index, result,
+            started_at: entry.started_at,
+            finished_at: entry.finished_at,
+            duration_ms: entry.duration_ms,
+            input_keys: task.input_keys,
+            status: entry.status,
+            attempt: entry.attempt,
+            retried: index < (attempt_entries.length - 1))
         end
+
+        attempt_trace + passthrough_entries
       end
 
       private
+
+      def partition_attempt_entries(entries)
+        attempt_entries = []
+        passthrough_entries = []
+
+        entries.each do |entry|
+          if entry.is_a?(AttemptTraceEntry)
+            attempt_entries << entry
+          else
+            passthrough_entries << entry
+          end
+        end
+
+        [attempt_entries, passthrough_entries]
+      end
 
       def build_trace_entry(node_path, layer_index, result, started_at:, finished_at:, duration_ms:, input_keys:, status: nil, attempt: 1, retried: false)
         TraceEntry.new(

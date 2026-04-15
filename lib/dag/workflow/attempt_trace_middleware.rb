@@ -21,15 +21,14 @@ module DAG
       def append_attempt_trace(execution, result, started_at:, finished_at:)
         return if lifecycle_payload?(result)
 
-        Array(execution.event_bus) << {
-          attempt: execution.attempt,
+        Array(execution.event_bus) << AttemptTraceEntry.new(
           node_path: execution.node_path,
           started_at: started_at,
           finished_at: finished_at,
           duration_ms: ((finished_at - started_at) * 1000).round(2),
           status: result.success? ? :success : :failure,
-          retried: false
-        }
+          attempt: execution.attempt
+        )
       end
 
       def lifecycle_payload?(result)
