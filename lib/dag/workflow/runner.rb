@@ -135,6 +135,7 @@ module DAG
         trace = []
         failed_name = nil
         failed_result = nil
+        paused = false
 
         layers.each_with_index do |layer, layer_index|
           break if failed_name
@@ -149,6 +150,11 @@ module DAG
             break
           end
 
+          if pause_requested?
+            paused = true
+            break
+          end
+
           execute_layer(layer, layer_index, outputs, statuses, trace, deadline).each do |name, result|
             outputs[name] = result
             if result.failure? && failed_name.nil?
@@ -158,8 +164,16 @@ module DAG
           end
         end
 
+        status = if failed_name
+          :failed
+        elsif paused
+          :paused
+        else
+          :completed
+        end
+
         build_run_result(outputs, trace,
-          failed_name ? :failed : :completed,
+          status,
           failed_name ? {failed_node: failed_name, step_error: failed_result.error} : nil)
       end
 
@@ -509,6 +523,10 @@ module DAG
         return path.first if path.length == 1
 
         path.join(".").to_sym
+      end
+
+      def pause_requested?
+        @execution_store && @workflow_id && @execution_store.load_run(@workflow_id)&.fetch(:paused, false)
       end
 
       def blank?(value)

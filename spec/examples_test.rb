@@ -56,6 +56,23 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Stored YAML child output: yaml-grandchild"
   end
 
+  def test_pause_resume_example_executes_successfully
+    stdout, stderr, status = run_example("examples/pause_resume.rb")
+
+    assert status.success?, <<~MSG
+      expected pause_resume example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== First Run (pause requested) ==="
+    assert_includes stdout, "Status: paused"
+    assert_includes stdout, "=== Second Run (resume) ==="
+    assert_includes stdout, "Fetch calls: 1"
+  end
+
   private
 
   def run_example(path)
