@@ -239,11 +239,13 @@ module DAG
           input_keys = input.keys.sort
 
           begin
-            if waiting_for_schedule?(step)
+            schedule_policy = SchedulePolicy.new(step, clock: @clock)
+
+            if schedule_policy.waiting?
               waiting_nodes << node_path_for(name)
               persist_waiting_node(name)
-            elsif schedule_expired?(step)
-              result = schedule_deadline_exceeded_result(name, normalized_not_after(step))
+            elsif schedule_policy.expired?
+              result = schedule_policy.deadline_exceeded_result(name)
               persist_expired_schedule_node(name, result.error)
               immediate_results << [name, result, input_keys, nil]
             elsif skip?(step, condition_context)
@@ -600,44 +602,6 @@ module DAG
 
       def pause_requested?
         @execution_store && @workflow_id && @execution_store.load_run(@workflow_id)&.fetch(:paused, false)
-      end
-
-      def waiting_for_schedule?(step)
-        not_before = normalized_not_before(step)
-        not_before && @clock.wall_now < not_before
-      end
-
-      def schedule_expired?(step)
-        not_after = normalized_not_after(step)
-        not_after && @clock.wall_now > not_after
-      end
-
-      def normalized_not_before(step)
-        normalized_schedule_time(step, :not_before)
-      end
-
-      def normalized_not_after(step)
-        normalized_schedule_time(step, :not_after)
-      end
-
-      def normalized_schedule_time(step, key)
-        raw = step.config.dig(:schedule, key)
-        case raw
-        when nil
-          nil
-        when Time
-          raw
-        else
-          Time.parse(raw.to_s)
-        end
-      end
-
-      def schedule_deadline_exceeded_result(name, not_after)
-        Failure.new(error: {
-          code: :deadline_exceeded,
-          message: "step #{name} missed schedule.not_after #{not_after.utc.iso8601}",
-          not_after: not_after.utc.iso8601
-        })
       end
 
       def persist_waiting_node(name)
