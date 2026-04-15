@@ -73,6 +73,23 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Fetch calls: 1"
   end
 
+  def test_waiting_not_before_example_executes_successfully
+    stdout, stderr, status = run_example("examples/waiting_not_before.rb")
+
+    assert status.success?, <<~MSG
+      expected waiting_not_before example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== First Run (waiting) ==="
+    assert_includes stdout, "Status: waiting"
+    assert_includes stdout, "=== Second Run (ready) ==="
+    assert_includes stdout, "Outputs: {fetch: \"ready\", scheduled: \"READY\"}"
+  end
+
   private
 
   def run_example(path)

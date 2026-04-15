@@ -231,6 +231,40 @@ Notes:
 - changing the workflow fingerprint for an existing `workflow_id` raises `DAG::ValidationError` before any step runs
 - see `examples/checkpoint_resume.rb` for a runnable end-to-end example that is exercised in the test suite
 
+### Waiting and not_before scheduling
+
+Scheduling is eligibility-based. The runner does not sleep: if a node has a
+future `schedule[:not_before]`, it becomes waiting and the run returns
+`status: :waiting` once no runnable work remains.
+
+```ruby
+clock = Struct.new(:wall_time, :mono_time) do
+  def wall_now = wall_time
+  def monotonic_now = mono_time
+  def advance(seconds) = self.wall_time += seconds
+end.new(Time.utc(2026, 4, 15, 9, 0, 0), 0.0)
+
+store = DAG::Workflow::ExecutionStore::MemoryStore.new
+result = DAG::Workflow::Runner.new(definition,
+  parallel: false,
+  clock: clock,
+  workflow_id: "demo-waiting",
+  execution_store: store).call
+
+clock.advance(3600)
+result = DAG::Workflow::Runner.new(definition,
+  parallel: false,
+  clock: clock,
+  workflow_id: "demo-waiting",
+  execution_store: store).call
+```
+
+Notes:
+- `schedule[:not_before]` uses `clock.wall_now`
+- waiting nodes do not emit `Success(nil)` outputs
+- waiting runs persist `workflow_status: :waiting` plus `waiting_nodes` in the execution store
+- see `examples/waiting_not_before.rb` for a runnable example exercised in the test suite
+
 ### Pause and resume
 
 Pause is coordinator-driven through the execution store. The runner checks the
