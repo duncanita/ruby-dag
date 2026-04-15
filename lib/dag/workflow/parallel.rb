@@ -17,7 +17,11 @@ module DAG
       #
       # `input_keys` is carried so the Runner can build the trace entry without
       # needing to re-resolve inputs after the strategy returns.
-      Task = Data.define(:name, :step, :input, :attempt, :execution, :input_keys)
+      Task = Data.define(:name, :step, :input, :attempt, :execution, :input_keys, :attempt_log) do
+        def initialize(name:, step:, input:, attempt:, execution:, input_keys:, attempt_log: [])
+          super
+        end
+      end
     end
   end
 end

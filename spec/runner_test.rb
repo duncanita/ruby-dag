@@ -798,7 +798,7 @@ class RunnerTest < Minitest::Test
       def monotonic_now
         @times.shift || @times.last || 0.0
       end
-    end.new([0.0, 0.0, 0.0, 0.0, 1.0])
+    end.new([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
 
     defn = build_test_workflow(
       first: {type: :ruby, callable: ->(_) { DAG::Success.new(value: "done") }},
