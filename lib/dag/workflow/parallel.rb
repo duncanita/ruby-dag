@@ -10,13 +10,14 @@ module DAG
     # The Runner stays out of concurrency concerns; the Strategy stays out of
     # graph + trace concerns. Strategies only see Tasks and yield results.
     module Parallel
-      # Unit of work for a strategy. The strategy must:
-      #   1. Call `executor_class.new.call(step, input)`
-      #   2. Yield back the resulting Result with timing info
+      # Unit of work for a strategy. The Runner prepares one fully-composed
+      # attempt callable per task, including executor dispatch and any middleware.
+      # The strategy's only job is to execute that attempt and yield the resulting
+      # Result with timing info.
       #
       # `input_keys` is carried so the Runner can build the trace entry without
       # needing to re-resolve inputs after the strategy returns.
-      Task = Data.define(:name, :step, :input, :executor_class, :input_keys)
+      Task = Data.define(:name, :step, :input, :attempt, :execution, :input_keys)
     end
   end
 end

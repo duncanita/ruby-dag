@@ -424,8 +424,12 @@ class ParallelTest < Minitest::Test
     steps = [fast, slow_term_resistant.call(:slow1), slow_term_resistant.call(:slow2)]
     tasks = steps.map do |step|
       DAG::Workflow::Parallel::Task.new(
-        name: step.name, step: step, input: {},
-        executor_class: DAG::Workflow::Steps::Ruby, input_keys: []
+        name: step.name,
+        step: step,
+        input: {},
+        attempt: -> { DAG::Workflow::Steps::Ruby.new.call(step, {}) },
+        execution: nil,
+        input_keys: []
       )
     end
 
@@ -449,18 +453,14 @@ class ParallelTest < Minitest::Test
   end
 
   def test_strategy_run_task_wraps_step_exceptions_into_failure
-    # Use a custom executor class whose #call raises directly. The built-in
-    # :ruby step rescues its own exceptions, so it never reaches the
-    # Strategy.run_task rescue clause.
-    raising_executor = Class.new do
-      def call(_step, _input)
-        raise "executor kaboom"
-      end
-    end
     step = DAG::Workflow::Step.new(name: :crash, type: :exec, command: "")
     task = DAG::Workflow::Parallel::Task.new(
-      name: :crash, step: step, input: {},
-      executor_class: raising_executor, input_keys: []
+      name: :crash,
+      step: step,
+      input: {},
+      attempt: -> { raise "executor kaboom" },
+      execution: nil,
+      input_keys: []
     )
     strategy = DAG::Workflow::Parallel::Sequential.new
     name, result, _started, _finished, _duration = strategy.run_task(task)
@@ -486,8 +486,12 @@ class ParallelTest < Minitest::Test
     step = DAG::Workflow::Step.new(name: :ok, type: :ruby,
       callable: ->(_) { DAG::Success.new(value: "done") })
     task = DAG::Workflow::Parallel::Task.new(
-      name: :ok, step: step, input: {},
-      executor_class: DAG::Workflow::Steps::Ruby, input_keys: []
+      name: :ok,
+      step: step,
+      input: {},
+      attempt: -> { DAG::Workflow::Steps::Ruby.new.call(step, {}) },
+      execution: nil,
+      input_keys: []
     )
 
     strategy = DAG::Workflow::Parallel::Sequential.new(clock: fake_clock)
