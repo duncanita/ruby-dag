@@ -242,6 +242,10 @@ module DAG
             if waiting_for_schedule?(step)
               waiting_nodes << node_path_for(name)
               persist_waiting_node(name)
+            elsif schedule_expired?(step)
+              result = schedule_deadline_exceeded_result(name, normalized_not_after(step))
+              persist_expired_schedule_node(name, result.error)
+              immediate_results << [name, result, input_keys, nil]
             elsif skip?(step, condition_context)
               immediate_results << [name, record_skip_result, input_keys, :skipped]
             elsif (reused_result = load_reusable_result(name))
@@ -603,8 +607,21 @@ module DAG
         not_before && @clock.wall_now < not_before
       end
 
+      def schedule_expired?(step)
+        not_after = normalized_not_after(step)
+        not_after && @clock.wall_now > not_after
+      end
+
       def normalized_not_before(step)
-        raw = step.config.dig(:schedule, :not_before)
+        normalized_schedule_time(step, :not_before)
+      end
+
+      def normalized_not_after(step)
+        normalized_schedule_time(step, :not_after)
+      end
+
+      def normalized_schedule_time(step, key)
+        raw = step.config.dig(:schedule, key)
         case raw
         when nil
           nil
@@ -615,6 +632,14 @@ module DAG
         end
       end
 
+      def schedule_deadline_exceeded_result(name, not_after)
+        Failure.new(error: {
+          code: :deadline_exceeded,
+          message: "step #{name} missed schedule.not_after #{not_after.utc.iso8601}",
+          not_after: not_after.utc.iso8601
+        })
+      end
+
       def persist_waiting_node(name)
         return unless @execution_store && @workflow_id
 
@@ -622,6 +647,18 @@ module DAG
           workflow_id: @workflow_id,
           node_path: node_path_for(name),
           state: :waiting,
+          metadata: {}
+        )
+      end
+
+      def persist_expired_schedule_node(name, error)
+        return unless @execution_store && @workflow_id
+
+        @execution_store.set_node_state(
+          workflow_id: @workflow_id,
+          node_path: node_path_for(name),
+          state: :failed,
+          reason: error,
           metadata: {}
         )
       end

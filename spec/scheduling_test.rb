@@ -164,4 +164,68 @@ class SchedulingTest < Minitest::Test
     assert_equal "done", second.outputs[:scheduled].value
     assert_equal 1, calls
   end
+
+  def test_not_after_fails_before_executing_late_work
+    clock = FakeClock.new(Time.utc(2026, 4, 15, 10, 0, 1), 0.0)
+    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    calls = 0
+
+    definition = DAG::Workflow::Loader.from_hash(
+      scheduled: {
+        type: :ruby,
+        resume_key: "scheduled-v1",
+        schedule: {not_after: Time.utc(2026, 4, 15, 10, 0, 0)},
+        callable: ->(_input) do
+          calls += 1
+          DAG::Success.new(value: "too-late")
+        end
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      clock: clock,
+      workflow_id: "wf-not-after",
+      execution_store: store).call
+
+    assert_equal :failed, result.status
+    assert_equal :scheduled, result.error[:failed_node]
+    assert_equal :deadline_exceeded, result.error[:step_error][:code]
+    assert_match(/schedule\.not_after/, result.error[:step_error][:message])
+    assert_equal [], result.waiting_nodes
+    refute result.outputs.key?(:scheduled)
+    assert_equal 0, calls
+
+    run = store.load_run("wf-not-after")
+    node = store.load_node(workflow_id: "wf-not-after", node_path: [:scheduled])
+    assert_equal :failed, run[:workflow_status]
+    assert_equal :failed, node[:state]
+    assert_equal :deadline_exceeded, node[:reason][:code]
+  end
+
+  def test_not_after_failure_wins_over_waiting_nodes
+    clock = FakeClock.new(Time.utc(2026, 4, 15, 10, 0, 1), 0.0)
+
+    definition = DAG::Workflow::Loader.from_hash(
+      waiting: {
+        type: :ruby,
+        schedule: {not_before: Time.utc(2026, 4, 15, 11, 0, 0)},
+        callable: ->(_input) { DAG::Success.new(value: "later") }
+      },
+      expired: {
+        type: :ruby,
+        schedule: {not_after: Time.utc(2026, 4, 15, 10, 0, 0)},
+        callable: ->(_input) { DAG::Success.new(value: "too-late") }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(definition, parallel: false, clock: clock).call
+
+    assert_equal :failed, result.status
+    assert_equal :expired, result.error[:failed_node]
+    assert_equal :deadline_exceeded, result.error[:step_error][:code]
+    assert_equal [], result.waiting_nodes
+    refute result.outputs.key?(:waiting)
+    refute result.outputs.key?(:expired)
+  end
 end
