@@ -122,7 +122,9 @@ class ExamplesTest < Minitest::Test
     MSG
 
     assert_includes stdout, "=== Dumped Schedule Metadata ==="
-    assert_includes stdout, '"not_before" => "2026-04-15T10:00:00Z"'
+    assert_includes stdout, "2026-04-15T10:00:00Z"
+    assert_includes stdout, "2026-04-15T11:00:00Z"
+    assert_includes stdout, "0 * * * *"
     assert_includes stdout, "=== Loaded Schedule Metadata ==="
     assert_includes stdout, "Status: waiting"
     assert_includes stdout, "Status: completed"
