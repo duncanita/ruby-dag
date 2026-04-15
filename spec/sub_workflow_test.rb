@@ -457,4 +457,45 @@ class SubWorkflowTest < Minitest::Test
       assert_equal "stored-child", store.load_output(workflow_id: "wf-yaml-sub", node_path: [:process, :summarize])[:result].value
     end
   end
+
+  def test_sub_workflow_parent_status_remains_success_when_child_trace_ends_with_skipped_entry
+    child = DAG::Workflow::Loader.from_hash(
+      prep: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "ready") }
+      },
+      done: {
+        type: :ruby,
+        depends_on: [:prep],
+        callable: ->(_input) { DAG::Success.new(value: "done") }
+      },
+      final_skip: {
+        type: :ruby,
+        depends_on: [:done],
+        run_if: {from: :done, value: {equals: "nope"}},
+        callable: ->(_input) { DAG::Success.new(value: "skip-me") }
+      }
+    )
+
+    parent = DAG::Workflow::Loader.from_hash(
+      process: {
+        type: :sub_workflow,
+        definition: child
+      },
+      downstream: {
+        type: :ruby,
+        depends_on: [:process],
+        run_if: {from: :process, status: :success},
+        callable: ->(input) { DAG::Success.new(value: input[:process]) }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(parent, parallel: false).call
+
+    assert_equal :completed, result.status
+    assert_equal({final_skip: nil}, result.outputs[:process].value)
+    assert_equal({final_skip: nil}, result.outputs[:downstream].value)
+    assert_equal :success, result.trace.find { |entry| entry.name == :process }.status
+    assert_equal :success, result.trace.find { |entry| entry.name == :downstream }.status
+  end
 end

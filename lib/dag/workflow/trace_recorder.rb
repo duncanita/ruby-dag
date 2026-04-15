@@ -52,6 +52,14 @@ module DAG
         attempt_trace + passthrough_entries
       end
 
+      def observed_status_for_task(task:, result:, entries:)
+        task_name = trace_name_for(task.execution.node_path)
+        task_entries = entries.select { |entry| entry.name == task_name }
+        return task_entries.last.status if task_entries.any?
+
+        result.success? ? :success : :failure
+      end
+
       private
 
       def partition_attempt_entries(entries)

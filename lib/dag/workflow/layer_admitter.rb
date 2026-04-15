@@ -22,11 +22,15 @@ module DAG
           next unless dependency_outputs_ready?(name, previous_outputs)
 
           step = @registry[name]
-          condition_context = resolve_condition_context(name, previous_outputs, statuses)
 
           begin
+            input_keys = @dependency_input_resolver.input_keys_for(name: name, step: step)
+            if skip?(step, build_condition_context(name, step, previous_outputs, statuses))
+              immediate_results << ImmediateResult.new(name: name, result: record_skip_result, input_keys: input_keys, status: :skipped)
+              next
+            end
+
             input = @dependency_input_resolver.resolve(name: name, step: step, outputs: previous_outputs)
-            input_keys = input.keys.sort
             schedule_policy = SchedulePolicy.new(step, clock: @clock)
 
             if schedule_policy.waiting?
@@ -36,8 +40,6 @@ module DAG
               result = schedule_policy.deadline_exceeded_result(name)
               @execution_persistence.persist_expired_schedule_node(name, result.error)
               immediate_results << ImmediateResult.new(name: name, result: result, input_keys: input_keys, status: nil)
-            elsif skip?(step, condition_context)
-              immediate_results << ImmediateResult.new(name: name, result: record_skip_result, input_keys: input_keys, status: :skipped)
             elsif (reused_result = @execution_persistence.load_reusable_result(name))
               immediate_results << ImmediateResult.new(name: name, result: reused_result, input_keys: input_keys, status: :success)
             else
@@ -88,7 +90,15 @@ module DAG
         @graph.each_predecessor(name).all? { |dep| outputs.key?(dep) }
       end
 
-      def resolve_condition_context(name, outputs, statuses)
+      def build_condition_context(name, step, outputs, statuses)
+        if Condition.callable?(step.config[:run_if])
+          basic_condition_context(name, outputs, statuses)
+        else
+          @dependency_input_resolver.condition_context_for(name: name, outputs: outputs, statuses: statuses)
+        end
+      end
+
+      def basic_condition_context(name, outputs, statuses)
         dependency_context = @root_input.transform_values { |value| {value: value, status: :success} }
 
         dependency_context.merge(@graph.each_predecessor(name).to_h do |dep|

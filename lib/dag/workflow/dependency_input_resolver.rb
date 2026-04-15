@@ -31,6 +31,24 @@ module DAG
         input
       end
 
+      def input_keys_for(name:, step:)
+        keys = @root_input.keys
+        keys += local_dependencies_for(name).map(&:input_key)
+        keys += external_dependencies_for(step).map(&:input_key)
+        keys.map(&:to_sym).uniq.sort
+      end
+
+      def condition_context_for(name:, outputs:, statuses:)
+        dependency_context = @root_input.transform_values { |value| {value: value, status: :success} }
+
+        dependency_context.merge(local_dependencies_for(name).to_h do |dependency|
+          [dependency.name, {
+            value: condition_value_for_local_dependency(dependency, outputs),
+            status: condition_status_for_local_dependency(dependency, statuses)
+          }]
+        end)
+      end
+
       private
 
       LocalDependency = Data.define(:name, :input_key, :version, :node_path)
@@ -80,6 +98,16 @@ module DAG
 
           stored[:result].value
         end
+      end
+
+      def condition_value_for_local_dependency(dependency, outputs)
+        resolve_local_dependency_value(dependency, outputs)
+      end
+
+      def condition_status_for_local_dependency(dependency, statuses)
+        return statuses.fetch(dependency.name) if dependency.version == :latest
+
+        :success
       end
 
       def resolve_external_dependency_value(dependency)

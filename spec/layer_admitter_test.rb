@@ -175,4 +175,103 @@ class LayerAdmitterTest < Minitest::Test
     assert_equal [[:consumer]], partition.waiting_nodes
     assert_equal :waiting, store.load_run("wf-layer-waiting")[:nodes][[:consumer]][:state]
   end
+
+  def test_call_skips_before_resolving_missing_cross_workflow_dependency_when_run_if_is_false
+    store = build_memory_store
+    definition = build_test_workflow(
+      consumer: {
+        type: :ruby,
+        run_if: ->(_ctx) { false },
+        depends_on: [{workflow: "pipeline-a", node: :validated_output, version: 2, as: :validated}],
+        callable: ->(input) { DAG::Success.new(value: input[:validated]) }
+      }
+    )
+
+    store.begin_run(
+      workflow_id: "wf-layer-skip-first",
+      definition_fingerprint: "fp-layer-skip-first",
+      node_paths: [[:consumer]]
+    )
+
+    resolver_calls = 0
+    admitter = DAG::Workflow::LayerAdmitter.new(
+      graph: definition.graph,
+      registry: definition.registry,
+      clock: build_clock,
+      execution_persistence: DAG::Workflow::ExecutionPersistence.new(
+        execution_store: store,
+        workflow_id: "wf-layer-skip-first",
+        registry: definition.registry,
+        clock: build_clock
+      ),
+      dependency_input_resolver: DAG::Workflow::DependencyInputResolver.new(
+        graph: definition.graph,
+        execution_store: store,
+        workflow_id: "wf-layer-skip-first",
+        cross_workflow_resolver: lambda do |*_args|
+          resolver_calls += 1
+          nil
+        end
+      ),
+      root_input: {},
+      task_builder: ->(**_kwargs) { flunk "task_builder should not be called" }
+    )
+
+    partition = admitter.call(layer: [:consumer], previous_outputs: {}, statuses: {}, deadline: nil)
+
+    assert_equal 0, resolver_calls
+    assert_empty partition.runnable
+    assert_empty partition.waiting_nodes
+    assert_equal [:consumer], partition.immediate_results.map(&:name)
+    assert_equal [:skipped], partition.immediate_results.map(&:status)
+  end
+
+  def test_call_uses_effective_versioned_dependency_values_for_run_if_context
+    store = build_memory_store
+    clock = build_clock
+    source_calls = 0
+    definition = build_test_workflow(
+      source: {
+        type: :ruby,
+        resume_key: "source-v1",
+        schedule: {ttl: 1},
+        callable: ->(_input) do
+          source_calls += 1
+          DAG::Success.new(value: "scan-#{source_calls}")
+        end
+      },
+      consumer: {
+        type: :ruby,
+        resume_key: "consumer-v1",
+        schedule: {ttl: 1},
+        depends_on: [{from: :source, version: 1, as: :historical}],
+        run_if: {from: :source, value: {equals: "scan-1"}},
+        callable: ->(input) { DAG::Success.new(value: input[:historical]) }
+      }
+    )
+
+    first = DAG::Workflow::Runner.new(
+      definition,
+      parallel: false,
+      clock: clock,
+      execution_store: store,
+      workflow_id: "wf-versioned-run-if"
+    ).call
+    assert_equal "scan-1", first.outputs[:consumer].value
+
+    clock.advance(2)
+
+    second = DAG::Workflow::Runner.new(
+      definition,
+      parallel: false,
+      clock: clock,
+      execution_store: store,
+      workflow_id: "wf-versioned-run-if"
+    ).call
+
+    assert_equal :completed, second.status
+    assert_equal "scan-1", second.outputs[:consumer].value
+    consumer_entries = second.trace.select { |entry| entry.name == :consumer }
+    assert_equal [:success], consumer_entries.map(&:status)
+  end
 end

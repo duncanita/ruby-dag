@@ -312,7 +312,7 @@ module DAG
             next
           end
 
-          statuses[name] = entries.last.status
+          statuses[name] = @trace_recorder.observed_status_for_task(task: task, result: result, entries: entries)
           @callbacks.finish(name, result)
           results[name] = result
         end
