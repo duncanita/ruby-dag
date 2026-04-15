@@ -152,6 +152,27 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Stale cause: ttl_expired"
   end
 
+  def test_versioned_dependency_inputs_example_executes_successfully
+    stdout, stderr, status = run_example("examples/versioned_dependency_inputs.rb")
+
+    assert status.success?, <<~MSG
+      expected versioned_dependency_inputs example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== First Run ==="
+    assert_includes stdout, "Source: scan-1"
+    assert_includes stdout, "=== Second Run ==="
+    assert_includes stdout, "Latest value: scan-2"
+    assert_includes stdout, "First value: scan-1"
+    assert_includes stdout, 'History: ["scan-1", "scan-2"]'
+    assert_includes stdout, "Source calls: 2"
+    assert_includes stdout, "Stored versions: [1, 2]"
+  end
+
   def test_graph_basics_example_executes_successfully
     stdout, stderr, status = run_example("examples/graph_basics.rb")
 

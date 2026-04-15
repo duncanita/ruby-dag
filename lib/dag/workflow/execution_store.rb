@@ -70,14 +70,18 @@ module DAG
           return nil unless node
 
           outputs = Array(node[:outputs]).reject { |entry| entry[:superseded] }
-          output = if version == :latest
+          case version
+          when :latest
             # standard:disable Style/ReverseFind -- Array#rfind is unavailable on Ruby 3.2, which this gem still tests against.
-            outputs.reverse_each.find { |entry| entry[:reusable] }
+            output = outputs.reverse_each.find { |entry| entry[:reusable] }
             # standard:enable Style/ReverseFind
+            output ? deep_copy(output) : nil
+          when :all
+            deep_copy(outputs.sort_by { |entry| entry[:version] })
           else
-            outputs.find { |entry| entry[:version] == version }
+            output = outputs.find { |entry| entry[:version] == version }
+            output ? deep_copy(output) : nil
           end
-          output ? deep_copy(output) : nil
         end
 
         def mark_stale(workflow_id:, node_paths:, cause:)

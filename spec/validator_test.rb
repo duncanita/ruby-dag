@@ -84,6 +84,44 @@ class ValidatorTest < Minitest::Test
     assert_equal [defn.graph, defn.registry], result
   end
 
+  def test_rejects_duplicate_effective_dependency_input_keys
+    defn = build_test_workflow(
+      source_a: {},
+      source_b: {},
+      merge: {
+        type: :ruby,
+        depends_on: [
+          {from: :source_a, as: :shared},
+          {from: :source_b, as: :shared}
+        ],
+        callable: ->(input) { DAG::Success.new(value: input) }
+      }
+    )
+
+    report = Validator.validate(defn.graph, defn.registry)
+
+    refute report.valid?
+    assert_match(/duplicate effective input key/i, report.errors.first)
+    assert_match(/shared/, report.errors.first)
+  end
+
+  def test_rejects_invalid_dependency_version_selector
+    defn = build_test_workflow(
+      source: {},
+      consumer: {
+        type: :ruby,
+        depends_on: [{from: :source, version: 0}],
+        callable: ->(input) { DAG::Success.new(value: input) }
+      }
+    )
+
+    report = Validator.validate(defn.graph, defn.registry)
+
+    refute report.valid?
+    assert_match(/invalid version/i, report.errors.first)
+    assert_match(/positive Integer/, report.errors.first)
+  end
+
   def test_skips_nodes_not_in_registry
     graph = DAG::Graph.new
     graph.add_node(:a)

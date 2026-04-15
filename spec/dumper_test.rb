@@ -156,6 +156,22 @@ class DumperTest < Minitest::Test
     assert_equal({weight: 3}, defn2.graph.edge_metadata(:fetch, :parse))
   end
 
+  def test_round_trip_with_versioned_dependency_metadata
+    defn1 = build_test_workflow(
+      source: {type: :exec, command: "echo data"},
+      consume_history: {
+        type: :exec,
+        command: "echo use-history",
+        depends_on: [{from: :source, version: :all, as: :history}]
+      }
+    )
+
+    dumped = DAG::Workflow::Dumper.to_yaml(defn1)
+    defn2 = DAG::Workflow::Loader.from_yaml(dumped)
+
+    assert_equal({version: :all, as: :history}, defn2.graph.edge_metadata(:source, :consume_history))
+  end
+
   def test_round_trip_with_declarative_run_if
     yaml = <<~YAML
       nodes:

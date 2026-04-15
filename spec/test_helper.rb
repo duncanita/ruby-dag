@@ -43,10 +43,21 @@ module TestHelpers
 
       graph.add_node(name)
       registry.register(DAG::Workflow::Step.new(name: name, type: type, **opts))
-      depends_on.each { |dep| deferred_edges << [dep, name] }
+      depends_on.each do |dep|
+        deferred_edges << if dep.is_a?(Hash)
+          dep.transform_keys(&:to_sym).merge(to: name)
+        else
+          {from: dep, to: name}
+        end
+      end
     end
 
-    deferred_edges.each { |from, to| graph.add_edge(from, to) }
+    deferred_edges.each do |edge|
+      from = edge.fetch(:from)
+      to = edge.fetch(:to)
+      metadata = edge.except(:from, :to)
+      graph.add_edge(from, to, **metadata)
+    end
 
     DAG::Workflow::Definition.new(graph: graph, registry: registry)
   end

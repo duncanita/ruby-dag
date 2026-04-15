@@ -75,7 +75,7 @@ untrusted YAML.
 | `nodes` | top level | mapping | yes | the only top-level key the loader reads |
 | `<node-name>` | under `nodes` | mapping | yes | becomes the symbol node name in the graph |
 | `type` | under each node | string | yes | must be a registered, YAML-safe step type (`exec`, `ruby_script`, `file_read`, `file_write`, plus any custom types registered with `yaml_safe: true`) |
-| `depends_on` | under each node | array | no | each entry is either a string (the upstream node name) or a mapping with `from:` and optional metadata keys (e.g. `weight`) |
+| `depends_on` | under each node | array | no | each entry is either a string (the upstream node name) or a mapping with `from:` plus optional metadata such as `as:` and `version:` (`:latest`, positive Integer, or `:all`) |
 | `run_if` | under each node | mapping | no | declarative condition DSL using `all` / `any` / `not` and leaf predicates on direct dependencies |
 | any other key | under each node | scalar / array / mapping | no | passed verbatim into the step's `config` (e.g. `command`, `path`, `timeout`, `mode`, `from`, `content`) |
 
@@ -230,6 +230,46 @@ Notes:
 - `:ruby` steps must declare a deterministic `resume_key:` when durable execution is enabled
 - changing the workflow fingerprint for an existing `workflow_id` raises `DAG::ValidationError` before any step runs
 - see `examples/checkpoint_resume.rb` for a runnable end-to-end example that is exercised in the test suite
+
+### Versioned dependency inputs
+
+Versioned outputs are stored per node as monotonically increasing successful
+versions starting at `1`. A downstream dependency can request:
+- the default latest value
+- a specific historical version
+- all successful versions in ascending order
+
+```ruby
+workflow = DAG::Workflow::Loader.from_hash(
+  source: {
+    type: :ruby,
+    resume_key: "source-v1",
+    schedule: {ttl: 1},
+    callable: ->(_input) { DAG::Success.new(value: "...") }
+  },
+  history_consumer: {
+    type: :ruby,
+    depends_on: [{from: :source, version: :all, as: :history}],
+    resume_key: "history-consumer-v1",
+    callable: ->(input) { DAG::Success.new(value: input[:history]) }
+  },
+  first_consumer: {
+    type: :ruby,
+    depends_on: [{from: :source, version: 1, as: :first_value}],
+    resume_key: "first-consumer-v1",
+    callable: ->(input) { DAG::Success.new(value: input[:first_value]) }
+  }
+)
+```
+
+Notes:
+- successful outputs now get monotonic per-node versions instead of reusing the retry attempt number
+- `depends_on` metadata supports `as:` to rename the local input key
+- `version: :all` resolves to an array of raw values ordered by ascending version
+- `version: N` fails explicitly with `code: :missing_dependency_version` when that version does not exist
+- versioned dependency inputs require durable execution (`execution_store:` plus `workflow_id:`)
+- loader/dumper round-trip `version:` and `as:` metadata
+- see `examples/versioned_dependency_inputs.rb` for a runnable example exercised in the test suite
 
 ### Waiting and not_before scheduling
 

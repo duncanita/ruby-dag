@@ -90,7 +90,7 @@ module DAG
           @execution_store.save_output(
             workflow_id: @workflow_id,
             node_path: task.execution.node_path,
-            version: task.execution.attempt,
+            version: next_output_version(task.execution.node_path),
             result: result,
             reusable: true,
             superseded: false,
@@ -108,6 +108,16 @@ module DAG
       end
 
       private
+
+      def next_output_version(node_path)
+        stored_versions = Array(@execution_store.load_output(
+          workflow_id: @workflow_id,
+          node_path: node_path,
+          version: :all
+        )).map { |entry| entry[:version] }
+
+        stored_versions.max.to_i + 1
+      end
 
       def enabled?
         @execution_store && @workflow_id

@@ -60,6 +60,13 @@ module DAG
           node_path_prefix: @node_path_prefix
         )
         @root_input = root_input.transform_keys(&:to_sym).freeze
+        @dependency_input_resolver = DependencyInputResolver.new(
+          graph: @graph,
+          execution_store: @execution_store,
+          workflow_id: @workflow_id,
+          root_input: @root_input,
+          node_path_prefix: @node_path_prefix
+        )
         @register_execution_store = register_execution_store
         validate_context_parallelism!(parallel, context)
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
@@ -250,10 +257,10 @@ module DAG
 
           step = @registry[name]
           condition_context = resolve_condition_context(name, previous_outputs, statuses)
-          input = extract_input(condition_context)
-          input_keys = input.keys.sort
 
           begin
+            input = resolve_step_input(name, previous_outputs)
+            input_keys = input.keys.sort
             schedule_policy = SchedulePolicy.new(step, clock: @clock)
 
             if schedule_policy.waiting?
@@ -280,12 +287,32 @@ module DAG
                 attempt_log: attempt_log
               )
             end
+          rescue DependencyInputResolver::MissingExecutionStoreError => e
+            immediate_results << ImmediateResult.new(
+              name: name,
+              result: Failure.new(error: {
+                code: :versioned_dependency_requires_execution_store,
+                message: e.message
+              }),
+              input_keys: [],
+              status: nil
+            )
+          rescue DependencyInputResolver::MissingVersionError => e
+            immediate_results << ImmediateResult.new(
+              name: name,
+              result: Failure.new(error: {
+                code: :missing_dependency_version,
+                message: e.message
+              }),
+              input_keys: [],
+              status: nil
+            )
           rescue => e
             immediate_results << ImmediateResult.new(
               name: name,
               result: Result.exception_failure(:run_if_error, e,
                 message: "run_if for step #{name} raised: #{e.message}"),
-              input_keys: input_keys,
+              input_keys: [],
               status: nil
             )
           end
@@ -591,38 +618,6 @@ module DAG
         @execution_persistence.pause_requested?
       end
 
-      def reusable_output_expired?(name, stored)
-        ttl = normalized_schedule_ttl(@registry[name])
-        return false unless ttl && stored[:saved_at]
-
-        stored[:saved_at] <= (@clock.wall_now - ttl)
-      end
-
-      def normalized_schedule_ttl(step)
-        raw = step.config.dig(:schedule, :ttl)
-        case raw
-        when nil
-          nil
-        when Numeric
-          raw
-        else
-          Float(raw)
-        end
-      end
-
-      def mark_reusable_output_stale(name, stored)
-        return unless @execution_store && @workflow_id
-
-        cause = {
-          code: :ttl_expired,
-          message: "reusable output for step #{name} expired after schedule.ttl",
-          saved_at: stored[:saved_at].utc.iso8601,
-          ttl_seconds: normalized_schedule_ttl(@registry[name])
-        }
-
-        @execution_store.mark_stale(workflow_id: @workflow_id, node_paths: [node_path_for(name)], cause: cause)
-      end
-
       def blank?(value)
         value.nil? || (value.respond_to?(:empty?) && value.empty?)
       end
@@ -648,8 +643,8 @@ module DAG
         end)
       end
 
-      def extract_input(condition_context)
-        condition_context.transform_values { |entry| entry[:value] }
+      def resolve_step_input(name, outputs)
+        @dependency_input_resolver.resolve(name: name, outputs: outputs)
       end
 
       def validate_coverage!(graph, registry)

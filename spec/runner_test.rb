@@ -45,6 +45,93 @@ class RunnerTest < Minitest::Test
     assert_equal "X+Y", result.outputs[:merge].value
   end
 
+  def test_runner_resolves_versioned_dependency_inputs_from_execution_store
+    store = build_memory_store
+    clock = build_clock
+    source_calls = 0
+
+    definition = build_test_workflow(
+      source: {
+        type: :ruby,
+        resume_key: "source-v1",
+        schedule: {ttl: 1},
+        callable: ->(_input) do
+          source_calls += 1
+          DAG::Success.new(value: "scan-#{source_calls}")
+        end
+      },
+      latest_value: {
+        type: :ruby,
+        depends_on: [{from: :source, as: :latest_value}],
+        schedule: {ttl: 1},
+        resume_key: "latest-value-v1",
+        callable: ->(input) { DAG::Success.new(value: input[:latest_value]) }
+      },
+      first_value: {
+        type: :ruby,
+        depends_on: [{from: :source, version: 1, as: :first_value}],
+        schedule: {ttl: 1},
+        resume_key: "first-value-v1",
+        callable: ->(input) { DAG::Success.new(value: input[:first_value]) }
+      },
+      history: {
+        type: :ruby,
+        depends_on: [{from: :source, version: :all, as: :history}],
+        schedule: {ttl: 1},
+        resume_key: "history-v1",
+        callable: ->(input) { DAG::Success.new(value: input[:history]) }
+      }
+    )
+
+    first_run = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      clock: clock,
+      execution_store: store,
+      workflow_id: "wf-versioned-inputs").call
+    assert_equal "scan-1", first_run.outputs[:source].value
+
+    clock.advance(2)
+
+    second_run = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      clock: clock,
+      execution_store: store,
+      workflow_id: "wf-versioned-inputs").call
+
+    assert_equal 2, source_calls
+    assert_equal "scan-2", second_run.outputs[:latest_value].value
+    assert_equal "scan-1", second_run.outputs[:first_value].value
+    assert_equal ["scan-1", "scan-2"], second_run.outputs[:history].value
+  end
+
+  def test_runner_fails_when_requested_dependency_version_is_missing
+    store = build_memory_store
+
+    definition = build_test_workflow(
+      source: {
+        type: :ruby,
+        resume_key: "source-v1",
+        callable: ->(_input) { DAG::Success.new(value: "scan-1") }
+      },
+      consumer: {
+        type: :ruby,
+        depends_on: [{from: :source, version: 2, as: :missing_version}],
+        resume_key: "consumer-v1",
+        callable: ->(input) { DAG::Success.new(value: input[:missing_version]) }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      execution_store: store,
+      workflow_id: "wf-missing-version").call
+
+    assert_equal :failed, result.status
+    assert_equal :consumer, result.error[:failed_node]
+    assert_equal :missing_dependency_version, result.error[:step_error][:code]
+    assert_match(/version 2/, result.error[:step_error][:message])
+  end
+
   # --- Failure handling ---
 
   def test_stops_on_failure

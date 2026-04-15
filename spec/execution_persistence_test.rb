@@ -44,8 +44,29 @@ class ExecutionPersistenceTest < Minitest::Test
 
     assert_equal 1, run[:trace].size
     assert_equal :completed, node[:state]
-    assert_equal 2, output[:version]
+    assert_equal 1, output[:version]
     assert_equal "done", output[:result].value
+  end
+
+  def test_persist_step_result_assigns_next_monotonic_output_version
+    store = build_memory_store
+    store.begin_run(workflow_id: "wf-persist", definition_fingerprint: "fp-1", node_paths: [[:fetch]])
+    store.save_output(
+      workflow_id: "wf-persist",
+      node_path: [:fetch],
+      version: 1,
+      result: DAG::Success.new(value: "old"),
+      reusable: false,
+      superseded: false
+    )
+    persistence = build_persistence(execution_store: store)
+    task = build_task(node_path: [:fetch], attempt: 3)
+
+    persistence.persist_step_result(task, DAG::Success.new(value: "new"), [build_trace_entry(name: :fetch)])
+
+    output = store.load_output(workflow_id: "wf-persist", node_path: [:fetch])
+    assert_equal 2, output[:version]
+    assert_equal "new", output[:result].value
   end
 
   def test_persist_step_result_saves_failure_without_output
