@@ -28,6 +28,7 @@ module DAG
         max_parallelism: DEFAULT_MAX_PARALLELISM,
         timeout: nil,
         clock: Clock.new,
+        context: nil,
         middleware: [],
         on_step_start: nil, on_step_finish: nil)
         graph, registry = unpack_definition(graph_or_definition, registry)
@@ -35,7 +36,9 @@ module DAG
         @registry = registry
         @timeout = timeout
         @clock = clock
+        @context = context
         @middleware = Array(middleware).freeze
+        validate_context_parallelism!(parallel, context)
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
         @strategy = build_strategy(parallel, max_parallelism)
         validate_coverage!(graph, registry)
@@ -48,6 +51,12 @@ module DAG
       end
 
       private
+
+      def validate_context_parallelism!(parallel, context)
+        return if context.nil? || parallel != :processes
+
+        raise ValidationError, "Runner context is not supported with parallel: :processes without explicit context serialization hooks"
+      end
 
       def build_strategy(parallel, max_parallelism)
         case parallel
@@ -213,12 +222,28 @@ module DAG
           build_middleware_invoker(middleware, next_step)
         end
 
-        -> { chain.call(step, input, context: nil, execution: execution) }
+        -> { chain.call(step, input, context: @context, execution: execution) }
       end
 
       def core_step_invoker(step)
         executor = executor_class(step.type).new
-        ->(current_step, current_input, context:, execution:) { executor.call(current_step, current_input) }
+        ->(current_step, current_input, context:, execution:) do
+          invoke_step_executor(executor, current_step, current_input, context: context)
+        end
+      end
+
+      def invoke_step_executor(executor, step, input, context:)
+        call_method = executor.method(:call)
+        if accepts_context_keyword?(call_method)
+          executor.call(step, input, context: context)
+        else
+          executor.call(step, input)
+        end
+      end
+
+      def accepts_context_keyword?(call_method)
+        call_method.parameters.any? { |kind, name| [:key, :keyreq].include?(kind) && name == :context } ||
+          call_method.parameters.any? { |kind, _name| kind == :keyrest }
       end
 
       def build_middleware_invoker(middleware, next_step)

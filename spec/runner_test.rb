@@ -323,6 +323,111 @@ class RunnerTest < Minitest::Test
     assert_match(/middleware .* returned String/, result.error[:step_error][:message])
   end
 
+  # --- Context injection ---
+
+  def test_runner_passes_context_to_compatible_step_handlers
+    klass = Class.new do
+      def call(step, input, context: nil)
+        DAG::Success.new(value: [step.name, input, context])
+      end
+    end
+    type = :"_test_context_handler_#{object_id}"
+    DAG::Workflow::Steps.register(type, klass, yaml_safe: false)
+
+    graph = DAG::Graph.new.add_node(:ctx)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :ctx, type: type))
+
+    context = {request_id: "abc-123"}
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false, context: context).call
+
+    assert result.success?
+    assert_equal [:ctx, {}, context], result.outputs[:ctx].value
+  end
+
+  def test_runner_keeps_old_step_handlers_working_without_context_keyword
+    klass = Class.new do
+      def call(step, input)
+        DAG::Success.new(value: [step.name, input])
+      end
+    end
+    type = :"_test_legacy_handler_#{object_id}"
+    DAG::Workflow::Steps.register(type, klass, yaml_safe: false)
+
+    graph = DAG::Graph.new.add_node(:legacy)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :legacy, type: type))
+
+    result = DAG::Workflow::Runner.new(graph, registry,
+      parallel: false,
+      context: {ignored: true}).call
+
+    assert result.success?
+    assert_equal [:legacy, {}], result.outputs[:legacy].value
+  end
+
+  def test_ruby_step_passes_context_when_callable_accepts_second_positional_argument
+    defn = build_test_workflow(
+      ruby_ctx: {type: :ruby, callable: ->(input, context) { DAG::Success.new(value: [input, context]) }}
+    )
+
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry,
+      parallel: false,
+      context: {tenant: "acme"}).call
+
+    assert result.success?
+    assert_equal [{}, {tenant: "acme"}], result.outputs[:ruby_ctx].value
+  end
+
+  def test_ruby_step_ignores_context_when_callable_only_accepts_input
+    defn = build_test_workflow(
+      ruby_ctx: {type: :ruby, callable: ->(input) { DAG::Success.new(value: input) }}
+    )
+
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry,
+      parallel: false,
+      context: {tenant: "acme"}).call
+
+    assert result.success?
+    assert_equal({}, result.outputs[:ruby_ctx].value)
+  end
+
+  def test_threads_mode_passes_context_to_compatible_handlers
+    klass = Class.new do
+      def call(step, input, context: nil)
+        DAG::Success.new(value: context.fetch(:tenant))
+      end
+    end
+    type = :"_test_thread_context_handler_#{object_id}"
+    DAG::Workflow::Steps.register(type, klass, yaml_safe: false)
+
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: type))
+    registry.register(DAG::Workflow::Step.new(name: :b, type: type))
+
+    result = DAG::Workflow::Runner.new(graph, registry,
+      parallel: :threads,
+      context: {tenant: "acme"}).call
+
+    assert result.success?
+    assert_equal "acme", result.outputs[:a].value
+    assert_equal "acme", result.outputs[:b].value
+  end
+
+  def test_processes_mode_rejects_context_at_initialization
+    defn = build_test_workflow(a: {type: :ruby, callable: ->(_input) { DAG::Success.new(value: "ok") }})
+
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Runner.new(defn.graph, defn.registry,
+        parallel: :processes,
+        context: {tenant: "acme"})
+    end
+
+    assert_match(/parallel: :processes/, error.message)
+    assert_match(/context serialization hooks/, error.message)
+  end
+
   # --- Definition convenience methods ---
 
   def test_definition_empty
