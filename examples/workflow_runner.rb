@@ -22,7 +22,7 @@ registry.register(DAG::Workflow::Step.new(name: :shout, type: :ruby,
 
 definition = DAG::Workflow::Definition.new(graph: graph, registry: registry)
 
-puts "Definition: #{definition.inspect}"
+puts "Definition: #{definition}"
 puts "Steps: #{definition.steps.map(&:to_s)}"
 puts "Empty? #{definition.empty?}"
 puts "Execution order: #{definition.execution_order.inspect}"
@@ -54,7 +54,7 @@ yaml = <<~YAML
 YAML
 
 definition = DAG::Workflow::Loader.from_yaml(yaml)
-puts "Loaded: #{definition.inspect}"
+puts "Loaded: #{definition}"
 puts "Layers: #{definition.execution_order.inspect}"
 
 result = DAG::Workflow::Runner.new(definition.graph, definition.registry, parallel: false).call
@@ -74,7 +74,7 @@ definition = DAG::Workflow::Loader.from_hash(
   store: {type: :exec, command: 'echo "stored"', depends_on: [:transform]}
 )
 
-puts "Loaded: #{definition.inspect}"
+puts "Loaded: #{definition}"
 puts "Layers: #{definition.execution_order.inspect}"
 puts "Transform config: #{definition.step(:transform).config.inspect}"
 puts
