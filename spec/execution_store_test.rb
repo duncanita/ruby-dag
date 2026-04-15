@@ -46,4 +46,25 @@ class ExecutionStoreTest < Minitest::Test
     reloaded = store.load_run("wf-trace")
     assert_equal [:a], reloaded[:trace].first.input_keys
   end
+
+  def test_load_output_returns_isolated_saved_at_snapshot
+    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    saved_at = Time.utc(2026, 4, 15, 9, 0, 0)
+    store.begin_run(workflow_id: "wf-saved-at", definition_fingerprint: "fp-1", node_paths: [[:fetch]])
+    store.save_output(
+      workflow_id: "wf-saved-at",
+      node_path: [:fetch],
+      version: 1,
+      result: DAG::Success.new(value: "ok"),
+      reusable: true,
+      superseded: false,
+      saved_at: saved_at
+    )
+
+    loaded = store.load_output(workflow_id: "wf-saved-at", node_path: [:fetch])
+    loaded[:saved_at] = saved_at + 3600
+
+    reloaded = store.load_output(workflow_id: "wf-saved-at", node_path: [:fetch])
+    assert_equal saved_at, reloaded[:saved_at]
+  end
 end

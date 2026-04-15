@@ -663,6 +663,38 @@ module DAG
         )
       end
 
+      def reusable_output_expired?(name, stored)
+        ttl = normalized_schedule_ttl(@registry[name])
+        return false unless ttl && stored[:saved_at]
+
+        stored[:saved_at] <= (@clock.wall_now - ttl)
+      end
+
+      def normalized_schedule_ttl(step)
+        raw = step.config.dig(:schedule, :ttl)
+        case raw
+        when nil
+          nil
+        when Numeric
+          raw
+        else
+          Float(raw)
+        end
+      end
+
+      def mark_reusable_output_stale(name, stored)
+        return unless @execution_store && @workflow_id
+
+        cause = {
+          code: :ttl_expired,
+          message: "reusable output for step #{name} expired after schedule.ttl",
+          saved_at: stored[:saved_at].utc.iso8601,
+          ttl_seconds: normalized_schedule_ttl(@registry[name])
+        }
+
+        @execution_store.mark_stale(workflow_id: @workflow_id, node_paths: [node_path_for(name)], cause: cause)
+      end
+
       def blank?(value)
         value.nil? || (value.respond_to?(:empty?) && value.empty?)
       end
@@ -681,7 +713,14 @@ module DAG
         return nil unless @execution_store
 
         stored = @execution_store.load_output(workflow_id: @workflow_id, node_path: node_path_for(name))
-        stored && stored[:result]
+        return nil unless stored
+
+        if reusable_output_expired?(name, stored)
+          mark_reusable_output_stale(name, stored)
+          return nil
+        end
+
+        stored[:result]
       end
 
       def persist_step_result!(task, result, entries)
@@ -700,7 +739,8 @@ module DAG
             version: task.execution.attempt,
             result: result,
             reusable: true,
-            superseded: false
+            superseded: false,
+            saved_at: @clock.wall_now
           )
         else
           @execution_store.set_node_state(

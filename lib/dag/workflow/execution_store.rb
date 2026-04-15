@@ -52,7 +52,7 @@ module DAG
           nil
         end
 
-        def save_output(workflow_id:, node_path:, version:, result:, reusable:, superseded:)
+        def save_output(workflow_id:, node_path:, version:, result:, reusable:, superseded:, saved_at: Time.now.utc)
           node = ensure_node(workflow_id, node_path)
           node[:outputs] ||= []
           node[:outputs] << {
@@ -60,7 +60,7 @@ module DAG
             result: result,
             reusable: reusable,
             superseded: superseded,
-            saved_at: Time.now.utc
+            saved_at: saved_at
           }
           nil
         end
