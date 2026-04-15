@@ -10,6 +10,7 @@ if ENV["COVERAGE"]
 end
 
 require "minitest/autorun"
+require "securerandom"
 require "tempfile"
 
 require_relative "../lib/dag"
@@ -51,5 +52,11 @@ module TestHelpers
     yield file.path
   ensure
     file&.unlink
+  end
+
+  def temp_path(prefix: "dag_test", suffix: ".txt")
+    dir = File.expand_path("~/tmp")
+    Dir.mkdir(dir) unless Dir.exist?(dir)
+    File.join(dir, "#{prefix}_#{$$}_#{SecureRandom.hex(6)}#{suffix}")
   end
 end

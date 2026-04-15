@@ -101,22 +101,24 @@ module DAG
           end
         end
 
-        if failed_name
-          Failure.new(error: wrap_payload(outputs, trace,
-            {failed_node: failed_name, step_error: failed_result.error}))
-        else
-          Success.new(value: wrap_payload(outputs, trace, nil))
-        end
+        build_run_result(outputs, trace,
+          failed_name ? :failed : :completed,
+          failed_name ? {failed_node: failed_name, step_error: failed_result.error} : nil)
       end
 
       def deadline_passed?(deadline)
         deadline && Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
       end
 
-      # Single shape for both Success and Failure: callers always see
-      # `:outputs`, `:trace`, and `:error` keys regardless of branch.
-      def wrap_payload(outputs, trace, step_error)
-        {outputs: outputs, trace: trace, error: step_error}
+      def build_run_result(outputs, trace, status, error)
+        RunResult.new(
+          status: status,
+          workflow_id: nil,
+          outputs: outputs,
+          trace: trace,
+          error: error,
+          waiting_nodes: []
+        )
       end
 
       # Callback ordering contract: every runnable :start in a layer fires

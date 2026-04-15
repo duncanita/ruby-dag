@@ -267,12 +267,16 @@ module DAG
           dispatch_tree(
             condition,
             on_all: ->(entries) {
-              {all_key => entries.map { |entry| map_tree(entry,
-                all_key: all_key, any_key: any_key, not_key: not_key, &block) }}
+              {all_key => entries.map { |entry|
+                map_tree(entry,
+                  all_key: all_key, any_key: any_key, not_key: not_key, &block)
+              }}
             },
             on_any: ->(entries) {
-              {any_key => entries.map { |entry| map_tree(entry,
-                all_key: all_key, any_key: any_key, not_key: not_key, &block) }}
+              {any_key => entries.map { |entry|
+                map_tree(entry,
+                  all_key: all_key, any_key: any_key, not_key: not_key, &block)
+              }}
             },
             on_not: ->(entry) {
               {not_key => map_tree(entry,

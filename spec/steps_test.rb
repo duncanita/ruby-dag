@@ -51,7 +51,7 @@ class StepsTest < Minitest::Test
   end
 
   def test_exec_kills_process_group_on_timeout
-    pidfile = "/tmp/dag_pgroup_test_#{$$}"
+    pidfile = temp_path(prefix: "dag_pgroup_test", suffix: "")
     # The shell writes the background child's PID to a file, then sleeps
     # (holding the pipes open) until killed by timeout. The background
     # child redirects its own stdout/stderr so it doesn't hold the pipes,
@@ -180,7 +180,7 @@ class StepsTest < Minitest::Test
   # --- FileWrite ---
 
   def test_file_write_creates_file
-    path = "/tmp/dag_test_write_#{$$}.txt"
+    path = temp_path(prefix: "dag_test_write")
     result = run_step(:file_write, path: path, content: "written by dag")
 
     assert result.success?
@@ -190,7 +190,7 @@ class StepsTest < Minitest::Test
   end
 
   def test_file_write_appends_in_append_mode
-    path = "/tmp/dag_test_append_#{$$}.txt"
+    path = temp_path(prefix: "dag_test_append")
     File.write(path, "first\n")
 
     run_step(:file_write, path: path, content: "second\n", mode: "a")
@@ -201,7 +201,7 @@ class StepsTest < Minitest::Test
   end
 
   def test_file_write_uses_input_when_no_content
-    path = "/tmp/dag_test_input_#{$$}.txt"
+    path = temp_path(prefix: "dag_test_input")
 
     step = DAG::Workflow::Step.new(name: :write, type: :file_write, path: path)
     result = DAG::Workflow::Steps.build(:file_write).call(step, {upstream: "from input"})
@@ -220,7 +220,7 @@ class StepsTest < Minitest::Test
   end
 
   def test_file_write_multi_dep_without_from_returns_failure
-    path = "/tmp/dag_test_multidep_#{$$}.txt"
+    path = temp_path(prefix: "dag_test_multidep")
     step = DAG::Workflow::Step.new(name: :write, type: :file_write, path: path)
     result = DAG::Workflow::Steps.build(:file_write).call(step, {a: "foo", b: "bar"})
 
@@ -234,7 +234,7 @@ class StepsTest < Minitest::Test
   end
 
   def test_file_write_multi_dep_with_from_writes_selected_value
-    path = "/tmp/dag_test_from_#{$$}.txt"
+    path = temp_path(prefix: "dag_test_from")
     step = DAG::Workflow::Step.new(name: :write, type: :file_write, path: path, from: :b)
     result = DAG::Workflow::Steps.build(:file_write).call(step, {a: "foo", b: "bar"})
 
@@ -245,7 +245,7 @@ class StepsTest < Minitest::Test
   end
 
   def test_file_write_from_with_unknown_key_returns_failure
-    path = "/tmp/dag_test_from_unknown_#{$$}.txt"
+    path = temp_path(prefix: "dag_test_from_unknown")
     step = DAG::Workflow::Step.new(name: :write, type: :file_write, path: path, from: :missing)
     result = DAG::Workflow::Steps.build(:file_write).call(step, {a: "foo"})
 
@@ -258,7 +258,7 @@ class StepsTest < Minitest::Test
   end
 
   def test_file_write_content_wins_over_inputs
-    path = "/tmp/dag_test_content_wins_#{$$}.txt"
+    path = temp_path(prefix: "dag_test_content_wins")
     step = DAG::Workflow::Step.new(name: :write, type: :file_write, path: path, content: "explicit")
     result = DAG::Workflow::Steps.build(:file_write).call(step, {a: "from_a", b: "from_b"})
 
@@ -269,7 +269,7 @@ class StepsTest < Minitest::Test
   end
 
   def test_file_write_zero_dep_no_content_returns_failure
-    path = "/tmp/dag_test_zerodep_#{$$}.txt"
+    path = temp_path(prefix: "dag_test_zerodep")
     step = DAG::Workflow::Step.new(name: :write, type: :file_write, path: path)
     result = DAG::Workflow::Steps.build(:file_write).call(step, {})
 

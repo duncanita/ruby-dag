@@ -10,7 +10,7 @@ class RunnerTest < Minitest::Test
   def test_runs_single_node
     result = run_workflow({hello: {command: "echo hello"}})
     assert result.success?
-    assert_equal "hello", result.value[:outputs][:hello].value
+    assert_equal "hello", result.outputs[:hello].value
   end
 
   def test_zero_dep_step_receives_empty_hash
@@ -19,7 +19,7 @@ class RunnerTest < Minitest::Test
     )
 
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
-    assert_equal({}, result.value[:outputs][:solo].value)
+    assert_equal({}, result.outputs[:solo].value)
   end
 
   def test_single_dep_step_receives_hash_keyed_by_dep_name
@@ -30,7 +30,7 @@ class RunnerTest < Minitest::Test
     )
 
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
-    assert_equal({produce: "produce"}, result.value[:outputs][:consume].value)
+    assert_equal({produce: "produce"}, result.outputs[:consume].value)
   end
 
   def test_merges_multiple_dependency_outputs
@@ -42,7 +42,7 @@ class RunnerTest < Minitest::Test
     )
 
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
-    assert_equal "X+Y", result.value[:outputs][:merge].value
+    assert_equal "X+Y", result.outputs[:merge].value
   end
 
   # --- Failure handling ---
@@ -55,27 +55,27 @@ class RunnerTest < Minitest::Test
 
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
     assert result.failure?
-    assert_equal :fail_node, result.error[:error][:failed_node]
-    refute result.error[:outputs].key?(:never_runs)
+    assert_equal :fail_node, result.error[:failed_node]
+    refute result.outputs.key?(:never_runs)
   end
 
   def test_failure_includes_error_detail
     result = run_workflow({bad: {command: "echo fail >&2; exit 42"}})
     assert result.failure?
-    assert_equal :exec_failed, result.error[:error][:step_error][:code]
-    assert_equal 42, result.error[:error][:step_error][:exit_status]
+    assert_equal :exec_failed, result.error[:step_error][:code]
+    assert_equal 42, result.error[:step_error][:exit_status]
   end
 
-  def test_success_and_failure_share_payload_keys
+  def test_runner_returns_workflow_run_result
     success = run_workflow({good: {command: "echo good"}})
     failure = run_workflow({bad: {command: "exit 1"}})
 
-    assert success.success?
-    assert failure.failure?
-    assert_equal [:outputs, :trace, :error].sort, success.value.keys.sort
-    assert_equal [:outputs, :trace, :error].sort, failure.error.keys.sort
-    assert_nil success.value[:error]
-    refute_nil failure.error[:error]
+    assert_kind_of DAG::Workflow::RunResult, success
+    assert_kind_of DAG::Workflow::RunResult, failure
+    assert_equal :completed, success.status
+    assert_equal :failed, failure.status
+    assert_nil success.error
+    assert_equal [], success.waiting_nodes
   end
 
   # --- Parallel execution ---
@@ -87,8 +87,8 @@ class RunnerTest < Minitest::Test
     )
 
     assert result.success?
-    assert_equal "a", result.value[:outputs][:a].value
-    assert_equal "b", result.value[:outputs][:b].value
+    assert_equal "a", result.outputs[:a].value
+    assert_equal "b", result.outputs[:b].value
   end
 
   def test_sequential_independent_nodes
@@ -98,15 +98,15 @@ class RunnerTest < Minitest::Test
     )
 
     assert result.success?
-    assert_equal "a", result.value[:outputs][:a].value
-    assert_equal "b", result.value[:outputs][:b].value
+    assert_equal "a", result.outputs[:a].value
+    assert_equal "b", result.outputs[:b].value
   end
 
   # --- File pipeline ---
 
   def test_read_transform_write_pipeline
-    input_path = "/tmp/dag_test_in_#{$$}.txt"
-    output_path = "/tmp/dag_test_out_#{$$}.txt"
+    input_path = temp_path(prefix: "dag_test_in")
+    output_path = temp_path(prefix: "dag_test_out")
     File.write(input_path, "hello world")
 
     defn = build_test_workflow(
@@ -189,7 +189,7 @@ class RunnerTest < Minitest::Test
     defn = build_test_workflow(a: {command: "echo a"})
     result = DAG::Workflow::Runner.new(defn, parallel: false).call
     assert result.success?
-    assert_equal "a", result.value[:outputs][:a].value
+    assert_equal "a", result.outputs[:a].value
   end
 
   def test_runner_definition_form_rejects_extra_registry
@@ -254,13 +254,13 @@ class RunnerTest < Minitest::Test
   def test_successful_result_has_trace
     result = run_workflow({hello: {command: "echo hello"}})
     assert result.success?
-    assert_kind_of Array, result.value[:trace]
-    assert_equal 1, result.value[:trace].size
+    assert_kind_of Array, result.trace
+    assert_equal 1, result.trace.size
   end
 
   def test_trace_entry_has_required_fields
     result = run_workflow({hello: {command: "echo hello"}})
-    entry = result.value[:trace].first
+    entry = result.trace.first
     assert_equal :hello, entry.name
     assert_equal 0, entry.layer
     assert_kind_of Numeric, entry.duration_ms
@@ -274,7 +274,7 @@ class RunnerTest < Minitest::Test
       b: {depends_on: [:a]}
     )
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
-    trace = result.value[:trace]
+    trace = result.trace
     assert_equal 0, trace.find { |e| e.name == :a }.layer
     assert_equal 1, trace.find { |e| e.name == :b }.layer
   end
@@ -286,9 +286,9 @@ class RunnerTest < Minitest::Test
     )
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: false).call
     assert result.failure?
-    assert_kind_of Array, result.error[:trace]
-    assert_equal 2, result.error[:trace].size
-    assert_equal :failure, result.error[:trace].last.status
+    assert_kind_of Array, result.trace
+    assert_equal 2, result.trace.size
+    assert_equal :failure, result.trace.last.status
   end
 
   # --- Unknown callback keyword ---
@@ -324,8 +324,8 @@ class RunnerTest < Minitest::Test
 
     result = DAG::Workflow::Runner.new(graph, registry, parallel: true).call
     assert result.success?
-    assert_equal "safe", result.value[:outputs][:a].value
-    assert_equal "from ruby", result.value[:outputs][:b].value
+    assert_equal "safe", result.outputs[:a].value
+    assert_equal "from ruby", result.outputs[:b].value
   end
 
   # --- Conditional execution ---
@@ -343,8 +343,8 @@ class RunnerTest < Minitest::Test
 
     result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
     assert result.success?
-    assert_nil result.value[:outputs][:b].value
-    assert_equal "fallback", result.value[:outputs][:c].value
+    assert_nil result.outputs[:b].value
+    assert_equal "fallback", result.outputs[:c].value
   end
 
   def test_step_runs_when_condition_true
@@ -356,7 +356,7 @@ class RunnerTest < Minitest::Test
 
     result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
     assert result.success?
-    assert_equal "ran", result.value[:outputs][:a].value
+    assert_equal "ran", result.outputs[:a].value
   end
 
   def test_skipped_step_trace_has_skipped_status
@@ -371,7 +371,7 @@ class RunnerTest < Minitest::Test
       run_if: ->(input) { input[:a].nil? }))
 
     result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
-    trace = result.value[:trace]
+    trace = result.trace
     assert_equal :skipped, trace.find { |entry| entry.name == :a }.status
   end
 
@@ -388,8 +388,8 @@ class RunnerTest < Minitest::Test
     # Runner success means "no step failed." Skipped steps are not
     # failures — run_if intentionally filtered them.
     assert result.success?
-    assert_nil result.value[:error]
-    assert result.value[:trace].any? { |e| e.status == :skipped }
+    assert_nil result.error
+    assert result.trace.any? { |e| e.status == :skipped }
   end
 
   def test_declarative_run_if_selects_branch_by_value
@@ -409,8 +409,8 @@ class RunnerTest < Minitest::Test
     result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
 
     assert result.success?
-    assert_equal "deploy prod", result.value[:outputs][:prod].value
-    assert_nil result.value[:outputs][:noop].value
+    assert_equal "deploy prod", result.outputs[:prod].value
+    assert_nil result.outputs[:noop].value
   end
 
   def test_declarative_run_if_can_follow_skipped_dependency_status
@@ -430,7 +430,7 @@ class RunnerTest < Minitest::Test
     result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
 
     assert result.success?
-    assert_equal "fallback path", result.value[:outputs][:fallback].value
+    assert_equal "fallback path", result.outputs[:fallback].value
   end
 
   def test_runner_rejects_invalid_declarative_run_if_on_manual_definition
@@ -457,7 +457,7 @@ class RunnerTest < Minitest::Test
 
     result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
     assert result.success?
-    assert_equal "always", result.value[:outputs][:a].value
+    assert_equal "always", result.outputs[:a].value
   end
 
   # --- run_if exception containment ---
@@ -472,8 +472,8 @@ class RunnerTest < Minitest::Test
     result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
 
     assert result.failure?
-    assert_equal :a, result.error[:error][:failed_node]
-    step_error = result.error[:error][:step_error]
+    assert_equal :a, result.error[:failed_node]
+    step_error = result.error[:step_error]
     assert_equal :run_if_error, step_error[:code]
     assert_match(/predicate boom/, step_error[:message])
     assert_equal "RuntimeError", step_error[:error_class]
@@ -488,7 +488,7 @@ class RunnerTest < Minitest::Test
 
     result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
 
-    trace = result.error[:trace]
+    trace = result.trace
     assert_equal 1, trace.size
     entry = trace.first
     assert_equal :a, entry.name
@@ -548,8 +548,8 @@ class RunnerTest < Minitest::Test
     result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
 
     assert result.failure?
-    assert_equal [:error, :outputs, :trace], result.error.keys.sort
-    assert result.error[:outputs][:ok].success?
+    assert_equal [:failed_node, :step_error], result.error.keys.sort
+    assert result.outputs[:ok].success?
   end
 
   def test_empty_graph_succeeds
@@ -557,8 +557,8 @@ class RunnerTest < Minitest::Test
     registry = DAG::Workflow::Registry.new
     result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
     assert result.success?
-    assert_equal({}, result.value[:outputs])
-    assert_equal([], result.value[:trace])
+    assert_equal({}, result.outputs)
+    assert_equal([], result.trace)
   end
 
   # --- Workflow-level timeout ---
@@ -572,9 +572,9 @@ class RunnerTest < Minitest::Test
       parallel: false, timeout: 0.1).call
 
     assert result.failure?
-    assert_equal :workflow_timeout, result.error[:error][:failed_node]
-    assert_equal :workflow_timeout, result.error[:error][:step_error][:code]
-    assert_equal 0.1, result.error[:error][:step_error][:timeout_seconds]
+    assert_equal :workflow_timeout, result.error[:failed_node]
+    assert_equal :workflow_timeout, result.error[:step_error][:code]
+    assert_equal 0.1, result.error[:step_error][:timeout_seconds]
   end
 
   def test_workflow_timeout_does_not_fire_when_under_budget
@@ -582,7 +582,7 @@ class RunnerTest < Minitest::Test
     result = DAG::Workflow::Runner.new(defn.graph, defn.registry,
       parallel: false, timeout: 5).call
     assert result.success?
-    assert_equal "fast", result.value[:outputs][:quick].value
+    assert_equal "fast", result.outputs[:quick].value
   end
 
   def test_workflow_timeout_nil_means_no_timeout
@@ -733,7 +733,7 @@ class RunnerTest < Minitest::Test
 
     result = DAG::Workflow::Runner.new(new_defn.graph, new_defn.registry, parallel: false).call
     assert result.success?
-    assert_equal "replaced", result.value[:outputs][:b].value
+    assert_equal "replaced", result.outputs[:b].value
   end
 
   def test_definition_replace_step_rewrites_declarative_run_if
