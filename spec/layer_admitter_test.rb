@@ -226,7 +226,7 @@ class LayerAdmitterTest < Minitest::Test
     assert_equal [:skipped], partition.immediate_results.map(&:status)
   end
 
-  def test_call_uses_effective_versioned_dependency_values_for_run_if_context
+  def test_call_uses_effective_versioned_dependency_values_for_declarative_run_if_context
     store = build_memory_store
     clock = build_clock
     source_calls = 0
@@ -270,6 +270,60 @@ class LayerAdmitterTest < Minitest::Test
     ).call
 
     assert_equal :completed, second.status
+    assert_equal "scan-1", second.outputs[:consumer].value
+    consumer_entries = second.trace.select { |entry| entry.name == :consumer }
+    assert_equal [:success], consumer_entries.map(&:status)
+  end
+
+  def test_call_uses_effective_versioned_dependency_values_for_callable_run_if_context
+    store = build_memory_store
+    clock = build_clock
+    source_calls = 0
+    consumer_calls = 0
+    definition = build_test_workflow(
+      source: {
+        type: :ruby,
+        resume_key: "source-v1",
+        schedule: {ttl: 1},
+        callable: ->(_input) do
+          source_calls += 1
+          DAG::Success.new(value: "scan-#{source_calls}")
+        end
+      },
+      consumer: {
+        type: :ruby,
+        resume_key: "consumer-v1",
+        schedule: {ttl: 1},
+        depends_on: [{from: :source, version: 1, as: :historical}],
+        run_if: ->(input) { input[:source] == "scan-1" },
+        callable: ->(input) do
+          consumer_calls += 1
+          DAG::Success.new(value: input[:historical])
+        end
+      }
+    )
+
+    first = DAG::Workflow::Runner.new(
+      definition,
+      parallel: false,
+      clock: clock,
+      execution_store: store,
+      workflow_id: "wf-callable-versioned-run-if"
+    ).call
+    assert_equal "scan-1", first.outputs[:consumer].value
+
+    clock.advance(2)
+
+    second = DAG::Workflow::Runner.new(
+      definition,
+      parallel: false,
+      clock: clock,
+      execution_store: store,
+      workflow_id: "wf-callable-versioned-run-if"
+    ).call
+
+    assert_equal :completed, second.status
+    assert_equal 2, consumer_calls
     assert_equal "scan-1", second.outputs[:consumer].value
     consumer_entries = second.trace.select { |entry| entry.name == :consumer }
     assert_equal [:success], consumer_entries.map(&:status)

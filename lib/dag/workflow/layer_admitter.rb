@@ -90,20 +90,8 @@ module DAG
         @graph.each_predecessor(name).all? { |dep| outputs.key?(dep) }
       end
 
-      def build_condition_context(name, step, outputs, statuses)
-        if Condition.callable?(step.config[:run_if])
-          basic_condition_context(name, outputs, statuses)
-        else
-          @dependency_input_resolver.condition_context_for(name: name, outputs: outputs, statuses: statuses)
-        end
-      end
-
-      def basic_condition_context(name, outputs, statuses)
-        dependency_context = @root_input.transform_values { |value| {value: value, status: :success} }
-
-        dependency_context.merge(@graph.each_predecessor(name).to_h do |dep|
-          [dep, {value: outputs.fetch(dep).value, status: statuses.fetch(dep)}]
-        end)
+      def build_condition_context(name, _step, outputs, statuses)
+        @dependency_input_resolver.condition_context_for(name: name, outputs: outputs, statuses: statuses)
       end
     end
   end
