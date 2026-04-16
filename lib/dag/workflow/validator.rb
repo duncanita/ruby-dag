@@ -25,6 +25,7 @@ module DAG
             allowed_inputs: allowed_condition_inputs(graph, step, node_name: node)
           ))
           errors.concat(validate_dependency_inputs(graph, step, node_name: node))
+          errors.concat(validate_emit_events(step, node_name: node))
           errors.concat(validate_sub_workflow(step, node_name: node)) if step.type == :sub_workflow
         end
 
@@ -62,6 +63,36 @@ module DAG
         errors << "Node #{node_name} dependency #{dependency_name} has invalid version #{version.inspect}; expected :latest, :all, or a positive Integer"
       end
 
+      def self.validate_emit_events(step, node_name:)
+        emit_events = step.config[:emit_events]
+        return [] if emit_events.nil?
+
+        return ["Node #{node_name} emit_events must be an array of event descriptors"] unless emit_events.is_a?(Array)
+
+        emit_events.each_with_index.each_with_object([]) do |(descriptor, index), errors|
+          context = "Node #{node_name} emit_events[#{index}]"
+
+          unless descriptor.is_a?(Hash)
+            errors << "#{context} must be a mapping"
+            next
+          end
+
+          hash = descriptor.transform_keys(&:to_sym)
+          unknown = hash.keys - %i[name if]
+          errors << "#{context} has unsupported keys #{unknown.map(&:inspect).join(", ")}" unless unknown.empty?
+
+          if blank?(hash[:name])
+            errors << "#{context} must include :name"
+          elsif !symbol_like?(hash[:name])
+            errors << "#{context}.name must be a Symbol or String"
+          end
+
+          if hash.key?(:if) && !hash[:if].nil? && !callable?(hash[:if])
+            errors << "#{context}.if must be callable"
+          end
+        end
+      end
+
       def self.validate_external_dependency(dependency, node_name:, errors:)
         if blank?(dependency[:workflow_id]) || blank?(dependency[:node])
           errors << "Node #{node_name} has invalid external dependency #{dependency.inspect}; expected workflow_id and node"
@@ -95,6 +126,14 @@ module DAG
 
       def self.blank?(value)
         value.nil? || (value.respond_to?(:empty?) && value.empty?)
+      end
+
+      def self.symbol_like?(value)
+        value.is_a?(Symbol) || value.is_a?(String)
+      end
+
+      def self.callable?(value)
+        value.respond_to?(:call)
       end
     end
   end

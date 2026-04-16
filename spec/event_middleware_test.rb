@@ -39,6 +39,51 @@ class EventMiddlewareTest < Minitest::Test
     assert_equal Time.utc(2026, 4, 16, 12, 0, 0), bus.events.first.emitted_at
   end
 
+  def test_rejects_non_array_emit_events_config
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Runner.new(build_test_workflow(
+        monitor: {
+          type: :ruby,
+          emit_events: {name: :ready},
+          callable: ->(_input) { DAG::Success.new(value: "ok") }
+        }
+      ), parallel: false)
+    end
+
+    assert_match(/emit_events/, Array(error.message).join(" "))
+    assert_match(/array/i, Array(error.message).join(" "))
+  end
+
+  def test_rejects_emit_event_descriptor_without_name
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Runner.new(build_test_workflow(
+        monitor: {
+          type: :ruby,
+          emit_events: [{if: ->(_result) { true }}],
+          callable: ->(_input) { DAG::Success.new(value: "ok") }
+        }
+      ), parallel: false)
+    end
+
+    assert_match(/emit_events\[0\]/, Array(error.message).join(" "))
+    assert_match(/name/, Array(error.message).join(" "))
+  end
+
+  def test_rejects_emit_event_descriptor_with_non_callable_if
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Runner.new(build_test_workflow(
+        monitor: {
+          type: :ruby,
+          emit_events: [{name: :ready, if: :sometimes}],
+          callable: ->(_input) { DAG::Success.new(value: "ok") }
+        }
+      ), parallel: false)
+    end
+
+    assert_match(/emit_events\[0\]/, Array(error.message).join(" "))
+    assert_match(/callable/, Array(error.message).join(" "))
+  end
+
   def test_does_not_emit_events_for_failed_attempts
     bus = MemoryEventBus.new
     middleware = DAG::Workflow::EventMiddleware.new(event_bus: bus, clock: build_clock)
