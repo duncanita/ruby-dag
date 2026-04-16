@@ -102,7 +102,10 @@ module DAG
         return {} if cause.nil?
         raise ArgumentError, "cause must be a Hash" unless cause.is_a?(Hash)
 
-        cause.transform_keys(&:to_sym)
+        normalized = cause.transform_keys(&:to_sym)
+        raise ArgumentError, "cause cannot override invalidated_from" if normalized.key?(:invalidated_from)
+
+        normalized
       end
 
       def normalize_node_path(node_path)

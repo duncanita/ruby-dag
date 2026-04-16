@@ -144,6 +144,32 @@ class InvalidationTest < Minitest::Test
     assert_equal fetch[:stale_cause], publish[:stale_cause]
   end
 
+  def test_invalidate_rejects_custom_invalidated_from_override
+    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    definition = workflow_definition(
+      fetch: {type: :ruby, callable: ->(*) { DAG::Success.new(value: "fetch") }}
+    )
+
+    store.begin_run(
+      workflow_id: "wf-invalid-cause",
+      definition_fingerprint: "fp-1",
+      node_paths: [[:fetch]]
+    )
+    save_completed_output(store, workflow_id: "wf-invalid-cause", node_path: [:fetch], version: 1, value: "fetch-v1")
+
+    error = assert_raises(ArgumentError) do
+      DAG::Workflow.invalidate(
+        workflow_id: "wf-invalid-cause",
+        node: [:fetch],
+        definition: definition,
+        execution_store: store,
+        cause: {invalidated_from: [:other]}
+      )
+    end
+
+    assert_match(/invalidated_from/, error.message)
+  end
+
   def test_invalidate_supports_nested_node_paths_inside_sub_workflows
     store = DAG::Workflow::ExecutionStore::MemoryStore.new
     child = workflow_definition(
