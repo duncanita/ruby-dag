@@ -104,6 +104,59 @@ class RunnerTest < Minitest::Test
     assert_equal ["scan-1", "scan-2"], second_run.outputs[:history].value
   end
 
+  def test_runner_reexecutes_stale_nodes_and_recomputes_downstream_outputs
+    store = build_memory_store
+    source_calls = 0
+    transform_calls = 0
+
+    definition = build_test_workflow(
+      source: {
+        type: :ruby,
+        resume_key: "source-v1",
+        callable: ->(_input) do
+          source_calls += 1
+          DAG::Success.new(value: "source-#{source_calls}")
+        end
+      },
+      transform: {
+        type: :ruby,
+        depends_on: [:source],
+        resume_key: "transform-v1",
+        callable: ->(input) do
+          transform_calls += 1
+          DAG::Success.new(value: "#{input[:source]}:transform-#{transform_calls}")
+        end
+      }
+    )
+
+    first_run = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      execution_store: store,
+      workflow_id: "wf-stale-rerun").call
+
+    assert_equal "source-1", first_run.outputs[:source].value
+    assert_equal "source-1:transform-1", first_run.outputs[:transform].value
+
+    DAG::Workflow.invalidate(
+      workflow_id: "wf-stale-rerun",
+      node: [:source],
+      definition: definition,
+      execution_store: store
+    )
+
+    second_run = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      execution_store: store,
+      workflow_id: "wf-stale-rerun").call
+
+    assert_equal 2, source_calls
+    assert_equal 2, transform_calls
+    assert_equal "source-2", second_run.outputs[:source].value
+    assert_equal "source-2:transform-2", second_run.outputs[:transform].value
+    assert_equal :completed, store.load_node(workflow_id: "wf-stale-rerun", node_path: [:source])[:state]
+    assert_equal :completed, store.load_node(workflow_id: "wf-stale-rerun", node_path: [:transform])[:state]
+  end
+
   def test_runner_fails_when_requested_local_dependency_version_is_missing
     store = build_memory_store
 

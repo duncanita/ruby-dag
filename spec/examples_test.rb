@@ -252,6 +252,25 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Payload priority: high"
   end
 
+  def test_invalidation_cascade_example_executes_successfully
+    stdout, stderr, status = run_example("examples/invalidation_cascade.rb")
+
+    assert status.success?, <<~MSG
+      expected invalidation_cascade example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== First Run ==="
+    assert_includes stdout, "=== Invalidate source ==="
+    assert_includes stdout, "Stale nodes: [[:source], [:transform]]"
+    assert_includes stdout, "=== Second Run (recompute stale nodes) ==="
+    assert_includes stdout, "Source calls: 2"
+    assert_includes stdout, "Transform calls: 2"
+  end
+
   def test_graph_basics_example_executes_successfully
     stdout, stderr, status = run_example("examples/graph_basics.rb")
 

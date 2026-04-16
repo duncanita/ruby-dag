@@ -336,6 +336,37 @@ Notes:
 - loader/dumper round-trip `version:` and `as:` metadata for both local and cross-workflow dependencies
 - see `examples/versioned_dependency_inputs.rb` and `examples/missing_requested_version_waiting.rb` for runnable examples exercised in the test suite
 
+### Invalidation cascade
+
+Invalidation marks previously completed reusable outputs as stale so the next run
+recomputes that branch from the current definition.
+
+```ruby
+store = DAG::Workflow::ExecutionStore::MemoryStore.new
+
+invalidated = DAG::Workflow.invalidate(
+  workflow_id: "demo-invalidation",
+  node: [:source],
+  definition: workflow,
+  execution_store: store,
+  max_cascade_depth: nil
+)
+
+stale = DAG::Workflow.stale_nodes(
+  workflow_id: "demo-invalidation",
+  execution_store: store
+)
+```
+
+Notes:
+- `invalidate` walks the transitive descendant closure in the current definition starting from a top-level node
+- only nodes currently marked `:completed` are transitioned to `:stale`
+- `stale_nodes` returns normalized node paths sorted for stable inspection
+- stale nodes supersede their reusable outputs, but `version: :all` keeps the historical audit trail intact
+- the next runner invocation recomputes stale branches because `load_output(..., version: :latest)` ignores superseded outputs
+- `max_cascade_depth:` limits how far descendants are traversed from the invalidated root
+- see `examples/invalidation_cascade.rb` for a runnable end-to-end example exercised in the test suite
+
 ### Waiting and not_before scheduling
 
 Scheduling is eligibility-based. The runner does not sleep: if a node has a
