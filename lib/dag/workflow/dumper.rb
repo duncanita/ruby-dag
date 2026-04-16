@@ -44,12 +44,7 @@ module DAG
 
         return unless step.type == :sub_workflow
 
-        definition = step.config[:definition]
-        definition_path = step.config[:definition_path]
-        return if definition.nil? && definition_path.is_a?(String) && !definition_path.empty?
-
-        raise SerializationError,
-          "Step #{name} (type: :sub_workflow) is YAML-serializable only when it uses definition_path"
+        SubWorkflowSupport.validate_yaml_serializable!(step, node_name: name)
       end
 
       def build_step(name, step)
@@ -59,7 +54,7 @@ module DAG
         end
         step.config.each do |k, v|
           key = k.to_s
-          next if key == "run_if"
+          next if %w[run_if external_dependencies].include?(key)
           if RESERVED_YAML_KEYS.include?(key)
             raise SerializationError,
               "Step #{name} has config key '#{key}' which collides with a " \
@@ -68,18 +63,29 @@ module DAG
           end
           node[key] = dumpable_config_value(k, v)
         end
-        deps = @graph.predecessors(name).to_a.sort
-        unless deps.empty?
-          node["depends_on"] = deps.map { |dep|
-            meta = @graph.edge_metadata(dep, name)
-            if meta.empty?
-              dep.to_s
-            else
-              {"from" => dep.to_s}.merge(meta.transform_keys(&:to_s))
-            end
-          }
-        end
+        depends_on = local_dependency_descriptors(name) + external_dependency_descriptors(step)
+        node["depends_on"] = depends_on unless depends_on.empty?
         node
+      end
+
+      def local_dependency_descriptors(name)
+        @graph.predecessors(name).to_a.sort.map do |dep|
+          meta = @graph.edge_metadata(dep, name)
+          if meta.empty?
+            dep.to_s
+          else
+            {"from" => dep.to_s}.merge(meta.transform_keys(&:to_s))
+          end
+        end
+      end
+
+      def external_dependency_descriptors(step)
+        Array(step.config[:external_dependencies]).map do |dependency|
+          {
+            "workflow" => dependency.fetch(:workflow_id).to_s,
+            "node" => dependency.fetch(:node).to_s
+          }.merge(dependency.except(:workflow_id, :node).transform_keys(&:to_s))
+        end
       end
 
       def dumpable_config_value(key, value)

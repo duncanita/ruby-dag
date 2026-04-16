@@ -7,7 +7,7 @@ class CheckpointResumeTest < Minitest::Test
 
   def test_runner_requires_workflow_id_when_execution_store_is_enabled
     definition = build_test_workflow(fetch: {command: "echo fetch"})
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
 
     error = assert_raises(DAG::ValidationError) do
       DAG::Workflow::Runner.new(definition, parallel: false, execution_store: store)
@@ -20,7 +20,7 @@ class CheckpointResumeTest < Minitest::Test
     definition = build_test_workflow(
       fetch: {type: :ruby, callable: ->(_input) { DAG::Success.new(value: "ok") }}
     )
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
 
     error = assert_raises(DAG::ValidationError) do
       DAG::Workflow::Runner.new(definition,
@@ -57,7 +57,7 @@ class CheckpointResumeTest < Minitest::Test
       }
     )
 
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
 
     first = DAG::Workflow::Runner.new(definition,
       parallel: false,
@@ -96,7 +96,7 @@ class CheckpointResumeTest < Minitest::Test
       }
     )
 
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
 
     first = DAG::Workflow::Runner.new(definition,
       parallel: false,
@@ -116,7 +116,7 @@ class CheckpointResumeTest < Minitest::Test
 
   def test_fingerprint_mismatch_raises_before_any_step_runs
     calls = 0
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
 
     original = build_test_workflow(
       fetch: {

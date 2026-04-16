@@ -6,7 +6,7 @@ class PauseResumeTest < Minitest::Test
   include TestHelpers
 
   def test_pause_flag_stops_before_next_layer_and_persists_paused_status
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
     definition = DAG::Workflow::Loader.from_hash(
       fetch: {
         type: :ruby,
@@ -37,7 +37,7 @@ class PauseResumeTest < Minitest::Test
   end
 
   def test_pause_flag_is_observed_between_layers_not_mid_layer
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
     definition = DAG::Workflow::Loader.from_hash(
       a: {
         type: :ruby,
@@ -72,7 +72,7 @@ class PauseResumeTest < Minitest::Test
   end
 
   def test_resume_after_clearing_pause_flag_reuses_completed_outputs
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
     fetch_calls = 0
     transform_calls = 0
     definition = DAG::Workflow::Loader.from_hash(

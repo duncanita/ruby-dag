@@ -2,9 +2,10 @@
 
 require_relative "test_helper"
 require "open3"
-require "tmpdir"
 
 class ExamplesTest < Minitest::Test
+  include TestHelpers
+
   def test_workflow_runner_example_executes_successfully
     stdout, stderr, status = run_example("examples/workflow_runner.rb")
 
@@ -131,15 +132,150 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Output: payload"
   end
 
+  def test_ttl_expiry_example_executes_successfully
+    stdout, stderr, status = run_example("examples/ttl_expiry.rb")
+
+    assert status.success?, <<~MSG
+      expected ttl_expiry example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== First Run ==="
+    assert_includes stdout, "Output: run-1"
+    assert_includes stdout, "=== Second Run (reuse within ttl) ==="
+    assert_includes stdout, "=== Third Run (ttl expired) ==="
+    assert_includes stdout, "Output: run-2"
+    assert_includes stdout, "Calls: 2"
+    assert_includes stdout, "Stale cause: ttl_expired"
+  end
+
+  def test_versioned_dependency_inputs_example_executes_successfully
+    stdout, stderr, status = run_example("examples/versioned_dependency_inputs.rb")
+
+    assert status.success?, <<~MSG
+      expected versioned_dependency_inputs example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== First Run ==="
+    assert_includes stdout, "Source: scan-1"
+    assert_includes stdout, "=== Second Run ==="
+    assert_includes stdout, "Latest value: scan-2"
+    assert_includes stdout, "First value: scan-1"
+    assert_includes stdout, 'History: ["scan-1", "scan-2"]'
+    assert_includes stdout, "Source calls: 2"
+    assert_includes stdout, "Stored versions: [1, 2]"
+  end
+
+  def test_missing_requested_version_waiting_example_executes_successfully
+    stdout, stderr, status = run_example("examples/missing_requested_version_waiting.rb")
+
+    assert status.success?, <<~MSG
+      expected missing_requested_version_waiting example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== Cross-Workflow First Run ==="
+    assert_includes stdout, "Status: waiting"
+    assert_includes stdout, "=== Cross-Workflow Second Run ==="
+    assert_includes stdout, "Output: external-v2"
+    assert_includes stdout, "=== Local Historical Version ==="
+    assert_includes stdout, "Error code: missing_dependency_version"
+  end
+
+  def test_logging_middleware_example_executes_successfully
+    stdout, stderr, status = run_example("examples/logging_middleware.rb")
+
+    assert status.success?, <<~MSG
+      expected logging_middleware example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, '"event":"starting"'
+    assert_includes stdout, '"event":"finished"'
+    assert_includes stdout, "=== Structured Log Summary ==="
+    assert_includes stdout, "Status: completed"
+    assert_includes stdout, "Events captured: 4"
+    assert_includes stdout, "Final output: PAYLOAD"
+    assert_includes stdout, "Formatted sample: finished transform attempt=1 step_type=ruby status=ok"
+  end
+
+  def test_logging_middleware_failures_example_executes_successfully
+    stdout, stderr, status = run_example("examples/logging_middleware_failures.rb")
+
+    assert status.success?, <<~MSG
+      expected logging_middleware_failures example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, '"status":"fail"'
+    assert_includes stdout, '"event":"raised"'
+    assert_includes stdout, "=== Failure Result Summary ==="
+    assert_includes stdout, "Step error code: invalid_payload"
+    assert_includes stdout, "=== Raised Exception Summary ==="
+    assert_includes stdout, "Step error code: step_raised"
+    assert_includes stdout, "Raised error class: RuntimeError"
+    assert_includes stdout, "Raised error message: middleware kaboom for explode"
+    assert_includes stdout, "Formatted sample: raised explode attempt=1 step_type=ruby error_class=RuntimeError error_message=middleware kaboom for explode"
+  end
+
+  def test_graph_basics_example_executes_successfully
+    stdout, stderr, status = run_example("examples/graph_basics.rb")
+
+    assert status.success?, <<~MSG
+      expected graph_basics example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== Graph Overview ==="
+    assert_includes stdout, "=== Topological Ordering ==="
+    assert_includes stdout, "fetch -> store?  true"
+    assert_includes stdout, "=== Cycle Detection ==="
+    assert_includes stdout, "Caught:"
+    assert_includes stdout, "=== Empty Graph ==="
+  end
+
+  def test_builder_and_immutability_example_executes_successfully
+    stdout, stderr, status = run_example("examples/builder_and_immutability.rb")
+
+    assert status.success?, <<~MSG
+      expected builder_and_immutability example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== Builder ==="
+    assert_includes stdout, "Frozen? true"
+    assert_includes stdout, "=== Dup (mutable copy) ==="
+    assert_includes stdout, "=== Copy-on-Write (with_node / with_edge) ==="
+    assert_includes stdout, "Same structure: true"
+    assert_includes stdout, "=== Validation ==="
+  end
+
   private
 
   def run_example(path)
-    env = {
-      "TMPDIR" => Dir.tmpdir,
-      "HOME" => ENV.fetch("HOME", Dir.pwd)
-    }
-
-    Open3.capture3(env,
+    Open3.capture3(example_env,
       Gem.ruby, "-Ilib", path,
       chdir: File.expand_path("..", __dir__))
   end

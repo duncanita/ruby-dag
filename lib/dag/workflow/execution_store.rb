@@ -52,7 +52,7 @@ module DAG
           nil
         end
 
-        def save_output(workflow_id:, node_path:, version:, result:, reusable:, superseded:)
+        def save_output(workflow_id:, node_path:, version:, result:, reusable:, superseded:, saved_at: Time.now.utc)
           node = ensure_node(workflow_id, node_path)
           node[:outputs] ||= []
           node[:outputs] << {
@@ -60,7 +60,7 @@ module DAG
             result: result,
             reusable: reusable,
             superseded: superseded,
-            saved_at: Time.now.utc
+            saved_at: saved_at
           }
           nil
         end
@@ -70,14 +70,18 @@ module DAG
           return nil unless node
 
           outputs = Array(node[:outputs]).reject { |entry| entry[:superseded] }
-          output = if version == :latest
+          case version
+          when :latest
             # standard:disable Style/ReverseFind -- Array#rfind is unavailable on Ruby 3.2, which this gem still tests against.
-            outputs.reverse_each.find { |entry| entry[:reusable] }
+            output = outputs.reverse_each.find { |entry| entry[:reusable] }
             # standard:enable Style/ReverseFind
+            output ? deep_copy(output) : nil
+          when :all
+            deep_copy(outputs.sort_by { |entry| entry[:version] })
           else
-            outputs.find { |entry| entry[:version] == version }
+            output = outputs.find { |entry| entry[:version] == version }
+            output ? deep_copy(output) : nil
           end
-          output ? deep_copy(output) : nil
         end
 
         def mark_stale(workflow_id:, node_paths:, cause:)

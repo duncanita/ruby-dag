@@ -42,19 +42,11 @@ module DAG
         end
 
         def fingerprint_sub_workflow_step(step, source_path: nil)
-          definition = step.config[:definition]
-          definition_path = step.config[:definition_path]
           resume_key = step.config[:resume_key]
 
           raise ValidationError, "Step #{step.name} (type: :sub_workflow) requires resume_key when durable execution is enabled" if blank?(resume_key)
 
-          child_definition = if definition.is_a?(Definition) && blank?(definition_path)
-            definition
-          elsif definition.nil? && !blank?(definition_path)
-            Loader.from_file(resolve_path(definition_path, source_path: source_path))
-          else
-            raise ValidationError, "Step #{step.name} (type: :sub_workflow) must define exactly one of definition or definition_path"
-          end
+          child_definition = SubWorkflowSupport.resolve_definition(step, source_path: source_path)
 
           {
             resume_key: resume_key.to_s,
@@ -75,13 +67,6 @@ module DAG
           else
             value
           end
-        end
-
-        def resolve_path(path, source_path: nil)
-          return path if Pathname.new(path).absolute?
-
-          base_dir = source_path && File.dirname(source_path)
-          File.expand_path(path, base_dir || Dir.pwd)
         end
 
         def blank?(value)

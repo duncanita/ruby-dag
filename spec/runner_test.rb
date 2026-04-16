@@ -45,6 +45,201 @@ class RunnerTest < Minitest::Test
     assert_equal "X+Y", result.outputs[:merge].value
   end
 
+  def test_runner_resolves_versioned_dependency_inputs_from_execution_store
+    store = build_memory_store
+    clock = build_clock
+    source_calls = 0
+
+    definition = build_test_workflow(
+      source: {
+        type: :ruby,
+        resume_key: "source-v1",
+        schedule: {ttl: 1},
+        callable: ->(_input) do
+          source_calls += 1
+          DAG::Success.new(value: "scan-#{source_calls}")
+        end
+      },
+      latest_value: {
+        type: :ruby,
+        depends_on: [{from: :source, as: :latest_value}],
+        schedule: {ttl: 1},
+        resume_key: "latest-value-v1",
+        callable: ->(input) { DAG::Success.new(value: input[:latest_value]) }
+      },
+      first_value: {
+        type: :ruby,
+        depends_on: [{from: :source, version: 1, as: :first_value}],
+        schedule: {ttl: 1},
+        resume_key: "first-value-v1",
+        callable: ->(input) { DAG::Success.new(value: input[:first_value]) }
+      },
+      history: {
+        type: :ruby,
+        depends_on: [{from: :source, version: :all, as: :history}],
+        schedule: {ttl: 1},
+        resume_key: "history-v1",
+        callable: ->(input) { DAG::Success.new(value: input[:history]) }
+      }
+    )
+
+    first_run = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      clock: clock,
+      execution_store: store,
+      workflow_id: "wf-versioned-inputs").call
+    assert_equal "scan-1", first_run.outputs[:source].value
+
+    clock.advance(2)
+
+    second_run = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      clock: clock,
+      execution_store: store,
+      workflow_id: "wf-versioned-inputs").call
+
+    assert_equal 2, source_calls
+    assert_equal "scan-2", second_run.outputs[:latest_value].value
+    assert_equal "scan-1", second_run.outputs[:first_value].value
+    assert_equal ["scan-1", "scan-2"], second_run.outputs[:history].value
+  end
+
+  def test_runner_fails_when_requested_local_dependency_version_is_missing
+    store = build_memory_store
+
+    definition = build_test_workflow(
+      source: {
+        type: :ruby,
+        resume_key: "source-v1",
+        callable: ->(_input) { DAG::Success.new(value: "scan-1") }
+      },
+      consumer: {
+        type: :ruby,
+        depends_on: [{from: :source, version: 2, as: :missing_version}],
+        resume_key: "consumer-v1",
+        callable: ->(input) { DAG::Success.new(value: input[:missing_version]) }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      execution_store: store,
+      workflow_id: "wf-missing-version").call
+
+    assert_equal :failed, result.status
+    assert_equal :consumer, result.error[:failed_node]
+    assert_equal :missing_dependency_version, result.error[:step_error][:code]
+    assert_match(/version 2/, result.error[:step_error][:message])
+  end
+
+  def test_runner_waits_when_cross_workflow_version_is_unavailable
+    store = build_memory_store
+    resolver_calls = 0
+    resolver = lambda do |workflow_id, node_name, version|
+      resolver_calls += 1
+      next nil if resolver_calls == 1
+
+      store.load_output(workflow_id: workflow_id, node_path: [node_name], version: version)
+    end
+
+    definition = build_test_workflow(
+      consumer: {
+        type: :ruby,
+        depends_on: [{workflow: "pipeline-a", node: :validated_output, version: 2, as: :validated}],
+        resume_key: "consumer-v1",
+        callable: ->(input) { DAG::Success.new(value: input[:validated]) }
+      }
+    )
+
+    first = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      cross_workflow_resolver: resolver,
+      execution_store: store,
+      workflow_id: "wf-cross-version").call
+
+    assert_equal :waiting, first.status
+    assert_equal [[:consumer]], first.waiting_nodes
+    assert_equal :waiting, store.load_run("wf-cross-version")[:workflow_status]
+
+    store.begin_run(workflow_id: "pipeline-a", definition_fingerprint: "fp-external", node_paths: [[:validated_output]])
+    store.save_output(
+      workflow_id: "pipeline-a",
+      node_path: [:validated_output],
+      version: 2,
+      result: DAG::Success.new(value: "external-v2"),
+      reusable: true,
+      superseded: false
+    )
+
+    second = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      cross_workflow_resolver: resolver,
+      execution_store: store,
+      workflow_id: "wf-cross-version").call
+
+    assert_equal :completed, second.status
+    assert_equal "external-v2", second.outputs[:consumer].value
+  end
+
+  def test_runner_passes_external_dependency_values_to_callable_run_if
+    definition = build_test_workflow(
+      consumer: {
+        type: :ruby,
+        depends_on: [{workflow: "pipeline-a", node: :validated_output, version: 2, as: :validated}],
+        run_if: ->(input) { input[:validated] == "external-v2" },
+        callable: ->(input) { DAG::Success.new(value: input[:validated]) }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      cross_workflow_resolver: ->(_workflow_id, _node_name, _version) { "external-v2" }).call
+
+    assert_equal :completed, result.status
+    assert_equal "external-v2", result.outputs[:consumer].value
+  end
+
+  def test_runner_supports_keyword_style_cross_workflow_resolver_lambdas
+    definition = build_test_workflow(
+      consumer: {
+        type: :ruby,
+        depends_on: [{workflow: "pipeline-a", node: :validated_output, version: 2, as: :validated}],
+        callable: ->(input) { DAG::Success.new(value: input[:validated]) }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      cross_workflow_resolver: lambda do |workflow_id:, node_name:, version:|
+        [workflow_id, node_name, version].join(":")
+      end).call
+
+    assert_equal :completed, result.status
+    assert_equal "pipeline-a:validated_output:2", result.outputs[:consumer].value
+  end
+
+  def test_runner_fails_when_cross_workflow_resolver_raises
+    definition = build_test_workflow(
+      consumer: {
+        type: :ruby,
+        depends_on: [{workflow: "pipeline-a", node: :validated_output, version: 2, as: :validated}],
+        resume_key: "consumer-v1",
+        callable: ->(input) { DAG::Success.new(value: input[:validated]) }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      cross_workflow_resolver: ->(*) { raise "resolver exploded" },
+      execution_store: build_memory_store,
+      workflow_id: "wf-cross-version-error").call
+
+    assert_equal :failed, result.status
+    assert_equal :consumer, result.error[:failed_node]
+    assert_equal :cross_workflow_resolution_failed, result.error[:step_error][:code]
+    assert_match(/resolver exploded/, result.error[:step_error][:message])
+  end
+
   # --- Failure handling ---
 
   def test_stops_on_failure
@@ -675,7 +870,7 @@ class RunnerTest < Minitest::Test
     assert_equal "always", result.outputs[:a].value
   end
 
-  # --- run_if exception containment ---
+  # --- layer admission error contract ---
 
   def test_run_if_exception_produces_failure_not_crash
     graph = DAG::Graph.new.add_node(:a)
@@ -689,7 +884,7 @@ class RunnerTest < Minitest::Test
     assert result.failure?
     assert_equal :a, result.error[:failed_node]
     step_error = result.error[:step_error]
-    assert_equal :run_if_error, step_error[:code]
+    assert_equal :layer_admission_error, step_error[:code]
     assert_match(/predicate boom/, step_error[:message])
     assert_equal "RuntimeError", step_error[:error_class]
   end
@@ -765,6 +960,22 @@ class RunnerTest < Minitest::Test
     assert result.failure?
     assert_equal [:failed_node, :step_error], result.error.keys.sort
     assert result.outputs[:ok].success?
+  end
+
+  def test_malformed_schedule_surfaces_as_layer_admission_error
+    graph = DAG::Graph.new.add_node(:a)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "never") },
+      schedule: {not_before: "not-a-date"}))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
+
+    assert result.failure?
+    assert_equal :a, result.error[:failed_node]
+    step_error = result.error[:step_error]
+    assert_equal :layer_admission_error, step_error[:code]
+    assert_match(/layer admission for step a raised/, step_error[:message])
   end
 
   def test_empty_graph_succeeds

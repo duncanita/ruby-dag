@@ -37,6 +37,7 @@ module DAG
         middleware: [],
         workflow_id: nil,
         execution_store: nil,
+        cross_workflow_resolver: nil,
         node_path_prefix: [],
         root_input: {},
         register_execution_store: true,
@@ -51,11 +52,44 @@ module DAG
         @middleware = Array(middleware).freeze
         @workflow_id = workflow_id
         @execution_store = execution_store
+        @cross_workflow_resolver = cross_workflow_resolver
         @node_path_prefix = Array(node_path_prefix).map(&:to_sym).freeze
+        @execution_persistence = ExecutionPersistence.new(
+          execution_store: @execution_store,
+          workflow_id: @workflow_id,
+          registry: @registry,
+          clock: @clock,
+          node_path_prefix: @node_path_prefix
+        )
         @root_input = root_input.transform_keys(&:to_sym).freeze
+        @dependency_input_resolver = DependencyInputResolver.new(
+          graph: @graph,
+          execution_store: @execution_store,
+          workflow_id: @workflow_id,
+          cross_workflow_resolver: @cross_workflow_resolver,
+          root_input: @root_input,
+          node_path_prefix: @node_path_prefix
+        )
         @register_execution_store = register_execution_store
         validate_context_parallelism!(parallel, context)
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
+        @attempt_trace_middleware = AttemptTraceMiddleware.new(clock: @clock)
+        @trace_recorder = TraceRecorder.new(callbacks: @callbacks)
+        @task_completion_handler = TaskCompletionHandler.new(
+          trace_recorder: @trace_recorder,
+          execution_persistence: @execution_persistence,
+          callbacks: @callbacks,
+          lifecycle_callback_result: method(:callback_result_for_lifecycle)
+        )
+        @layer_admitter = LayerAdmitter.new(
+          graph: @graph,
+          registry: @registry,
+          clock: @clock,
+          execution_persistence: @execution_persistence,
+          dependency_input_resolver: @dependency_input_resolver,
+          root_input: @root_input,
+          task_builder: method(:build_runnable_task)
+        )
         @strategy = build_strategy(parallel, max_parallelism)
         validate_coverage!(graph, registry)
         validate_workflow!(graph, registry)
@@ -194,7 +228,7 @@ module DAG
       end
 
       def build_run_result(outputs, trace, status, error, waiting_nodes)
-        @execution_store&.set_workflow_status(workflow_id: @workflow_id, status: status, waiting_nodes: waiting_nodes)
+        @execution_persistence.set_workflow_status(status: status, waiting_nodes: waiting_nodes)
 
         RunResult.new(
           status: status,
@@ -214,62 +248,42 @@ module DAG
       # consumer querying strategy identity from inside :start sees the
       # one actually running.
       def execute_layer(layer, layer_index, previous_outputs, statuses, trace, deadline)
-        runnable, immediate_results, waiting_nodes = partition_layer(layer, previous_outputs, statuses, deadline)
+        partition = @layer_admitter.call(
+          layer: layer,
+          previous_outputs: previous_outputs,
+          statuses: statuses,
+          deadline: deadline
+        )
         results = {}
 
-        runnable.each { |t| @callbacks.start(t.name, t.step) }
-        record_immediate_results(immediate_results, results, statuses, layer_index, trace)
-        task_waiting_nodes, paused = run_tasks(runnable, layer_index, trace, results, statuses)
-        waiting_nodes.concat(task_waiting_nodes)
+        partition.runnable.each { |task| @callbacks.start(task.name, task.step) }
+        @trace_recorder.record_immediate_results(
+          entries: partition.immediate_results,
+          results: results,
+          statuses: statuses,
+          layer_index: layer_index,
+          trace: trace,
+          node_path_for: method(:node_path_for)
+        )
+        task_waiting_nodes, paused = run_tasks(partition.runnable, layer_index, trace, results, statuses)
+        waiting_nodes = partition.waiting_nodes + task_waiting_nodes
 
         [results, waiting_nodes, paused]
       end
 
-      def partition_layer(layer, previous_outputs, statuses, deadline)
-        runnable = []
-        immediate_results = []
-        waiting_nodes = []
+      def build_runnable_task(name:, step:, input:, input_keys:, deadline:)
+        execution = build_step_execution(name, current_attempt: 1, deadline: deadline)
+        attempt_log = []
 
-        layer.each do |name|
-          next unless dependency_outputs_ready?(name, previous_outputs)
-
-          step = @registry[name]
-          condition_context = resolve_condition_context(name, previous_outputs, statuses)
-          input = extract_input(condition_context)
-          input_keys = input.keys.sort
-
-          begin
-            if waiting_for_schedule?(step)
-              waiting_nodes << node_path_for(name)
-              persist_waiting_node(name)
-            elsif schedule_expired?(step)
-              result = schedule_deadline_exceeded_result(name, normalized_not_after(step))
-              persist_expired_schedule_node(name, result.error)
-              immediate_results << [name, result, input_keys, nil]
-            elsif skip?(step, condition_context)
-              immediate_results << [name, record_skip_result, input_keys, :skipped]
-            elsif (reused_result = load_reusable_result(name))
-              immediate_results << [name, reused_result, input_keys, :success]
-            else
-              execution = build_step_execution(name, current_attempt: 1, deadline: deadline)
-              attempt_log = []
-              runnable << Parallel::Task.new(
-                name: name,
-                step: step,
-                input: input,
-                attempt: build_step_attempt(step, input, execution, attempt_log),
-                execution: execution,
-                input_keys: input_keys,
-                attempt_log: attempt_log
-              )
-            end
-          rescue => e
-            immediate_results << [name, Result.exception_failure(:run_if_error, e,
-              message: "run_if for step #{name} raised: #{e.message}"), input_keys, nil]
-          end
-        end
-
-        [runnable, immediate_results, waiting_nodes]
+        Parallel::Task.new(
+          name: name,
+          step: step,
+          input: input,
+          attempt: build_step_attempt(step, input, execution, attempt_log),
+          execution: execution,
+          input_keys: input_keys,
+          attempt_log: attempt_log
+        )
       end
 
       # Short-circuits on an empty task list (a layer in which every step
@@ -284,22 +298,20 @@ module DAG
 
         @strategy.execute(tasks) do |name, result, started_at, finished_at, duration_ms|
           task = tasks_by_name.fetch(name)
-          lifecycle = sub_workflow_lifecycle_payload(result)
-          entries = build_trace_entries_for_task(task, layer_index, result,
-            started_at: started_at, finished_at: finished_at, duration_ms: duration_ms)
-          trace.concat(entries)
-          persist_step_result!(task, result, entries)
-
-          if lifecycle
-            waiting_nodes.concat(lifecycle[:waiting_nodes]) if lifecycle[:status] == :waiting
-            paused ||= lifecycle[:status] == :paused
-            @callbacks.finish(name, callback_result_for_lifecycle(lifecycle))
-            next
-          end
-
-          statuses[name] = entries.last.status
-          @callbacks.finish(name, result)
-          results[name] = result
+          outcome = @task_completion_handler.handle(
+            task: task,
+            result: result,
+            layer_index: layer_index,
+            started_at: started_at,
+            finished_at: finished_at,
+            duration_ms: duration_ms,
+            trace: trace,
+            results: results,
+            statuses: statuses,
+            lifecycle_payload: sub_workflow_lifecycle_payload(result)
+          )
+          waiting_nodes.concat(outcome.waiting_nodes)
+          paused ||= outcome.paused
         end
 
         [waiting_nodes, paused]
@@ -319,17 +331,18 @@ module DAG
       end
 
       def build_step_attempt(step, input, execution, attempt_log)
-        chain = @middleware.reverse.reduce(core_step_invoker(step, attempt_log)) do |next_step, middleware|
+        middleware_chain = @middleware + [@attempt_trace_middleware]
+        chain = middleware_chain.reverse.reduce(core_step_invoker(step)) do |next_step, middleware|
           build_middleware_invoker(middleware, next_step)
         end
 
-        -> { chain.call(step, input, context: @context, execution: execution) }
+        execution_with_trace_sink = execution.with(event_bus: attempt_log)
+        -> { chain.call(step, input, context: @context, execution: execution_with_trace_sink) }
       end
 
-      def core_step_invoker(step, attempt_log)
+      def core_step_invoker(step)
         executor = (step.type == :sub_workflow) ? nil : executor_class(step.type).new
         ->(current_step, current_input, context:, execution:) do
-          started_at = @clock.monotonic_now
           result = if current_step.type == :sub_workflow
             run_sub_workflow_step(current_step, current_input, context: context, execution: execution)
           else
@@ -345,36 +358,12 @@ module DAG
             })
           end
           result, child_trace = unwrap_sub_workflow_result(result)
-          attempt_log.concat(child_trace)
-          lifecycle = sub_workflow_lifecycle_payload(result)
-          finished_at = @clock.monotonic_now
-          unless lifecycle
-            attempt_log << {
-              attempt: execution.attempt,
-              node_path: execution.node_path,
-              started_at: started_at,
-              finished_at: finished_at,
-              duration_ms: ((finished_at - started_at) * 1000).round(2),
-              status: result.success? ? :success : :failure,
-              retried: false
-            }
-          end
+          Array(execution.event_bus).concat(child_trace.is_a?(Array) ? child_trace : [])
           result
         rescue => e
-          finished_at = @clock.monotonic_now
-          failure = Result.exception_failure(:step_raised, e,
+          Result.exception_failure(:step_raised, e,
             message: "step #{current_step.name} raised: #{e.message}",
             strategy: @strategy.name)
-          attempt_log << {
-            attempt: execution.attempt,
-            node_path: execution.node_path,
-            started_at: started_at,
-            finished_at: finished_at,
-            duration_ms: ((finished_at - started_at) * 1000).round(2),
-            status: :failure,
-            retried: false
-          }
-          failure
         end
       end
 
@@ -404,6 +393,7 @@ module DAG
           middleware: @middleware,
           workflow_id: execution.workflow_id,
           execution_store: execution.execution_store,
+          cross_workflow_resolver: @cross_workflow_resolver,
           node_path_prefix: execution.node_path,
           root_input: mapped_input,
           register_execution_store: false).call
@@ -453,33 +443,12 @@ module DAG
       end
 
       def resolve_sub_workflow_definition(step)
-        definition = step.config[:definition]
-        definition_path = step.config[:definition_path]
-
-        if definition.is_a?(Definition) && blank?(definition_path)
-          return Success.new(value: definition)
-        end
-
-        if definition.nil? && !blank?(definition_path)
-          return Success.new(value: Loader.from_file(resolve_sub_workflow_path(definition_path)))
-        end
-
-        Failure.new(error: {
-          code: :sub_workflow_invalid_definition,
-          message: "sub_workflow step #{step.name} must define exactly one of definition or definition_path"
-        })
+        Success.new(value: SubWorkflowSupport.resolve_definition(step, source_path: @definition_source_path))
       rescue ArgumentError, ValidationError => e
         Failure.new(error: {
           code: :sub_workflow_invalid_definition,
           message: e.message
         })
-      end
-
-      def resolve_sub_workflow_path(definition_path)
-        return definition_path if Pathname.new(definition_path).absolute?
-
-        base_dir = @definition_source_path && File.dirname(@definition_source_path)
-        File.expand_path(definition_path, base_dir || Dir.pwd)
       end
 
       def remaining_timeout_for(deadline)
@@ -571,96 +540,12 @@ module DAG
         })
       end
 
-      def skip?(step, condition_context) = !Condition.evaluate(step.config[:run_if], condition_context)
-
-      def record_immediate_results(entries, results, statuses, layer_index, trace)
-        entries.each do |name, result, input_keys, status|
-          entry = build_trace_entry(node_path_for(name), layer_index, result,
-            started_at: nil, finished_at: nil, duration_ms: 0,
-            input_keys: input_keys, status: status)
-          trace << entry
-          statuses[name] = entry.status
-          @callbacks.finish(name, result)
-          results[name] = result
-        end
-      end
-
-      def record_skip_result = Success.new(value: nil)
-
       def node_path_for(name)
-        @node_path_prefix + [name.to_sym]
-      end
-
-      def trace_name_for(node_path)
-        path = Array(node_path).map(&:to_sym)
-        return path.first if path.length == 1
-
-        path.join(".").to_sym
+        @execution_persistence.node_path_for(name)
       end
 
       def pause_requested?
-        @execution_store && @workflow_id && @execution_store.load_run(@workflow_id)&.fetch(:paused, false)
-      end
-
-      def waiting_for_schedule?(step)
-        not_before = normalized_not_before(step)
-        not_before && @clock.wall_now < not_before
-      end
-
-      def schedule_expired?(step)
-        not_after = normalized_not_after(step)
-        not_after && @clock.wall_now > not_after
-      end
-
-      def normalized_not_before(step)
-        normalized_schedule_time(step, :not_before)
-      end
-
-      def normalized_not_after(step)
-        normalized_schedule_time(step, :not_after)
-      end
-
-      def normalized_schedule_time(step, key)
-        raw = step.config.dig(:schedule, key)
-        case raw
-        when nil
-          nil
-        when Time
-          raw
-        else
-          Time.parse(raw.to_s)
-        end
-      end
-
-      def schedule_deadline_exceeded_result(name, not_after)
-        Failure.new(error: {
-          code: :deadline_exceeded,
-          message: "step #{name} missed schedule.not_after #{not_after.utc.iso8601}",
-          not_after: not_after.utc.iso8601
-        })
-      end
-
-      def persist_waiting_node(name)
-        return unless @execution_store && @workflow_id
-
-        @execution_store.set_node_state(
-          workflow_id: @workflow_id,
-          node_path: node_path_for(name),
-          state: :waiting,
-          metadata: {}
-        )
-      end
-
-      def persist_expired_schedule_node(name, error)
-        return unless @execution_store && @workflow_id
-
-        @execution_store.set_node_state(
-          workflow_id: @workflow_id,
-          node_path: node_path_for(name),
-          state: :failed,
-          reason: error,
-          metadata: {}
-        )
+        @execution_persistence.pause_requested?
       end
 
       def blank?(value)
@@ -671,96 +556,6 @@ module DAG
         initial_outputs.transform_values do |value|
           value.is_a?(Result) ? value : Success.new(value: value)
         end
-      end
-
-      def dependency_outputs_ready?(name, outputs)
-        @graph.each_predecessor(name).all? { |dep| outputs.key?(dep) }
-      end
-
-      def load_reusable_result(name)
-        return nil unless @execution_store
-
-        stored = @execution_store.load_output(workflow_id: @workflow_id, node_path: node_path_for(name))
-        stored && stored[:result]
-      end
-
-      def persist_step_result!(task, result, entries)
-        return unless @execution_store
-        return if sub_workflow_lifecycle_payload(result)
-
-        entries.each do |entry|
-          @execution_store.append_trace(workflow_id: @workflow_id, entry: entry)
-        end
-
-        if result.success?
-          @execution_store.set_node_state(workflow_id: @workflow_id, node_path: task.execution.node_path, state: :completed)
-          @execution_store.save_output(
-            workflow_id: @workflow_id,
-            node_path: task.execution.node_path,
-            version: task.execution.attempt,
-            result: result,
-            reusable: true,
-            superseded: false
-          )
-        else
-          @execution_store.set_node_state(
-            workflow_id: @workflow_id,
-            node_path: task.execution.node_path,
-            state: :failed,
-            reason: result.error,
-            metadata: {}
-          )
-        end
-      end
-
-      def build_trace_entries_for_task(task, layer_index, result, started_at:, finished_at:, duration_ms:)
-        if task.attempt_log.empty?
-          return [] if sub_workflow_lifecycle_payload(result)
-
-          return [build_trace_entry(task.execution.node_path, layer_index, result,
-            started_at: started_at, finished_at: finished_at, duration_ms: duration_ms,
-            input_keys: task.input_keys)]
-        end
-
-        task.attempt_log.each_with_index.map do |entry, index|
-          next entry if entry.is_a?(TraceEntry)
-
-          build_trace_entry(entry[:node_path] || task.execution.node_path, layer_index, result,
-            started_at: entry[:started_at],
-            finished_at: entry[:finished_at],
-            duration_ms: entry[:duration_ms],
-            input_keys: entry[:input_keys] || task.input_keys,
-            status: entry[:status],
-            attempt: entry[:attempt],
-            retried: index < (task.attempt_log.length - 1))
-        end
-      end
-
-      def build_trace_entry(node_path, layer_index, result, started_at:, finished_at:, duration_ms:, input_keys:, status: nil, attempt: 1, retried: false)
-        TraceEntry.new(
-          name: trace_name_for(node_path), layer: layer_index,
-          started_at: started_at, finished_at: finished_at,
-          duration_ms: duration_ms,
-          status: status || (result.success? ? :success : :failure),
-          input_keys: input_keys,
-          attempt: attempt,
-          retried: retried
-        )
-      end
-
-      # Downstream layers only resolve nodes whose direct predecessors already
-      # produced outputs in this invocation or via reuse. Waiting/paused nodes
-      # intentionally do not materialize placeholder outputs.
-      def resolve_condition_context(name, outputs, statuses)
-        dependency_context = @root_input.transform_values { |value| {value: value, status: :success} }
-
-        dependency_context.merge(@graph.each_predecessor(name).to_h do |dep|
-          [dep, {value: outputs.fetch(dep).value, status: statuses.fetch(dep)}]
-        end)
-      end
-
-      def extract_input(condition_context)
-        condition_context.transform_values { |entry| entry[:value] }
       end
 
       def validate_coverage!(graph, registry)

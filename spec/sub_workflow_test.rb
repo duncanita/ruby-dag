@@ -206,10 +206,7 @@ class SubWorkflowTest < Minitest::Test
   end
 
   def test_sub_workflow_propagates_waiting_status_and_namespaced_waiting_nodes
-    clock = Struct.new(:wall_time, :mono_time) do
-      def wall_now = wall_time
-      def monotonic_now = mono_time
-    end.new(Time.utc(2026, 4, 15, 9, 0, 0), 0.0)
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
     future_time = Time.utc(2026, 4, 15, 10, 0, 0)
 
     child = DAG::Workflow::Loader.from_hash(
@@ -243,10 +240,7 @@ class SubWorkflowTest < Minitest::Test
   end
 
   def test_sub_workflow_waiting_still_fires_finish_callback_with_nil_success
-    clock = Struct.new(:wall_time, :mono_time) do
-      def wall_now = wall_time
-      def monotonic_now = mono_time
-    end.new(Time.utc(2026, 4, 15, 9, 0, 0), 0.0)
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
     future_time = Time.utc(2026, 4, 15, 10, 0, 0)
     started = []
     finished = []
@@ -282,7 +276,7 @@ class SubWorkflowTest < Minitest::Test
   end
 
   def test_sub_workflow_propagates_paused_status_without_parent_output
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
 
     child = DAG::Workflow::Loader.from_hash(
       inner_fetch: {
@@ -325,7 +319,7 @@ class SubWorkflowTest < Minitest::Test
   end
 
   def test_sub_workflow_paused_still_fires_finish_callback_with_nil_success
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
     started = []
     finished = []
 
@@ -400,7 +394,7 @@ class SubWorkflowTest < Minitest::Test
       }
     )
 
-    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store = build_memory_store
     runner = lambda do
       DAG::Workflow::Runner.new(parent,
         parallel: false,
@@ -442,7 +436,7 @@ class SubWorkflowTest < Minitest::Test
       YAML
 
       definition = DAG::Workflow::Loader.from_file(parent_path)
-      store = DAG::Workflow::ExecutionStore::MemoryStore.new
+      store = build_memory_store
 
       runner = lambda do
         DAG::Workflow::Runner.new(definition,
@@ -462,5 +456,46 @@ class SubWorkflowTest < Minitest::Test
       assert_includes run[:node_paths], [:process, :summarize]
       assert_equal "stored-child", store.load_output(workflow_id: "wf-yaml-sub", node_path: [:process, :summarize])[:result].value
     end
+  end
+
+  def test_sub_workflow_parent_status_remains_success_when_child_trace_ends_with_skipped_entry
+    child = DAG::Workflow::Loader.from_hash(
+      prep: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "ready") }
+      },
+      done: {
+        type: :ruby,
+        depends_on: [:prep],
+        callable: ->(_input) { DAG::Success.new(value: "done") }
+      },
+      final_skip: {
+        type: :ruby,
+        depends_on: [:done],
+        run_if: {from: :done, value: {equals: "nope"}},
+        callable: ->(_input) { DAG::Success.new(value: "skip-me") }
+      }
+    )
+
+    parent = DAG::Workflow::Loader.from_hash(
+      process: {
+        type: :sub_workflow,
+        definition: child
+      },
+      downstream: {
+        type: :ruby,
+        depends_on: [:process],
+        run_if: {from: :process, status: :success},
+        callable: ->(input) { DAG::Success.new(value: input[:process]) }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(parent, parallel: false).call
+
+    assert_equal :completed, result.status
+    assert_equal({final_skip: nil}, result.outputs[:process].value)
+    assert_equal({final_skip: nil}, result.outputs[:downstream].value)
+    assert_equal :success, result.trace.find { |entry| entry.name == :process }.status
+    assert_equal :success, result.trace.find { |entry| entry.name == :downstream }.status
   end
 end

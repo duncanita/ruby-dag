@@ -75,7 +75,7 @@ untrusted YAML.
 | `nodes` | top level | mapping | yes | the only top-level key the loader reads |
 | `<node-name>` | under `nodes` | mapping | yes | becomes the symbol node name in the graph |
 | `type` | under each node | string | yes | must be a registered, YAML-safe step type (`exec`, `ruby_script`, `file_read`, `file_write`, plus any custom types registered with `yaml_safe: true`) |
-| `depends_on` | under each node | array | no | each entry is either a string (the upstream node name) or a mapping with `from:` and optional metadata keys (e.g. `weight`) |
+| `depends_on` | under each node | array | no | each entry is either a string (the upstream node name) or a mapping with `from:` plus optional metadata such as `as:` and `version:` (`:latest`, positive Integer, or `:all`) |
 | `run_if` | under each node | mapping | no | declarative condition DSL using `all` / `any` / `not` and leaf predicates on direct dependencies |
 | any other key | under each node | scalar / array / mapping | no | passed verbatim into the step's `config` (e.g. `command`, `path`, `timeout`, `mode`, `from`, `content`) |
 
@@ -140,6 +140,43 @@ end
 - `result.trace` — append-only attempt trace
 - `result.error` — `nil` on success, `{failed_node:, step_error:}` on failure
 - `result.workflow_id` — `nil` for in-memory runs unless you set one explicitly
+
+### Step Middleware and Structured Logging
+
+Middleware wraps a single step attempt and is configured per runner via `middleware:`.
+A logging middleware stays attempt-local: it observes step execution without changing
+admission, waiting, or persistence semantics.
+
+```ruby
+require "json"
+require_relative "lib/dag"
+
+logged_events = []
+logger = lambda do |event|
+  logged_events << event
+  puts JSON.generate(event.transform_keys(&:to_s))
+end
+
+runner = DAG::Workflow::Runner.new(definition,
+  parallel: false,
+  workflow_id: "demo-logging",
+  middleware: [DAG::Workflow::LoggingMiddleware.new(logger: logger)])
+
+result = runner.call
+puts DAG::Workflow::LoggingMiddleware.format(logged_events.last)
+```
+
+Structured events include stable fields such as:
+- `event` (`:starting`, `:finished`, `:raised`)
+- `step_name`, `step_type`
+- `workflow_id`, `node_path`, `attempt`, `depth`, `parallel`
+- `input_keys` for start events
+- `status` for finish events
+- `error_class` and `error_message` for raised events
+
+See `examples/logging_middleware.rb` for a successful end-to-end example and
+`examples/logging_middleware_failures.rb` for both failure-result logging and a true
+`raised` event produced by an inner middleware exception.
 
 ### Build Programmatically and Dump to YAML
 
@@ -231,6 +268,50 @@ Notes:
 - changing the workflow fingerprint for an existing `workflow_id` raises `DAG::ValidationError` before any step runs
 - see `examples/checkpoint_resume.rb` for a runnable end-to-end example that is exercised in the test suite
 
+### Versioned dependency inputs
+
+Versioned outputs are stored per node as monotonically increasing successful
+versions starting at `1`. A downstream dependency can request:
+- the default latest value
+- a specific historical version
+- all successful versions in ascending order
+
+```ruby
+workflow = DAG::Workflow::Loader.from_hash(
+  source: {
+    type: :ruby,
+    resume_key: "source-v1",
+    schedule: {ttl: 1},
+    callable: ->(_input) { DAG::Success.new(value: "...") }
+  },
+  history_consumer: {
+    type: :ruby,
+    depends_on: [{from: :source, version: :all, as: :history}],
+    resume_key: "history-consumer-v1",
+    callable: ->(input) { DAG::Success.new(value: input[:history]) }
+  },
+  first_consumer: {
+    type: :ruby,
+    depends_on: [{from: :source, version: 1, as: :first_value}],
+    resume_key: "first-consumer-v1",
+    callable: ->(input) { DAG::Success.new(value: input[:first_value]) }
+  }
+)
+```
+
+Notes:
+- successful outputs now get monotonic per-node versions instead of reusing the retry attempt number
+- `depends_on` metadata supports `as:` to rename the local input key
+- `version: :all` resolves to an array of raw values ordered by ascending version
+- missing local historical versions fail explicitly with `code: :missing_dependency_version`
+- cross-workflow descriptors use `workflow:` plus `node:` instead of `from:` and resolve through `cross_workflow_resolver:`
+- the `cross_workflow_resolver:` callable is invoked with three values — `workflow_id`, `node_name`, `version` — as either positional args or keyword args, auto-detected from the callable's `parameters`. It returns the raw value, a `DAG::Success`, a `{result: DAG::Success(...)}` hash (store-entry shape), or `nil` to signal "not yet available"
+- when a cross-workflow requested version is unavailable, the node becomes waiting so a later invocation can satisfy it
+- resolver exceptions fail explicitly with `code: :cross_workflow_resolution_failed`
+- versioned dependency inputs require durable execution (`execution_store:` plus `workflow_id:`); cross-workflow ones additionally require `cross_workflow_resolver:`
+- loader/dumper round-trip `version:` and `as:` metadata for both local and cross-workflow dependencies
+- see `examples/versioned_dependency_inputs.rb` and `examples/missing_requested_version_waiting.rb` for runnable examples exercised in the test suite
+
 ### Waiting and not_before scheduling
 
 Scheduling is eligibility-based. The runner does not sleep: if a node has a
@@ -262,11 +343,12 @@ result = DAG::Workflow::Runner.new(definition,
 Notes:
 - `schedule[:not_before]` uses `clock.wall_now`
 - `schedule[:not_after]` fails the step with `code: :deadline_exceeded` before late work starts
+- `schedule[:ttl]` expires reusable outputs relative to `clock.wall_now`, marks them stale with `code: :ttl_expired`, and causes re-execution instead of reuse
 - YAML Loader/Dumper round-trip `schedule.not_before`, `schedule.not_after`, `schedule.ttl`, and `schedule.cron` with YAML-safe scalar values
 - waiting nodes do not emit `Success(nil)` outputs
 - waiting nodes do not block independent branches that are still runnable later in the same invocation
 - waiting runs persist `workflow_status: :waiting` plus `waiting_nodes` in the execution store
-- see `examples/waiting_not_before.rb`, `examples/not_after_deadline.rb`, and `examples/schedule_metadata_roundtrip.rb` for runnable examples exercised in the test suite
+- see `examples/waiting_not_before.rb`, `examples/not_after_deadline.rb`, `examples/schedule_metadata_roundtrip.rb`, and `examples/ttl_expiry.rb` for runnable examples exercised in the test suite
 
 ### Pause and resume
 
@@ -804,6 +886,17 @@ log lines can pull `error[:message]` for human-readable context.
 { code: :empty_child_payload,    message: "...", strategy: :processes }
 { code: :decode_failed,          message: "...", error_class: "...", strategy: :processes }
 { code: :workflow_timeout,       message: "...", timeout_seconds: 30 }
+
+# schedule / layer admission
+{ code: :deadline_exceeded,                         message: "...", not_after: "2026-04-15T10:00:00Z" }
+{ code: :ttl_expired,                               message: "...", saved_at: "...", ttl_seconds: 300 }  # stale cause, not a step failure
+{ code: :layer_admission_error,                     message: "...", error_class: "RuntimeError" }  # safety net for unexpected admission raises (malformed run_if, unparsable schedule, etc.)
+
+# versioned / cross-workflow dependency resolution
+{ code: :missing_dependency_version,                message: "...", dependency_name: :source, version: 2 }
+{ code: :versioned_dependency_requires_execution_store, message: "...", dependency_name: :source, version: 2 }
+{ code: :cross_workflow_resolver_missing,           message: "...", workflow_id: "pipeline-a", node_name: :validated_output, version: 2 }
+{ code: :cross_workflow_resolution_failed,          message: "...", workflow_id: "pipeline-a", node_name: :validated_output, version: 2 }
 
 # Result.try
 { code: :try_raised,         message: "...", error_class: "..." }
