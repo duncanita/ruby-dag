@@ -54,18 +54,18 @@ module DAG
         )
       end
 
-      def load_reusable_result(name)
+      def load_reusable_result(name, schedule_policy: nil)
         return nil unless enabled?
 
         stored = @execution_store.load_output(workflow_id: @workflow_id, node_path: node_path_for(name))
         return nil unless stored
 
-        schedule_policy = SchedulePolicy.new(@registry[name], clock: @clock)
-        if schedule_policy.reusable_output_expired?(stored)
+        policy = schedule_policy || SchedulePolicy.new(@registry[name], clock: @clock)
+        if policy.reusable_output_expired?(stored)
           @execution_store.mark_stale(
             workflow_id: @workflow_id,
             node_paths: [node_path_for(name)],
-            cause: schedule_policy.ttl_expired_cause(name, stored)
+            cause: policy.ttl_expired_cause(name, stored)
           )
           return nil
         end

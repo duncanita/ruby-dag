@@ -358,7 +358,7 @@ module DAG
             })
           end
           result, child_trace = unwrap_sub_workflow_result(result)
-          Array(execution.event_bus).concat(child_trace)
+          Array(execution.event_bus).concat(child_trace.is_a?(Array) ? child_trace : [])
           result
         rescue => e
           Result.exception_failure(:step_raised, e,

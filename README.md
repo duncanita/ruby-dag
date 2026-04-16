@@ -305,6 +305,7 @@ Notes:
 - `version: :all` resolves to an array of raw values ordered by ascending version
 - missing local historical versions fail explicitly with `code: :missing_dependency_version`
 - cross-workflow descriptors use `workflow:` plus `node:` instead of `from:` and resolve through `cross_workflow_resolver:`
+- the `cross_workflow_resolver:` callable is invoked with three values — `workflow_id`, `node_name`, `version` — as either positional args or keyword args, auto-detected from the callable's `parameters`. It returns the raw value, a `DAG::Success`, a `{result: DAG::Success(...)}` hash (store-entry shape), or `nil` to signal "not yet available"
 - when a cross-workflow requested version is unavailable, the node becomes waiting so a later invocation can satisfy it
 - resolver exceptions fail explicitly with `code: :cross_workflow_resolution_failed`
 - versioned dependency inputs require durable execution (`execution_store:` plus `workflow_id:`); cross-workflow ones additionally require `cross_workflow_resolver:`
@@ -885,6 +886,17 @@ log lines can pull `error[:message]` for human-readable context.
 { code: :empty_child_payload,    message: "...", strategy: :processes }
 { code: :decode_failed,          message: "...", error_class: "...", strategy: :processes }
 { code: :workflow_timeout,       message: "...", timeout_seconds: 30 }
+
+# schedule / layer admission
+{ code: :deadline_exceeded,                         message: "...", not_after: "2026-04-15T10:00:00Z" }
+{ code: :ttl_expired,                               message: "...", saved_at: "...", ttl_seconds: 300 }  # stale cause, not a step failure
+{ code: :layer_admission_error,                     message: "...", error_class: "RuntimeError" }  # safety net for unexpected admission raises (malformed run_if, unparsable schedule, etc.)
+
+# versioned / cross-workflow dependency resolution
+{ code: :missing_dependency_version,                message: "...", dependency_name: :source, version: 2 }
+{ code: :versioned_dependency_requires_execution_store, message: "...", dependency_name: :source, version: 2 }
+{ code: :cross_workflow_resolver_missing,           message: "...", workflow_id: "pipeline-a", node_name: :validated_output, version: 2 }
+{ code: :cross_workflow_resolution_failed,          message: "...", workflow_id: "pipeline-a", node_name: :validated_output, version: 2 }
 
 # Result.try
 { code: :try_raised,         message: "...", error_class: "..." }

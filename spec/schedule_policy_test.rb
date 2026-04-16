@@ -40,6 +40,31 @@ class SchedulePolicyTest < Minitest::Test
     assert_equal Time.utc(2026, 4, 15, 10, 0, 0), policy.not_after
   end
 
+  def test_reusable_output_not_expired_without_ttl
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 10, 0, 0))
+    policy = DAG::Workflow::SchedulePolicy.new(build_step(schedule: {}), clock: clock)
+
+    refute policy.reusable_output_expired?(saved_at: Time.utc(2000, 1, 1, 0, 0, 0))
+  end
+
+  def test_reusable_output_expired_when_age_exceeds_positive_ttl
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 10, 0, 0))
+    policy = DAG::Workflow::SchedulePolicy.new(build_step(schedule: {ttl: 60}), clock: clock)
+
+    refute policy.reusable_output_expired?(saved_at: Time.utc(2026, 4, 15, 9, 59, 30))
+    assert policy.reusable_output_expired?(saved_at: Time.utc(2026, 4, 15, 9, 58, 0))
+  end
+
+  def test_zero_or_negative_ttl_is_always_expired
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 10, 0, 0))
+
+    zero_policy = DAG::Workflow::SchedulePolicy.new(build_step(schedule: {ttl: 0}), clock: clock)
+    assert zero_policy.reusable_output_expired?(saved_at: clock.wall_now)
+
+    negative_policy = DAG::Workflow::SchedulePolicy.new(build_step(schedule: {ttl: -5}), clock: clock)
+    assert negative_policy.reusable_output_expired?(saved_at: clock.wall_now)
+  end
+
   def test_builds_deadline_exceeded_failure_payload
     clock = build_clock(wall_time: Time.utc(2026, 4, 15, 10, 0, 1))
     step = build_step(schedule: {not_after: "2026-04-15T10:00:00Z"})

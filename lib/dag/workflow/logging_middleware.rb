@@ -32,9 +32,11 @@ module DAG
       private
 
       def start_event(step, execution, input)
-        base_event(:starting, step, execution).merge(
-          input_keys: input.is_a?(Hash) ? input.keys.map(&:to_sym) : []
-        )
+        # For callable run_if, input is a LazyCallableInput — emitting a log
+        # event shouldn't trigger external dependency resolution, so skip
+        # input_keys entirely unless input is a plain Hash.
+        keys = input.is_a?(Hash) ? input.keys.map(&:to_sym) : []
+        base_event(:starting, step, execution).merge(input_keys: keys)
       end
 
       def finish_event(step, execution, result)

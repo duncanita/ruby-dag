@@ -22,10 +22,10 @@ module DAG
           next unless dependency_outputs_ready?(name, previous_outputs)
 
           step = @registry[name]
+          schedule_policy = SchedulePolicy.new(step, clock: @clock)
 
           begin
             input_keys = @dependency_input_resolver.input_keys_for(name: name, step: step)
-            schedule_policy = SchedulePolicy.new(step, clock: @clock)
 
             if schedule_policy.waiting?
               waiting_nodes << @execution_persistence.node_path_for(name)
@@ -38,21 +38,27 @@ module DAG
               immediate_results << ImmediateResult.new(name: name, result: record_skip_result, input_keys: input_keys, status: :skipped)
             else
               input = @dependency_input_resolver.resolve(name: name, step: step, outputs: previous_outputs)
-              if (reused_result = @execution_persistence.load_reusable_result(name))
+              if (reused_result = @execution_persistence.load_reusable_result(name, schedule_policy: schedule_policy))
                 immediate_results << ImmediateResult.new(name: name, result: reused_result, input_keys: input_keys, status: :success)
               else
                 runnable << @task_builder.call(name: name, step: step, input: input, input_keys: input_keys, deadline: deadline)
               end
             end
           rescue DependencyInputResolver::MissingExecutionStoreError => e
-            immediate_results << failure_result(name, :versioned_dependency_requires_execution_store, e.message)
+            immediate_results << failure_result(name, :versioned_dependency_requires_execution_store, e.message,
+              dependency_name: e.dependency_name, version: e.version)
+          rescue DependencyInputResolver::MissingCrossWorkflowResolverError => e
+            immediate_results << failure_result(name, :cross_workflow_resolver_missing, e.message,
+              workflow_id: e.workflow_id, node_name: e.node_name, version: e.version)
           rescue DependencyInputResolver::MissingVersionError => e
-            immediate_results << failure_result(name, :missing_dependency_version, e.message)
+            immediate_results << failure_result(name, :missing_dependency_version, e.message,
+              dependency_name: e.dependency_name, version: e.version)
           rescue DependencyInputResolver::WaitingForDependencyError
             waiting_nodes << @execution_persistence.node_path_for(name)
             @execution_persistence.persist_waiting_node(name)
           rescue DependencyInputResolver::ResolverError => e
-            immediate_results << failure_result(name, :cross_workflow_resolution_failed, e.message)
+            immediate_results << failure_result(name, :cross_workflow_resolution_failed, e.message,
+              workflow_id: e.workflow_id, node_name: e.node_name, version: e.version)
           rescue => e
             immediate_results << ImmediateResult.new(
               name: name,
@@ -69,13 +75,10 @@ module DAG
 
       private
 
-      def failure_result(name, code, message)
+      def failure_result(name, code, message, **extra)
         ImmediateResult.new(
           name: name,
-          result: Failure.new(error: {
-            code: code,
-            message: message
-          }),
+          result: Failure.new(error: {code: code, message: message}.merge(extra.compact)),
           input_keys: [],
           status: :failure
         )

@@ -39,7 +39,9 @@ module DAG
       end
 
       def reusable_output_expired?(stored)
-        return false unless ttl && stored[:saved_at]
+        return false if ttl.nil?
+        return true if ttl <= 0
+        return false unless stored[:saved_at]
 
         stored[:saved_at] <= (@clock.wall_now - ttl)
       end

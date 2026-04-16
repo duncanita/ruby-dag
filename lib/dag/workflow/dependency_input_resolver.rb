@@ -3,10 +3,32 @@
 module DAG
   module Workflow
     class DependencyInputResolver
-      MissingVersionError = Class.new(StandardError)
-      MissingExecutionStoreError = Class.new(StandardError)
-      WaitingForDependencyError = Class.new(StandardError)
-      ResolverError = Class.new(StandardError)
+      class ResolutionError < StandardError
+        def initialize(message, **fields)
+          super(message)
+          fields.each { |key, value| instance_variable_set(:"@#{key}", value) }
+        end
+      end
+
+      class MissingVersionError < ResolutionError
+        attr_reader :dependency_name, :version
+      end
+
+      class MissingExecutionStoreError < ResolutionError
+        attr_reader :dependency_name, :version
+      end
+
+      class MissingCrossWorkflowResolverError < ResolutionError
+        attr_reader :workflow_id, :node_name, :version
+      end
+
+      class WaitingForDependencyError < ResolutionError
+        attr_reader :workflow_id, :node_name, :version
+      end
+
+      class ResolverError < ResolutionError
+        attr_reader :workflow_id, :node_name, :version
+      end
 
       def initialize(graph:, execution_store:, workflow_id:, cross_workflow_resolver: nil, root_input: {}, node_path_prefix: [])
         @graph = graph
@@ -160,7 +182,13 @@ module DAG
             node_path: dependency.node_path,
             version: dependency.version
           )
-          raise MissingVersionError, missing_version_message(dependency.name, dependency.version) unless stored
+          unless stored
+            raise MissingVersionError.new(
+              missing_version_message(dependency.name, dependency.version),
+              dependency_name: dependency.name,
+              version: dependency.version
+            )
+          end
 
           stored[:result].value
         end
@@ -228,18 +256,34 @@ module DAG
 
       def resolve_external_dependency_value(dependency)
         unless @cross_workflow_resolver
-          raise MissingExecutionStoreError,
-            "external dependency #{dependency.workflow_id}.#{dependency.node_name} requires cross_workflow_resolver"
+          raise MissingCrossWorkflowResolverError.new(
+            "external dependency #{dependency.workflow_id}.#{dependency.node_name} requires cross_workflow_resolver",
+            workflow_id: dependency.workflow_id,
+            node_name: dependency.node_name,
+            version: dependency.version
+          )
         end
 
         resolved = invoke_cross_workflow_resolver(dependency)
-        raise WaitingForDependencyError, waiting_dependency_message(dependency) if resolved.nil?
+        if resolved.nil?
+          raise WaitingForDependencyError.new(
+            waiting_dependency_message(dependency),
+            workflow_id: dependency.workflow_id,
+            node_name: dependency.node_name,
+            version: dependency.version
+          )
+        end
 
         normalize_external_value(resolved, dependency)
-      rescue WaitingForDependencyError
+      rescue WaitingForDependencyError, MissingCrossWorkflowResolverError
         raise
       rescue => e
-        raise ResolverError, "cross-workflow resolver failed for #{dependency.workflow_id}.#{dependency.node_name}: #{e.message}"
+        raise ResolverError.new(
+          "cross-workflow resolver failed for #{dependency.workflow_id}.#{dependency.node_name}: #{e.message}",
+          workflow_id: dependency.workflow_id,
+          node_name: dependency.node_name,
+          version: dependency.version
+        )
       end
 
       def invoke_cross_workflow_resolver(dependency)
@@ -284,8 +328,11 @@ module DAG
       def ensure_execution_store!(dependency_name, version)
         return if @execution_store && @workflow_id
 
-        raise MissingExecutionStoreError,
-          "dependency #{dependency_name} requests version #{version.inspect} but versioned inputs require execution_store and workflow_id"
+        raise MissingExecutionStoreError.new(
+          "dependency #{dependency_name} requests version #{version.inspect} but versioned inputs require execution_store and workflow_id",
+          dependency_name: dependency_name,
+          version: version
+        )
       end
 
       def missing_version_message(dependency_name, version)
@@ -297,12 +344,11 @@ module DAG
       end
 
       def accepts_keyword_arguments?
-        callable_parameters.any? { |kind, _name| kind == :keyrest } ||
-          callable_parameters.any? { |kind, _name| [:key, :keyreq].include?(kind) }
+        callable_parameters.any? { |kind, _name| %i[keyrest key keyreq].include?(kind) }
       end
 
       def callable_parameters
-        if @cross_workflow_resolver.respond_to?(:parameters)
+        @callable_parameters ||= if @cross_workflow_resolver.respond_to?(:parameters)
           @cross_workflow_resolver.parameters
         else
           @cross_workflow_resolver.method(:call).parameters
