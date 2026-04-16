@@ -63,18 +63,7 @@ module DAG
       private
 
       def partition_attempt_entries(entries)
-        attempt_entries = []
-        passthrough_entries = []
-
-        entries.each do |entry|
-          if entry.is_a?(AttemptTraceEntry)
-            attempt_entries << entry
-          else
-            passthrough_entries << entry
-          end
-        end
-
-        [attempt_entries, passthrough_entries]
+        entries.partition { |entry| entry.is_a?(AttemptTraceEntry) }
       end
 
       def build_trace_entry(node_path, layer_index, result, started_at:, finished_at:, duration_ms:, input_keys:, status: nil, attempt: 1, retried: false)

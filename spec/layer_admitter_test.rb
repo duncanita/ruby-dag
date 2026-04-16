@@ -80,7 +80,7 @@ class LayerAdmitterTest < Minitest::Test
     assert_equal [[:waiting]], partition.waiting_nodes
     assert_equal %i[fresh], partition.runnable.map(&:name)
     assert_equal %i[expired skipped reused], partition.immediate_results.map(&:name)
-    assert_equal [nil, :skipped, :success], partition.immediate_results.map(&:status)
+    assert_equal [:failure, :skipped, :success], partition.immediate_results.map(&:status)
     assert_equal [{name: :fresh, step: definition.registry[:fresh], input: {}, input_keys: [], deadline: 12.0}], captured
     assert_equal :waiting, store.load_run("wf-layer-admitter")[:nodes][[:waiting]][:state]
     assert_equal :failed, store.load_run("wf-layer-admitter")[:nodes][[:expired]][:state]

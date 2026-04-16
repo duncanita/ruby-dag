@@ -116,7 +116,7 @@ module DAG
           version: :all
         )).map { |entry| entry[:version] }
 
-        stored_versions.max.to_i + 1
+        (stored_versions.max || 0) + 1
       end
 
       def enabled?

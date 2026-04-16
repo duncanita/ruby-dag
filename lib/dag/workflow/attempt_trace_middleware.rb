@@ -20,8 +20,9 @@ module DAG
 
       def append_attempt_trace(execution, result, started_at:, finished_at:)
         return if lifecycle_payload?(result)
+        return unless execution.event_bus
 
-        Array(execution.event_bus) << AttemptTraceEntry.new(
+        execution.event_bus << AttemptTraceEntry.new(
           node_path: execution.node_path,
           started_at: started_at,
           finished_at: finished_at,

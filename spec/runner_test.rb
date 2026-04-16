@@ -833,7 +833,7 @@ class RunnerTest < Minitest::Test
     assert_equal "always", result.outputs[:a].value
   end
 
-  # --- run_if exception containment ---
+  # --- layer admission error contract ---
 
   def test_run_if_exception_produces_failure_not_crash
     graph = DAG::Graph.new.add_node(:a)
@@ -847,7 +847,7 @@ class RunnerTest < Minitest::Test
     assert result.failure?
     assert_equal :a, result.error[:failed_node]
     step_error = result.error[:step_error]
-    assert_equal :run_if_error, step_error[:code]
+    assert_equal :layer_admission_error, step_error[:code]
     assert_match(/predicate boom/, step_error[:message])
     assert_equal "RuntimeError", step_error[:error_class]
   end
@@ -923,6 +923,22 @@ class RunnerTest < Minitest::Test
     assert result.failure?
     assert_equal [:failed_node, :step_error], result.error.keys.sort
     assert result.outputs[:ok].success?
+  end
+
+  def test_malformed_schedule_surfaces_as_layer_admission_error
+    graph = DAG::Graph.new.add_node(:a)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :a, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: "never") },
+      schedule: {not_before: "not-a-date"}))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
+
+    assert result.failure?
+    assert_equal :a, result.error[:failed_node]
+    step_error = result.error[:step_error]
+    assert_equal :layer_admission_error, step_error[:code]
+    assert_match(/layer admission for step a raised/, step_error[:message])
   end
 
   def test_empty_graph_succeeds

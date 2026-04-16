@@ -39,7 +39,7 @@ module DAG
             elsif schedule_policy.expired?
               result = schedule_policy.deadline_exceeded_result(name)
               @execution_persistence.persist_expired_schedule_node(name, result.error)
-              immediate_results << ImmediateResult.new(name: name, result: result, input_keys: input_keys, status: nil)
+              immediate_results << ImmediateResult.new(name: name, result: result, input_keys: input_keys, status: :failure)
             elsif (reused_result = @execution_persistence.load_reusable_result(name))
               immediate_results << ImmediateResult.new(name: name, result: reused_result, input_keys: input_keys, status: :success)
             else
@@ -57,10 +57,10 @@ module DAG
           rescue => e
             immediate_results << ImmediateResult.new(
               name: name,
-              result: Result.exception_failure(:run_if_error, e,
-                message: "run_if for step #{name} raised: #{e.message}"),
+              result: Result.exception_failure(:layer_admission_error, e,
+                message: "layer admission for step #{name} raised #{e.class}: #{e.message}"),
               input_keys: [],
-              status: nil
+              status: :failure
             )
           end
         end
@@ -78,7 +78,7 @@ module DAG
             message: message
           }),
           input_keys: [],
-          status: nil
+          status: :failure
         )
       end
 
