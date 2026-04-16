@@ -141,11 +141,11 @@ end
 - `result.error` — `nil` on success, `{failed_node:, step_error:}` on failure
 - `result.workflow_id` — `nil` for in-memory runs unless you set one explicitly
 
-### Step Middleware and Structured Logging
+### Step Middleware, Structured Logging, and Events
 
 Middleware wraps a single step attempt and is configured per runner via `middleware:`.
-A logging middleware stays attempt-local: it observes step execution without changing
-admission, waiting, or persistence semantics.
+Attempt-local middleware can observe step execution without changing admission,
+waiting, or persistence semantics.
 
 ```ruby
 require "json"
@@ -177,6 +177,30 @@ Structured events include stable fields such as:
 See `examples/logging_middleware.rb` for a successful end-to-end example and
 `examples/logging_middleware_failures.rb` for both failure-result logging and a true
 `raised` event produced by an inner middleware exception.
+
+For event emission, configure `EventMiddleware` with an `EventBus` implementation:
+
+```ruby
+class MemoryEventBus < DAG::Workflow::EventBus
+  attr_reader :events
+
+  def initialize
+    @events = []
+  end
+
+  def publish(event)
+    @events << event
+  end
+end
+
+bus = MemoryEventBus.new
+runner = DAG::Workflow::Runner.new(definition,
+  middleware: [DAG::Workflow::EventMiddleware.new(event_bus: bus)])
+```
+
+`EventMiddleware` emits `DAG::Workflow::Event` objects only for successful final attempts.
+Each event includes `name`, `workflow_id`, `node_path`, `payload`, and `emitted_at`.
+See `examples/event_middleware.rb` for a runnable example.
 
 ### Build Programmatically and Dump to YAML
 

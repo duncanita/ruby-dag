@@ -234,6 +234,24 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Formatted sample: raised explode attempt=1 step_type=ruby error_class=RuntimeError error_message=middleware kaboom for explode"
   end
 
+  def test_event_middleware_example_executes_successfully
+    stdout, stderr, status = run_example("examples/event_middleware.rb")
+
+    assert status.success?, <<~MSG
+      expected event_middleware example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== Event Summary ==="
+    assert_includes stdout, "Status: completed"
+    assert_includes stdout, "Events captured: 2"
+    assert_includes stdout, "Event names: anomaly_detected, high_priority"
+    assert_includes stdout, "Payload priority: high"
+  end
+
   def test_graph_basics_example_executes_successfully
     stdout, stderr, status = run_example("examples/graph_basics.rb")
 
