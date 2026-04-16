@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "tmpdir"
 
 class InvalidationTest < Minitest::Test
   def test_stale_nodes_returns_completed_nodes_marked_stale
@@ -152,6 +153,53 @@ class InvalidationTest < Minitest::Test
     assert_stale_node(store, workflow_id: "wf-nested-invalidation", node_path: [:process], code: :manual_invalidation)
     assert_stale_node(store, workflow_id: "wf-nested-invalidation", node_path: [:process, :transform], code: :manual_invalidation)
     assert_stale_node(store, workflow_id: "wf-nested-invalidation", node_path: [:process, :publish], code: :manual_invalidation)
+  end
+
+  def test_invalidate_supports_nested_node_paths_for_definition_path_sub_workflows
+    Dir.mktmpdir("dag-invalidation-yaml") do |dir|
+      child_path = File.join(dir, "child.yml")
+      File.write(child_path, <<~YAML)
+        nodes:
+          transform:
+            type: exec
+            command: "printf yaml-transform"
+          publish:
+            type: exec
+            depends_on: [transform]
+            command: "printf yaml-publish"
+      YAML
+
+      parent_path = File.join(dir, "parent.yml")
+      File.write(parent_path, <<~YAML)
+        nodes:
+          process:
+            type: sub_workflow
+            definition_path: child.yml
+            resume_key: process-v1
+            output_key: publish
+      YAML
+
+      parent = DAG::Workflow::Loader.from_file(parent_path)
+      store = DAG::Workflow::ExecutionStore::MemoryStore.new
+
+      result = DAG::Workflow::Runner.new(parent,
+        parallel: false,
+        execution_store: store,
+        workflow_id: "wf-yaml-nested-invalidation").call
+      assert_equal "yaml-publish", result.outputs[:process].value
+
+      invalidated = DAG::Workflow.invalidate(
+        workflow_id: "wf-yaml-nested-invalidation",
+        node: [:process, :transform],
+        definition: parent,
+        execution_store: store
+      )
+
+      assert_equal [[:process], [:process, :publish], [:process, :transform]], invalidated.sort_by { |path| path.map(&:to_s) }
+      assert_stale_node(store, workflow_id: "wf-yaml-nested-invalidation", node_path: [:process], code: :manual_invalidation)
+      assert_stale_node(store, workflow_id: "wf-yaml-nested-invalidation", node_path: [:process, :transform], code: :manual_invalidation)
+      assert_stale_node(store, workflow_id: "wf-yaml-nested-invalidation", node_path: [:process, :publish], code: :manual_invalidation)
+    end
   end
 
   private

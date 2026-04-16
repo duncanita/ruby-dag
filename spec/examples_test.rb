@@ -290,6 +290,25 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Publish calls: 2"
   end
 
+  def test_yaml_nested_invalidation_cascade_example_executes_successfully
+    stdout, stderr, status = run_example("examples/yaml_nested_invalidation_cascade.rb")
+
+    assert status.success?, <<~MSG
+      expected yaml_nested_invalidation_cascade example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== First Run ==="
+    assert_includes stdout, "=== Invalidate YAML nested node ==="
+    assert_includes stdout, "Invalidated nodes: [[:process], [:process, :publish], [:process, :transform]]"
+    assert_includes stdout, "=== Second Run ==="
+    assert_includes stdout, "Transform calls: 2"
+    assert_includes stdout, "Publish calls: 2"
+  end
+
   def test_graph_basics_example_executes_successfully
     stdout, stderr, status = run_example("examples/graph_basics.rb")
 

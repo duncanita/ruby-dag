@@ -367,7 +367,7 @@ Notes:
 - stale nodes supersede their reusable outputs, but `version: :all` keeps the historical audit trail intact
 - the next runner invocation recomputes stale branches because `load_output(..., version: :latest)` ignores superseded outputs
 - `max_cascade_depth:` limits how far descendants are traversed from the invalidated root
-- see `examples/invalidation_cascade.rb` and `examples/nested_invalidation_cascade.rb` for runnable end-to-end examples exercised in the test suite
+- see `examples/invalidation_cascade.rb`, `examples/nested_invalidation_cascade.rb`, and `examples/yaml_nested_invalidation_cascade.rb` for runnable end-to-end examples exercised in the test suite
 
 ### Waiting and not_before scheduling
 
