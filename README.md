@@ -141,6 +141,41 @@ end
 - `result.error` — `nil` on success, `{failed_node:, step_error:}` on failure
 - `result.workflow_id` — `nil` for in-memory runs unless you set one explicitly
 
+### Step Middleware and Structured Logging
+
+Middleware wraps a single step attempt and is configured per runner via `middleware:`.
+A logging middleware stays attempt-local: it observes step execution without changing
+admission, waiting, or persistence semantics.
+
+```ruby
+require "json"
+require_relative "lib/dag"
+
+logged_events = []
+logger = lambda do |event|
+  logged_events << event
+  puts JSON.generate(event.transform_keys(&:to_s))
+end
+
+runner = DAG::Workflow::Runner.new(definition,
+  parallel: false,
+  workflow_id: "demo-logging",
+  middleware: [DAG::Workflow::LoggingMiddleware.new(logger: logger)])
+
+result = runner.call
+puts DAG::Workflow::LoggingMiddleware.format(logged_events.last)
+```
+
+Structured events include stable fields such as:
+- `event` (`:starting`, `:finished`, `:raised`)
+- `step_name`, `step_type`
+- `workflow_id`, `node_path`, `attempt`, `depth`, `parallel`
+- `input_keys` for start events
+- `status` for finish events
+- `error_class` and `error_message` for raised events
+
+See `examples/logging_middleware.rb` for a runnable end-to-end example.
+
 ### Build Programmatically and Dump to YAML
 
 ```ruby

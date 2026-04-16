@@ -192,6 +192,26 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Error code: missing_dependency_version"
   end
 
+  def test_logging_middleware_example_executes_successfully
+    stdout, stderr, status = run_example("examples/logging_middleware.rb")
+
+    assert status.success?, <<~MSG
+      expected logging_middleware example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, '"event":"starting"'
+    assert_includes stdout, '"event":"finished"'
+    assert_includes stdout, "=== Structured Log Summary ==="
+    assert_includes stdout, "Status: completed"
+    assert_includes stdout, "Events captured: 4"
+    assert_includes stdout, "Final output: PAYLOAD"
+    assert_includes stdout, "Formatted sample: finished transform attempt=1 step_type=ruby status=ok"
+  end
+
   def test_graph_basics_example_executes_successfully
     stdout, stderr, status = run_example("examples/graph_basics.rb")
 
