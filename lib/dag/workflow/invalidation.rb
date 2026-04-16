@@ -13,11 +13,17 @@ module DAG
       end
 
       def invalidate(workflow_id:, node:, definition:, execution_store:, max_cascade_depth: nil)
-        root = normalize_root_node(node)
+        root = normalize_node_path(node)
         run = execution_store.load_run(workflow_id)
         return [] unless run
 
-        invalidated = cascade_node_paths(root:, definition:, max_cascade_depth: max_cascade_depth).select do |node_path|
+        resolved = resolve_definition_for_node_path(definition:, node_path: root)
+        invalidated = cascade_node_paths(
+          definition: resolved[:definition],
+          prefix: resolved[:prefix],
+          root_name: resolved[:root_name],
+          max_cascade_depth: max_cascade_depth
+        ).select do |node_path|
           run.dig(:nodes, node_path, :state) == :completed
         end
         return [] if invalidated.empty?
@@ -33,9 +39,8 @@ module DAG
 
       private
 
-      def cascade_node_paths(root:, definition:, max_cascade_depth:)
+      def cascade_node_paths(definition:, prefix:, root_name:, max_cascade_depth:)
         graph = definition.graph
-        root_name = root.fetch(0)
         raise ArgumentError, "unknown node: #{root_name.inspect}" unless graph.node?(root_name)
 
         queue = [[root_name, 0]]
@@ -44,7 +49,7 @@ module DAG
 
         until queue.empty?
           current_name, depth = queue.shift
-          paths << [current_name]
+          paths << (prefix + [current_name])
           next if max_cascade_depth && depth >= max_cascade_depth
 
           graph.each_successor(current_name) do |successor|
@@ -58,18 +63,33 @@ module DAG
         paths.map { |node_path| normalize_node_path(node_path) }
       end
 
+      def resolve_definition_for_node_path(definition:, node_path:)
+        raise ArgumentError, "node path must not be empty" if node_path.empty?
+
+        current_definition = definition
+        prefix = []
+
+        node_path[0...-1].each do |segment|
+          step = current_definition.step(segment)
+          raise ArgumentError, "unknown node: #{segment.inspect}" unless step
+          raise ArgumentError, "node path segment #{segment.inspect} is not a sub_workflow" unless step.type == :sub_workflow
+
+          current_definition = SubWorkflowSupport.resolve_definition(step, source_path: current_definition.source_path)
+          prefix << segment
+        end
+
+        {
+          definition: current_definition,
+          prefix: normalize_node_path(prefix),
+          root_name: node_path.last
+        }
+      end
+
       def invalidation_cause(root)
         {
           code: :manual_invalidation,
           invalidated_from: root
         }
-      end
-
-      def normalize_root_node(node)
-        normalized = normalize_node_path(node)
-        raise ArgumentError, "node path must identify a top-level node" unless normalized.size == 1
-
-        normalized
       end
 
       def normalize_node_path(node_path)

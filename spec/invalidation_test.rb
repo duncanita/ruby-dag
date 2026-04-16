@@ -111,6 +111,48 @@ class InvalidationTest < Minitest::Test
     refute store.load_output(workflow_id: "wf-depth", node_path: [:c])[:superseded]
   end
 
+  def test_invalidate_supports_nested_node_paths_inside_sub_workflows
+    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    child = workflow_definition(
+      transform: {
+        type: :ruby,
+        resume_key: "transform-v1",
+        callable: ->(_input) { DAG::Success.new(value: "transform") }
+      },
+      publish: {
+        type: :ruby,
+        depends_on: [:transform],
+        resume_key: "publish-v1",
+        callable: ->(input) { DAG::Success.new(value: "#{input[:transform]}:publish") }
+      }
+    )
+    parent = workflow_definition(
+      process: {
+        type: :sub_workflow,
+        definition: child,
+        resume_key: "process-v1",
+        output_key: :publish
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(parent,
+      parallel: false,
+      execution_store: store,
+      workflow_id: "wf-nested-invalidation").call
+    assert_equal "transform:publish", result.outputs[:process].value
+
+    invalidated = DAG::Workflow.invalidate(
+      workflow_id: "wf-nested-invalidation",
+      node: [:process, :transform],
+      definition: parent,
+      execution_store: store
+    )
+
+    assert_equal [[:process, :publish], [:process, :transform]], invalidated.sort_by { |path| path.map(&:to_s) }
+    assert_stale_node(store, workflow_id: "wf-nested-invalidation", node_path: [:process, :transform], code: :manual_invalidation)
+    assert_stale_node(store, workflow_id: "wf-nested-invalidation", node_path: [:process, :publish], code: :manual_invalidation)
+  end
+
   private
 
   def workflow_definition(steps)
