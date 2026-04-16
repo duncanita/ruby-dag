@@ -25,12 +25,6 @@ module DAG
 
           begin
             input_keys = @dependency_input_resolver.input_keys_for(name: name, step: step)
-            if skip?(step, build_condition_context(name, step, previous_outputs, statuses))
-              immediate_results << ImmediateResult.new(name: name, result: record_skip_result, input_keys: input_keys, status: :skipped)
-              next
-            end
-
-            input = @dependency_input_resolver.resolve(name: name, step: step, outputs: previous_outputs)
             schedule_policy = SchedulePolicy.new(step, clock: @clock)
 
             if schedule_policy.waiting?
@@ -40,10 +34,15 @@ module DAG
               result = schedule_policy.deadline_exceeded_result(name)
               @execution_persistence.persist_expired_schedule_node(name, result.error)
               immediate_results << ImmediateResult.new(name: name, result: result, input_keys: input_keys, status: :failure)
-            elsif (reused_result = @execution_persistence.load_reusable_result(name))
-              immediate_results << ImmediateResult.new(name: name, result: reused_result, input_keys: input_keys, status: :success)
+            elsif skip?(step, build_condition_context(name, step, previous_outputs, statuses))
+              immediate_results << ImmediateResult.new(name: name, result: record_skip_result, input_keys: input_keys, status: :skipped)
             else
-              runnable << @task_builder.call(name: name, step: step, input: input, input_keys: input_keys, deadline: deadline)
+              input = @dependency_input_resolver.resolve(name: name, step: step, outputs: previous_outputs)
+              if (reused_result = @execution_persistence.load_reusable_result(name))
+                immediate_results << ImmediateResult.new(name: name, result: reused_result, input_keys: input_keys, status: :success)
+              else
+                runnable << @task_builder.call(name: name, step: step, input: input, input_keys: input_keys, deadline: deadline)
+              end
             end
           rescue DependencyInputResolver::MissingExecutionStoreError => e
             immediate_results << failure_result(name, :versioned_dependency_requires_execution_store, e.message)
@@ -82,7 +81,12 @@ module DAG
         )
       end
 
-      def skip?(step, condition_context) = !Condition.evaluate(step.config[:run_if], condition_context)
+      def skip?(step, condition_context)
+        run_if = step.config[:run_if]
+        return !run_if.call(condition_context) if Condition.callable?(run_if)
+
+        !Condition.evaluate(run_if, condition_context)
+      end
 
       def record_skip_result = Success.new(value: nil)
 
@@ -90,8 +94,13 @@ module DAG
         @graph.each_predecessor(name).all? { |dep| outputs.key?(dep) }
       end
 
-      def build_condition_context(name, _step, outputs, statuses)
-        @dependency_input_resolver.condition_context_for(name: name, outputs: outputs, statuses: statuses)
+      def build_condition_context(name, step, outputs, statuses)
+        run_if = step.config[:run_if]
+        if Condition.callable?(run_if)
+          @dependency_input_resolver.callable_input_for(name: name, step: step, outputs: outputs, statuses: statuses)
+        else
+          @dependency_input_resolver.condition_context_for(name: name, step: step, outputs: outputs, statuses: statuses, condition: run_if)
+        end
       end
     end
   end

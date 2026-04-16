@@ -176,6 +176,58 @@ class LayerAdmitterTest < Minitest::Test
     assert_equal :waiting, store.load_run("wf-layer-waiting")[:nodes][[:consumer]][:state]
   end
 
+  def test_call_checks_not_before_before_run_if_or_external_resolution
+    store = build_memory_store
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
+    definition = build_test_workflow(
+      consumer: {
+        type: :ruby,
+        schedule: {not_before: Time.utc(2026, 4, 15, 10, 0, 0)},
+        run_if: ->(_input) { flunk "run_if should not be evaluated before not_before is reached" },
+        depends_on: [{workflow: "pipeline-a", node: :validated_output, version: 2, as: :validated}],
+        callable: ->(input) { DAG::Success.new(value: input[:validated]) }
+      }
+    )
+
+    store.begin_run(
+      workflow_id: "wf-layer-not-before",
+      definition_fingerprint: "fp-layer-not-before",
+      node_paths: [[:consumer]]
+    )
+
+    resolver_calls = 0
+    admitter = DAG::Workflow::LayerAdmitter.new(
+      graph: definition.graph,
+      registry: definition.registry,
+      clock: clock,
+      execution_persistence: DAG::Workflow::ExecutionPersistence.new(
+        execution_store: store,
+        workflow_id: "wf-layer-not-before",
+        registry: definition.registry,
+        clock: clock
+      ),
+      dependency_input_resolver: DAG::Workflow::DependencyInputResolver.new(
+        graph: definition.graph,
+        execution_store: store,
+        workflow_id: "wf-layer-not-before",
+        cross_workflow_resolver: lambda do |*_args|
+          resolver_calls += 1
+          raise "resolver should not run before not_before is reached"
+        end
+      ),
+      root_input: {},
+      task_builder: ->(**_kwargs) { flunk "task_builder should not be called" }
+    )
+
+    partition = admitter.call(layer: [:consumer], previous_outputs: {}, statuses: {}, deadline: nil)
+
+    assert_equal 0, resolver_calls
+    assert_empty partition.runnable
+    assert_empty partition.immediate_results
+    assert_equal [[:consumer]], partition.waiting_nodes
+    assert_equal :waiting, store.load_run("wf-layer-not-before")[:nodes][[:consumer]][:state]
+  end
+
   def test_call_skips_before_resolving_missing_cross_workflow_dependency_when_run_if_is_false
     store = build_memory_store
     definition = build_test_workflow(

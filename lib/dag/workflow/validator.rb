@@ -18,7 +18,12 @@ module DAG
           next unless registry.key?(node)
 
           step = registry[node]
-          errors.concat(Condition.validate(step.config[:run_if], node_name: node, graph: graph))
+          errors.concat(Condition.validate(
+            step.config[:run_if],
+            node_name: node,
+            graph: graph,
+            allowed_inputs: allowed_condition_inputs(graph, step, node_name: node)
+          ))
           errors.concat(validate_dependency_inputs(graph, step, node_name: node))
           errors.concat(validate_sub_workflow(step, node_name: node)) if step.type == :sub_workflow
         end
@@ -60,6 +65,12 @@ module DAG
       def self.validate_external_dependency(dependency, node_name:, errors:)
         if blank?(dependency[:workflow_id]) || blank?(dependency[:node])
           errors << "Node #{node_name} has invalid external dependency #{dependency.inspect}; expected workflow_id and node"
+        end
+      end
+
+      def self.allowed_condition_inputs(graph, step, node_name:)
+        graph.predecessors(node_name) + Array(step.config[:external_dependencies]).map do |dependency|
+          (dependency[:as] || dependency[:node]).to_sym
         end
       end
 

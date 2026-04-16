@@ -16,10 +16,10 @@ module DAG
           normalize_condition(condition, context: context)
         end
 
-        def validate(condition, node_name:, graph:)
+        def validate(condition, node_name:, graph:, allowed_inputs: nil)
           return [] if condition.nil? || callable?(condition)
 
-          validate_dependencies(condition, node_name: node_name, allowed_inputs: graph.predecessors(node_name))
+          validate_dependencies(condition, node_name: node_name, allowed_inputs: allowed_inputs || graph.predecessors(node_name))
         end
 
         def validate!(condition, node_name:, graph:)

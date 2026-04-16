@@ -181,6 +181,43 @@ class RunnerTest < Minitest::Test
     assert_equal "external-v2", second.outputs[:consumer].value
   end
 
+  def test_runner_passes_external_dependency_values_to_callable_run_if
+    definition = build_test_workflow(
+      consumer: {
+        type: :ruby,
+        depends_on: [{workflow: "pipeline-a", node: :validated_output, version: 2, as: :validated}],
+        run_if: ->(input) { input[:validated] == "external-v2" },
+        callable: ->(input) { DAG::Success.new(value: input[:validated]) }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      cross_workflow_resolver: ->(_workflow_id, _node_name, _version) { "external-v2" }).call
+
+    assert_equal :completed, result.status
+    assert_equal "external-v2", result.outputs[:consumer].value
+  end
+
+  def test_runner_supports_keyword_style_cross_workflow_resolver_lambdas
+    definition = build_test_workflow(
+      consumer: {
+        type: :ruby,
+        depends_on: [{workflow: "pipeline-a", node: :validated_output, version: 2, as: :validated}],
+        callable: ->(input) { DAG::Success.new(value: input[:validated]) }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      cross_workflow_resolver: lambda do |workflow_id:, node_name:, version:|
+        [workflow_id, node_name, version].join(":")
+      end).call
+
+    assert_equal :completed, result.status
+    assert_equal "pipeline-a:validated_output:2", result.outputs[:consumer].value
+  end
+
   def test_runner_fails_when_cross_workflow_resolver_raises
     definition = build_test_workflow(
       consumer: {

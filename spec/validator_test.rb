@@ -142,6 +142,22 @@ class ValidatorTest < Minitest::Test
     assert_match(/shared/, report.errors.first)
   end
 
+  def test_allows_declarative_run_if_to_reference_external_dependency_alias
+    defn = build_test_workflow(
+      consumer: {
+        type: :ruby,
+        depends_on: [{workflow: "pipeline-a", node: :validated_output, as: :validated}],
+        run_if: {from: :validated, value: {equals: "ready"}},
+        callable: ->(input) { DAG::Success.new(value: input[:validated]) }
+      }
+    )
+
+    report = Validator.validate(defn.graph, defn.registry)
+
+    assert report.valid?
+    assert_empty report.errors
+  end
+
   def test_skips_nodes_not_in_registry
     graph = DAG::Graph.new
     graph.add_node(:a)
