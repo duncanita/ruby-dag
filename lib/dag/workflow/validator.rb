@@ -78,7 +78,7 @@ module DAG
           end
 
           hash = descriptor.transform_keys(&:to_sym)
-          unknown = hash.keys - %i[name if]
+          unknown = hash.keys - %i[name if payload]
           errors << "#{context} has unsupported keys #{unknown.map(&:inspect).join(", ")}" unless unknown.empty?
 
           if blank?(hash[:name])
@@ -89,6 +89,10 @@ module DAG
 
           if hash.key?(:if) && !hash[:if].nil? && !callable?(hash[:if])
             errors << "#{context}.if must be callable"
+          end
+
+          if hash.key?(:payload) && !hash[:payload].nil? && !callable?(hash[:payload])
+            errors << "#{context}.payload must be callable"
           end
         end
       end

@@ -249,7 +249,9 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Status: completed"
     assert_includes stdout, "Events captured: 2"
     assert_includes stdout, "Event names: anomaly_detected, high_priority"
-    assert_includes stdout, "Payload priority: high"
+    assert_includes stdout, "First payload severity: high"
+    assert_includes stdout, "Second payload priority: high"
+    assert_includes stdout, "Node path: monitor"
   end
 
   def test_invalidation_cascade_example_executes_successfully

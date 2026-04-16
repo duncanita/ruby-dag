@@ -84,6 +84,84 @@ class EventMiddlewareTest < Minitest::Test
     assert_match(/callable/, Array(error.message).join(" "))
   end
 
+  def test_rejects_emit_event_descriptor_with_non_callable_payload
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Runner.new(build_test_workflow(
+        monitor: {
+          type: :ruby,
+          emit_events: [{name: :ready, payload: :bad}],
+          callable: ->(_input) { DAG::Success.new(value: "ok") }
+        }
+      ), parallel: false)
+    end
+
+    assert_match(/emit_events\[0\]/, Array(error.message).join(" "))
+    assert_match(/payload/, Array(error.message).join(" "))
+    assert_match(/callable/, Array(error.message).join(" "))
+  end
+
+  def test_emits_custom_payload_when_payload_callable_is_present
+    bus = MemoryEventBus.new
+    middleware = DAG::Workflow::EventMiddleware.new(event_bus: bus, clock: build_clock)
+
+    result = middleware.call(build_step(emit_events: [
+      {
+        name: :anomaly_detected,
+        payload: ->(attempt_result) { {score: attempt_result.value[:score], level: :high} }
+      }
+    ]), {}, context: nil, execution: build_execution, next_step: lambda do |_step, _input, context:, execution:|
+      assert_nil context
+      assert_equal [:monitor], execution.node_path
+      DAG::Success.new(value: {score: 0.91, priority: :high})
+    end)
+
+    assert result.success?
+    assert_equal 1, bus.events.size
+    assert_equal({score: 0.91, level: :high}, bus.events.first.payload)
+  end
+
+  def test_payload_callable_is_not_invoked_when_event_condition_is_false
+    bus = MemoryEventBus.new
+    payload_calls = 0
+    middleware = DAG::Workflow::EventMiddleware.new(event_bus: bus, clock: build_clock)
+
+    result = middleware.call(build_step(emit_events: [
+      {
+        name: :anomaly_detected,
+        if: ->(_attempt_result) { false },
+        payload: ->(_attempt_result) do
+          payload_calls += 1
+          {unexpected: true}
+        end
+      }
+    ]), {}, context: nil, execution: build_execution, next_step: lambda do |_step, _input, context:, execution:|
+      assert_nil context
+      assert_equal [:monitor], execution.node_path
+      DAG::Success.new(value: {score: 0.10})
+    end)
+
+    assert result.success?
+    assert_equal 0, payload_calls
+    assert_empty bus.events
+  end
+
+  def test_payload_callable_may_return_nil
+    bus = MemoryEventBus.new
+    middleware = DAG::Workflow::EventMiddleware.new(event_bus: bus, clock: build_clock)
+
+    result = middleware.call(build_step(emit_events: [
+      {name: :heartbeat, payload: ->(_result = nil) {}}
+    ]), {}, context: nil, execution: build_execution, next_step: lambda do |_step, _input, context:, execution:|
+      assert_nil context
+      assert_equal [:monitor], execution.node_path
+      DAG::Success.new(value: {score: 0.91})
+    end)
+
+    assert result.success?
+    assert_equal 1, bus.events.size
+    assert_nil bus.events.first.payload
+  end
+
   def test_does_not_emit_events_for_failed_attempts
     bus = MemoryEventBus.new
     middleware = DAG::Workflow::EventMiddleware.new(event_bus: bus, clock: build_clock)

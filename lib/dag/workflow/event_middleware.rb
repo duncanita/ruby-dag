@@ -29,7 +29,7 @@ module DAG
             name: event_config.fetch(:name),
             workflow_id: execution.workflow_id,
             node_path: execution.node_path,
-            payload: result.value,
+            payload: event_payload(event_config, result),
             emitted_at: @clock.wall_now
           ))
         end
@@ -40,6 +40,13 @@ module DAG
         return true if condition.nil?
 
         condition.call(result)
+      end
+
+      def event_payload(event_config, result)
+        payload_builder = event_config[:payload]
+        return result.value if payload_builder.nil?
+
+        payload_builder.call(result)
       end
     end
   end
