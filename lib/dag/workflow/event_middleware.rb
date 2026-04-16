@@ -3,7 +3,7 @@
 module DAG
   module Workflow
     class EventMiddleware < StepMiddleware
-      def initialize(event_bus:, clock: Clock.new)
+      def initialize(event_bus: nil, clock: Clock.new)
         @event_bus = event_bus
         @clock = clock
       end
@@ -19,10 +19,13 @@ module DAG
       def emit_events(step, execution, result)
         return unless result.success?
 
+        event_bus = @event_bus || execution.event_bus
+        return unless event_bus&.respond_to?(:publish)
+
         Array(step.config[:emit_events]).each do |event_config|
           next unless should_emit?(event_config, result)
 
-          @event_bus.publish(Event.new(
+          event_bus.publish(Event.new(
             name: event_config.fetch(:name),
             workflow_id: execution.workflow_id,
             node_path: execution.node_path,

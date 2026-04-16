@@ -37,6 +37,7 @@ module DAG
         middleware: [],
         workflow_id: nil,
         execution_store: nil,
+        event_bus: nil,
         cross_workflow_resolver: nil,
         node_path_prefix: [],
         root_input: {},
@@ -52,6 +53,7 @@ module DAG
         @middleware = Array(middleware).freeze
         @workflow_id = workflow_id
         @execution_store = execution_store
+        @event_bus = event_bus
         @cross_workflow_resolver = cross_workflow_resolver
         @node_path_prefix = Array(node_path_prefix).map(&:to_sym).freeze
         @execution_persistence = ExecutionPersistence.new(
@@ -105,6 +107,20 @@ module DAG
         deadline = @timeout ? @clock.monotonic_now + @timeout : nil
         prepare_execution_store!
         execute_layers(@graph.topological_layers, deadline, initial_outputs: initial_outputs)
+      end
+
+      AttemptEventBus = Data.define(:trace_bus, :publish_bus) do
+        def <<(entry)
+          trace_bus << entry
+        end
+
+        def concat(entries)
+          trace_bus.concat(entries)
+        end
+
+        def publish(event)
+          publish_bus&.publish(event)
+        end
       end
 
       private
@@ -326,7 +342,7 @@ module DAG
           depth: @node_path_prefix.length,
           parallel: @strategy.name,
           execution_store: @execution_store,
-          event_bus: nil
+          event_bus: @event_bus
         )
       end
 
@@ -336,7 +352,9 @@ module DAG
           build_middleware_invoker(middleware, next_step)
         end
 
-        execution_with_trace_sink = execution.with(event_bus: attempt_log)
+        execution_with_trace_sink = execution.with(
+          event_bus: AttemptEventBus.new(trace_bus: attempt_log, publish_bus: execution.event_bus)
+        )
         -> { chain.call(step, input, context: @context, execution: execution_with_trace_sink) }
       end
 
@@ -358,7 +376,7 @@ module DAG
             })
           end
           result, child_trace = unwrap_sub_workflow_result(result)
-          Array(execution.event_bus).concat(child_trace.is_a?(Array) ? child_trace : [])
+          execution.event_bus&.concat(child_trace.is_a?(Array) ? child_trace : [])
           result
         rescue => e
           Result.exception_failure(:step_raised, e,

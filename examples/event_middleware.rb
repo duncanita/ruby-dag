@@ -34,7 +34,8 @@ definition = DAG::Workflow::Loader.from_hash(
 result = DAG::Workflow::Runner.new(definition,
   parallel: false,
   workflow_id: "example-events",
-  middleware: [DAG::Workflow::EventMiddleware.new(event_bus: bus)]).call
+  event_bus: bus,
+  middleware: [DAG::Workflow::EventMiddleware.new]).call
 
 puts "=== Event Summary ==="
 puts "Status: #{result.status}"

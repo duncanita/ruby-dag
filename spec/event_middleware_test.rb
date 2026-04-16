@@ -55,6 +55,28 @@ class EventMiddlewareTest < Minitest::Test
     assert_empty bus.events
   end
 
+  def test_runner_uses_runner_event_bus_for_event_middleware
+    bus = MemoryEventBus.new
+    definition = build_test_workflow(
+      monitor: {
+        type: :ruby,
+        emit_events: [{name: :ready, if: ->(attempt_result) { attempt_result.value == "ok" }}],
+        callable: ->(_input) { DAG::Success.new(value: "ok") }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      workflow_id: "wf-runner-events",
+      event_bus: bus,
+      middleware: [DAG::Workflow::EventMiddleware.new(clock: build_clock)]).call
+
+    assert_equal :completed, result.status
+    assert_equal [:ready], bus.events.map(&:name)
+    assert_equal "ok", bus.events.first.payload
+    assert_equal "wf-runner-events", bus.events.first.workflow_id
+  end
+
   def test_runner_emits_only_after_final_retry_success
     bus = MemoryEventBus.new
     attempts = 0
@@ -75,8 +97,9 @@ class EventMiddlewareTest < Minitest::Test
     result = DAG::Workflow::Runner.new(definition,
       parallel: false,
       workflow_id: "wf-retry-events",
+      event_bus: bus,
       middleware: [
-        DAG::Workflow::EventMiddleware.new(event_bus: bus, clock: build_clock),
+        DAG::Workflow::EventMiddleware.new(clock: build_clock),
         DAG::Workflow::RetryMiddleware.new(sleeper: ->(_seconds) {})
       ]).call
 
