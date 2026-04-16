@@ -112,6 +112,38 @@ class InvalidationTest < Minitest::Test
     refute store.load_output(workflow_id: "wf-depth", node_path: [:c])[:superseded]
   end
 
+  def test_invalidate_accepts_custom_cause_and_preserves_invalidated_from
+    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    definition = workflow_definition(
+      fetch: {type: :ruby, callable: ->(*) { DAG::Success.new(value: "fetch") }},
+      publish: {type: :ruby, depends_on: [:fetch], callable: ->(*) { DAG::Success.new(value: "publish") }}
+    )
+
+    store.begin_run(
+      workflow_id: "wf-custom-cause",
+      definition_fingerprint: "fp-1",
+      node_paths: [[:fetch], [:publish]]
+    )
+    save_completed_output(store, workflow_id: "wf-custom-cause", node_path: [:fetch], version: 1, value: "fetch-v1")
+    save_completed_output(store, workflow_id: "wf-custom-cause", node_path: [:publish], version: 1, value: "publish-v1")
+
+    DAG::Workflow.invalidate(
+      workflow_id: "wf-custom-cause",
+      node: [:fetch],
+      definition: definition,
+      execution_store: store,
+      cause: {code: :upstream_changed, source: :coordinator}
+    )
+
+    fetch = store.load_node(workflow_id: "wf-custom-cause", node_path: [:fetch])
+    publish = store.load_node(workflow_id: "wf-custom-cause", node_path: [:publish])
+
+    assert_equal :upstream_changed, fetch[:stale_cause][:code]
+    assert_equal :coordinator, fetch[:stale_cause][:source]
+    assert_equal [:fetch], fetch[:stale_cause][:invalidated_from]
+    assert_equal fetch[:stale_cause], publish[:stale_cause]
+  end
+
   def test_invalidate_supports_nested_node_paths_inside_sub_workflows
     store = DAG::Workflow::ExecutionStore::MemoryStore.new
     child = workflow_definition(

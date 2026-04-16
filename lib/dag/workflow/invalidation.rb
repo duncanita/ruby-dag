@@ -12,7 +12,7 @@ module DAG
         end.sort_by { |node_path| node_path.map(&:to_s) }
       end
 
-      def invalidate(workflow_id:, node:, definition:, execution_store:, max_cascade_depth: nil)
+      def invalidate(workflow_id:, node:, definition:, execution_store:, max_cascade_depth: nil, cause: nil)
         root = normalize_node_path(node)
         run = execution_store.load_run(workflow_id)
         return [] unless run
@@ -32,7 +32,7 @@ module DAG
         execution_store.mark_stale(
           workflow_id: workflow_id,
           node_paths: invalidated,
-          cause: invalidation_cause(root)
+          cause: invalidation_cause(root, cause)
         )
 
         invalidated.sort_by { |node_path| node_path.map(&:to_s) }
@@ -94,11 +94,15 @@ module DAG
         end
       end
 
-      def invalidation_cause(root)
-        {
-          code: :manual_invalidation,
-          invalidated_from: root
-        }
+      def invalidation_cause(root, custom_cause)
+        {code: :manual_invalidation}.merge(normalize_cause(custom_cause)).merge(invalidated_from: root)
+      end
+
+      def normalize_cause(cause)
+        return {} if cause.nil?
+        raise ArgumentError, "cause must be a Hash" unless cause.is_a?(Hash)
+
+        cause.transform_keys(&:to_sym)
       end
 
       def normalize_node_path(node_path)

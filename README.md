@@ -349,7 +349,8 @@ invalidated = DAG::Workflow.invalidate(
   node: [:source],
   definition: workflow,
   execution_store: store,
-  max_cascade_depth: nil
+  max_cascade_depth: nil,
+  cause: {code: :upstream_changed, source: :coordinator}
 )
 
 stale = DAG::Workflow.stale_nodes(
@@ -363,6 +364,7 @@ Notes:
 - the `node:` argument accepts both top-level paths like `[:source]` and nested paths like `[:process, :transform]` for sub-workflow descendants
 - only nodes currently marked `:completed` are transitioned to `:stale`
 - nested invalidation also marks completed ancestor `:sub_workflow` nodes stale so parent reusable outputs do not hide child recomputation on the next run
+- `cause:` accepts a Hash merged into the stored stale cause; `invalidated_from` is always preserved and `code` defaults to `:manual_invalidation`
 - `stale_nodes` returns normalized node paths sorted for stable inspection
 - stale nodes supersede their reusable outputs, but `version: :all` keeps the historical audit trail intact
 - the next runner invocation recomputes stale branches because `load_output(..., version: :latest)` ignores superseded outputs
