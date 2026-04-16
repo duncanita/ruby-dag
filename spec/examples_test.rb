@@ -212,6 +212,28 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Formatted sample: finished transform attempt=1 step_type=ruby status=ok"
   end
 
+  def test_logging_middleware_failures_example_executes_successfully
+    stdout, stderr, status = run_example("examples/logging_middleware_failures.rb")
+
+    assert status.success?, <<~MSG
+      expected logging_middleware_failures example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, '"status":"fail"'
+    assert_includes stdout, '"event":"raised"'
+    assert_includes stdout, "=== Failure Result Summary ==="
+    assert_includes stdout, "Step error code: invalid_payload"
+    assert_includes stdout, "=== Raised Exception Summary ==="
+    assert_includes stdout, "Step error code: step_raised"
+    assert_includes stdout, "Raised error class: RuntimeError"
+    assert_includes stdout, "Raised error message: middleware kaboom for explode"
+    assert_includes stdout, "Formatted sample: raised explode attempt=1 step_type=ruby error_class=RuntimeError error_message=middleware kaboom for explode"
+  end
+
   def test_graph_basics_example_executes_successfully
     stdout, stderr, status = run_example("examples/graph_basics.rb")
 

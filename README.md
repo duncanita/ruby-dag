@@ -174,7 +174,9 @@ Structured events include stable fields such as:
 - `status` for finish events
 - `error_class` and `error_message` for raised events
 
-See `examples/logging_middleware.rb` for a runnable end-to-end example.
+See `examples/logging_middleware.rb` for a successful end-to-end example and
+`examples/logging_middleware_failures.rb` for both failure-result logging and a true
+`raised` event produced by an inner middleware exception.
 
 ### Build Programmatically and Dump to YAML
 
