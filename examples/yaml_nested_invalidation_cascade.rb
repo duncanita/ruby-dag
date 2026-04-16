@@ -46,8 +46,11 @@ Dir.mktmpdir("dag-example-yaml-invalidation") do |dir|
     workflow_id: "example-yaml-nested-invalidation",
     node: [:process, :transform],
     definition: parent,
-    execution_store: store
+    execution_store: store,
+    cause: DAG::Workflow.upstream_change_cause(source: :yaml_reloader, dependency: :transform)
   )
+
+  stale_cause = store.load_node(workflow_id: "example-yaml-nested-invalidation", node_path: [:process, :transform])[:stale_cause]
 
   second = DAG::Workflow::Runner.new(parent,
     parallel: false,
@@ -58,6 +61,9 @@ Dir.mktmpdir("dag-example-yaml-invalidation") do |dir|
   puts "Process output: #{first.outputs[:process].value}"
   puts "=== Invalidate YAML nested node ==="
   puts "Invalidated nodes: #{invalidated.sort_by { |path| path.map(&:to_s) }.inspect}"
+  puts "Stale cause code: #{stale_cause[:code]}"
+  puts "Stale cause source: #{stale_cause[:source]}"
+  puts "Stale cause dependency: #{stale_cause[:dependency]}"
   puts "=== Second Run ==="
   puts "Process output: #{second.outputs[:process].value}"
   puts "Transform calls: #{File.read(transform_count).strip}"

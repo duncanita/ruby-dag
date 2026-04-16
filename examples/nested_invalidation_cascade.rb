@@ -49,8 +49,11 @@ invalidated = DAG::Workflow.invalidate(
   workflow_id: "example-nested-invalidation",
   node: [:process, :transform],
   definition: parent,
-  execution_store: store
+  execution_store: store,
+  cause: DAG::Workflow.manual_invalidation_cause(source: :operator, reason: :repair)
 )
+
+stale_cause = store.load_node(workflow_id: "example-nested-invalidation", node_path: [:process, :transform])[:stale_cause]
 
 second = DAG::Workflow::Runner.new(parent,
   parallel: false,
@@ -61,6 +64,9 @@ puts "=== First Run ==="
 puts "Process output: #{first.outputs[:process].value}"
 puts "=== Invalidate nested node ==="
 puts "Invalidated nodes: #{invalidated.sort_by { |path| path.map(&:to_s) }.inspect}"
+puts "Stale cause code: #{stale_cause[:code]}"
+puts "Stale cause source: #{stale_cause[:source]}"
+puts "Stale cause reason: #{stale_cause[:reason]}"
 puts "=== Second Run ==="
 puts "Process output: #{second.outputs[:process].value}"
 puts "Transform calls: #{transform_calls}"
