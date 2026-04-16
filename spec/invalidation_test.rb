@@ -148,7 +148,8 @@ class InvalidationTest < Minitest::Test
       execution_store: store
     )
 
-    assert_equal [[:process, :publish], [:process, :transform]], invalidated.sort_by { |path| path.map(&:to_s) }
+    assert_equal [[:process], [:process, :publish], [:process, :transform]], invalidated.sort_by { |path| path.map(&:to_s) }
+    assert_stale_node(store, workflow_id: "wf-nested-invalidation", node_path: [:process], code: :manual_invalidation)
     assert_stale_node(store, workflow_id: "wf-nested-invalidation", node_path: [:process, :transform], code: :manual_invalidation)
     assert_stale_node(store, workflow_id: "wf-nested-invalidation", node_path: [:process, :publish], code: :manual_invalidation)
   end

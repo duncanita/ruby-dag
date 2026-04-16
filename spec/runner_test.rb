@@ -157,6 +157,62 @@ class RunnerTest < Minitest::Test
     assert_equal :completed, store.load_node(workflow_id: "wf-stale-rerun", node_path: [:transform])[:state]
   end
 
+  def test_runner_reexecutes_nested_subworkflow_branch_after_nested_invalidation
+    store = build_memory_store
+    transform_calls = 0
+    publish_calls = 0
+
+    child = DAG::Workflow::Loader.from_hash(
+      transform: {
+        type: :ruby,
+        resume_key: "transform-v1",
+        callable: ->(_input) do
+          transform_calls += 1
+          DAG::Success.new(value: "transform-#{transform_calls}")
+        end
+      },
+      publish: {
+        type: :ruby,
+        depends_on: [:transform],
+        resume_key: "publish-v1",
+        callable: ->(input) do
+          publish_calls += 1
+          DAG::Success.new(value: "#{input[:transform]}:publish-#{publish_calls}")
+        end
+      }
+    )
+    parent = DAG::Workflow::Loader.from_hash(
+      process: {
+        type: :sub_workflow,
+        definition: child,
+        resume_key: "process-v1",
+        output_key: :publish
+      }
+    )
+
+    first_run = DAG::Workflow::Runner.new(parent,
+      parallel: false,
+      execution_store: store,
+      workflow_id: "wf-nested-stale-rerun").call
+    assert_equal "transform-1:publish-1", first_run.outputs[:process].value
+
+    DAG::Workflow.invalidate(
+      workflow_id: "wf-nested-stale-rerun",
+      node: [:process, :transform],
+      definition: parent,
+      execution_store: store
+    )
+
+    second_run = DAG::Workflow::Runner.new(parent,
+      parallel: false,
+      execution_store: store,
+      workflow_id: "wf-nested-stale-rerun").call
+
+    assert_equal 2, transform_calls
+    assert_equal 2, publish_calls
+    assert_equal "transform-2:publish-2", second_run.outputs[:process].value
+  end
+
   def test_runner_fails_when_requested_local_dependency_version_is_missing
     store = build_memory_store
 

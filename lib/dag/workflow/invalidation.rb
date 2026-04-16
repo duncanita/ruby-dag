@@ -18,12 +18,13 @@ module DAG
         return [] unless run
 
         resolved = resolve_definition_for_node_path(definition:, node_path: root)
-        invalidated = cascade_node_paths(
+        cascaded_paths = cascade_node_paths(
           definition: resolved[:definition],
           prefix: resolved[:prefix],
           root_name: resolved[:root_name],
           max_cascade_depth: max_cascade_depth
-        ).select do |node_path|
+        )
+        invalidated = (ancestor_node_paths(root) + cascaded_paths).uniq.select do |node_path|
           run.dig(:nodes, node_path, :state) == :completed
         end
         return [] if invalidated.empty?
@@ -83,6 +84,14 @@ module DAG
           prefix: normalize_node_path(prefix),
           root_name: node_path.last
         }
+      end
+
+      def ancestor_node_paths(node_path)
+        return [] if node_path.size < 2
+
+        (1...node_path.size).map do |length|
+          normalize_node_path(node_path.first(length))
+        end
       end
 
       def invalidation_cause(root)

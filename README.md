@@ -359,13 +359,15 @@ stale = DAG::Workflow.stale_nodes(
 ```
 
 Notes:
-- `invalidate` walks the transitive descendant closure in the current definition starting from a top-level node
+- `invalidate` walks the transitive descendant closure in the current definition starting from the supplied `node_path`
+- the `node:` argument accepts both top-level paths like `[:source]` and nested paths like `[:process, :transform]` for sub-workflow descendants
 - only nodes currently marked `:completed` are transitioned to `:stale`
+- nested invalidation also marks completed ancestor `:sub_workflow` nodes stale so parent reusable outputs do not hide child recomputation on the next run
 - `stale_nodes` returns normalized node paths sorted for stable inspection
 - stale nodes supersede their reusable outputs, but `version: :all` keeps the historical audit trail intact
 - the next runner invocation recomputes stale branches because `load_output(..., version: :latest)` ignores superseded outputs
 - `max_cascade_depth:` limits how far descendants are traversed from the invalidated root
-- see `examples/invalidation_cascade.rb` for a runnable end-to-end example exercised in the test suite
+- see `examples/invalidation_cascade.rb` and `examples/nested_invalidation_cascade.rb` for runnable end-to-end examples exercised in the test suite
 
 ### Waiting and not_before scheduling
 
