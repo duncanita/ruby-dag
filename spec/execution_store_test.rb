@@ -122,4 +122,29 @@ class ExecutionStoreTest < Minitest::Test
     assert_equal [1, 2], reloaded.map { |entry| entry[:version] }
     assert_equal %w[v1 v2], reloaded.map { |entry| entry[:result].value }
   end
+
+  def test_mark_stale_supersedes_reusable_outputs_but_keeps_audit_history
+    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store.begin_run(workflow_id: "wf-stale", definition_fingerprint: "fp-1", node_paths: [[:fetch]])
+    store.save_output(
+      workflow_id: "wf-stale",
+      node_path: [:fetch],
+      version: 1,
+      result: DAG::Success.new(value: "v1"),
+      reusable: true,
+      superseded: false
+    )
+
+    store.mark_stale(
+      workflow_id: "wf-stale",
+      node_paths: [[:fetch]],
+      cause: {code: :manual_invalidation}
+    )
+
+    assert_nil store.load_output(workflow_id: "wf-stale", node_path: [:fetch])
+
+    history = store.load_output(workflow_id: "wf-stale", node_path: [:fetch], version: :all)
+    assert_equal [1], history.map { |entry| entry[:version] }
+    assert_equal [true], history.map { |entry| entry[:superseded] }
+  end
 end

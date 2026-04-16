@@ -69,11 +69,12 @@ module DAG
           node = fetch_node(ensure_run(workflow_id), node_path)
           return nil unless node
 
-          outputs = Array(node[:outputs]).reject { |entry| entry[:superseded] }
+          outputs = Array(node[:outputs])
+          active_outputs = outputs.reject { |entry| entry[:superseded] }
           case version
           when :latest
             # standard:disable Style/ReverseFind -- Array#rfind is unavailable on Ruby 3.2, which this gem still tests against.
-            output = outputs.reverse_each.find { |entry| entry[:reusable] }
+            output = active_outputs.reverse_each.find { |entry| entry[:reusable] }
             # standard:enable Style/ReverseFind
             output ? deep_copy(output) : nil
           when :all
@@ -88,7 +89,10 @@ module DAG
           Array(node_paths).each do |node_path|
             node = ensure_node(workflow_id, node_path)
             node[:state] = :stale
-            node[:stale_cause] = cause
+            node[:stale_cause] = deep_copy(cause)
+            Array(node[:outputs]).each do |output|
+              output[:superseded] = true if output[:reusable]
+            end
           end
           nil
         end
