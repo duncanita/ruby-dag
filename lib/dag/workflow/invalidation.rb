@@ -12,6 +12,14 @@ module DAG
         end.sort_by { |node_path| node_path.map(&:to_s) }
       end
 
+      def manual_invalidation_cause(**extra)
+        {code: :manual_invalidation}.merge(extra.transform_keys(&:to_sym))
+      end
+
+      def upstream_change_cause(source: nil, **extra)
+        manual_invalidation_cause(**extra.merge(code: :upstream_changed, source: source).compact)
+      end
+
       def invalidate(workflow_id:, node:, definition:, execution_store:, max_cascade_depth: nil, cause: nil)
         root = normalize_node_path(node)
         run = execution_store.load_run(workflow_id)

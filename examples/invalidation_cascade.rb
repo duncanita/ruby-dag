@@ -40,7 +40,8 @@ invalidated = DAG::Workflow.invalidate(
   workflow_id: "example-invalidation",
   node: [:source],
   definition: workflow,
-  execution_store: store
+  execution_store: store,
+  cause: DAG::Workflow.upstream_change_cause(source: :coordinator)
 )
 
 second = DAG::Workflow::Runner.new(workflow,
@@ -48,11 +49,15 @@ second = DAG::Workflow::Runner.new(workflow,
   workflow_id: "example-invalidation",
   execution_store: store).call
 
+stale_node = store.load_node(workflow_id: "example-invalidation", node_path: [:source])
+
 puts "=== First Run ==="
 puts "Source: #{first.outputs[:source].value}"
 puts "Transform: #{first.outputs[:transform].value}"
 puts "=== Invalidate source ==="
 puts "Stale nodes: #{invalidated.inspect}"
+puts "Stale cause code: #{stale_node[:stale_cause][:code]}"
+puts "Stale cause source: #{stale_node[:stale_cause][:source]}"
 puts "=== Second Run (recompute stale nodes) ==="
 puts "Source: #{second.outputs[:source].value}"
 puts "Transform: #{second.outputs[:transform].value}"

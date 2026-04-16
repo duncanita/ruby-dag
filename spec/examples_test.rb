@@ -266,6 +266,8 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "=== First Run ==="
     assert_includes stdout, "=== Invalidate source ==="
     assert_includes stdout, "Stale nodes: [[:source], [:transform]]"
+    assert_includes stdout, "Stale cause code: upstream_changed"
+    assert_includes stdout, "Stale cause source: coordinator"
     assert_includes stdout, "=== Second Run (recompute stale nodes) ==="
     assert_includes stdout, "Source calls: 2"
     assert_includes stdout, "Transform calls: 2"

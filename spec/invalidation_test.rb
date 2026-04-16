@@ -112,6 +112,18 @@ class InvalidationTest < Minitest::Test
     refute store.load_output(workflow_id: "wf-depth", node_path: [:c])[:superseded]
   end
 
+  def test_manual_invalidation_cause_helper_accepts_extra_fields
+    cause = DAG::Workflow.manual_invalidation_cause(source: :user, reason: :refresh)
+
+    assert_equal({code: :manual_invalidation, source: :user, reason: :refresh}, cause)
+  end
+
+  def test_upstream_change_cause_helper_sets_code_and_optional_source
+    cause = DAG::Workflow.upstream_change_cause(source: :coordinator, dependency: :fetch)
+
+    assert_equal({code: :upstream_changed, source: :coordinator, dependency: :fetch}, cause)
+  end
+
   def test_invalidate_accepts_custom_cause_and_preserves_invalidated_from
     store = DAG::Workflow::ExecutionStore::MemoryStore.new
     definition = workflow_definition(
@@ -132,7 +144,7 @@ class InvalidationTest < Minitest::Test
       node: [:fetch],
       definition: definition,
       execution_store: store,
-      cause: {code: :upstream_changed, source: :coordinator}
+      cause: DAG::Workflow.upstream_change_cause(source: :coordinator)
     )
 
     fetch = store.load_node(workflow_id: "wf-custom-cause", node_path: [:fetch])
