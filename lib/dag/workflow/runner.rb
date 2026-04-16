@@ -75,6 +75,12 @@ module DAG
         @callbacks = RunCallbacks.new(on_step_start: on_step_start, on_step_finish: on_step_finish)
         @attempt_trace_middleware = AttemptTraceMiddleware.new(clock: @clock)
         @trace_recorder = TraceRecorder.new(callbacks: @callbacks)
+        @task_completion_handler = TaskCompletionHandler.new(
+          trace_recorder: @trace_recorder,
+          execution_persistence: @execution_persistence,
+          callbacks: @callbacks,
+          lifecycle_callback_result: method(:callback_result_for_lifecycle)
+        )
         @layer_admitter = LayerAdmitter.new(
           graph: @graph,
           registry: @registry,
@@ -292,29 +298,20 @@ module DAG
 
         @strategy.execute(tasks) do |name, result, started_at, finished_at, duration_ms|
           task = tasks_by_name.fetch(name)
-          lifecycle = sub_workflow_lifecycle_payload(result)
-          entries = @trace_recorder.build_trace_entries_for_task(
+          outcome = @task_completion_handler.handle(
             task: task,
-            layer_index: layer_index,
             result: result,
+            layer_index: layer_index,
             started_at: started_at,
             finished_at: finished_at,
             duration_ms: duration_ms,
-            lifecycle_payload: lifecycle
+            trace: trace,
+            results: results,
+            statuses: statuses,
+            lifecycle_payload: sub_workflow_lifecycle_payload(result)
           )
-          trace.concat(entries)
-          @execution_persistence.persist_step_result(task, result, entries, skip_result: !lifecycle.nil?)
-
-          if lifecycle
-            waiting_nodes.concat(lifecycle[:waiting_nodes]) if lifecycle[:status] == :waiting
-            paused ||= lifecycle[:status] == :paused
-            @callbacks.finish(name, callback_result_for_lifecycle(lifecycle))
-            next
-          end
-
-          statuses[name] = @trace_recorder.observed_status_for_task(task: task, result: result, entries: entries)
-          @callbacks.finish(name, result)
-          results[name] = result
+          waiting_nodes.concat(outcome.waiting_nodes)
+          paused ||= outcome.paused
         end
 
         [waiting_nodes, paused]
