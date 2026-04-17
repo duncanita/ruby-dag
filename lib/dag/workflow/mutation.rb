@@ -27,10 +27,12 @@ module DAG
 
       def validate_reconnect_aliases!(graph, root, reconnect)
         aliases_by_target = Hash.new { |hash, key| hash[key] = Set.new }
+        normalized_reconnect = Array(reconnect).map do |descriptor|
+          normalize_reconnect_alias_entry(descriptor, graph: graph, root: root)
+        end
 
-        Array(reconnect).each do |descriptor|
-          entry = descriptor.transform_keys(&:to_sym)
-          target = entry.fetch(:to).to_sym
+        normalized_reconnect.each do |entry|
+          target = entry.fetch(:to)
           aliases = aliases_by_target[target]
 
           graph.each_predecessor(target) do |predecessor|
@@ -40,9 +42,8 @@ module DAG
           end
         end
 
-        Array(reconnect).each do |descriptor|
-          entry = descriptor.transform_keys(&:to_sym)
-          target = entry.fetch(:to).to_sym
+        normalized_reconnect.each do |entry|
+          target = entry.fetch(:to)
           merged = graph.merged_edge_metadata(root, target, entry[:metadata])
           alias_key = effective_input_key(entry.fetch(:from), merged)
 
@@ -52,6 +53,20 @@ module DAG
 
           aliases_by_target[target] << alias_key
         end
+      end
+
+      def normalize_reconnect_alias_entry(descriptor, graph:, root:)
+        raise ArgumentError, "reconnect entries must be Hashes" unless descriptor.is_a?(Hash)
+
+        entry = descriptor.transform_keys(&:to_sym)
+        raise ArgumentError, "reconnect entries must include :from" unless entry.key?(:from)
+        raise ArgumentError, "reconnect entries must include :to" unless entry.key?(:to)
+
+        {
+          from: entry.fetch(:from).to_sym,
+          to: entry.fetch(:to).to_sym,
+          metadata: graph.merged_edge_metadata(root, entry.fetch(:to), entry[:metadata])
+        }
       end
 
       def effective_input_key(from, metadata)

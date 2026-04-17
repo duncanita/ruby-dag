@@ -569,6 +569,48 @@ class MutationTest < Minitest::Test
     assert_includes error.message, "duplicate effective downstream alias"
   end
 
+  def test_workflow_replace_subtree_rejects_reconnect_without_from
+    definition = build_test_workflow(
+      process: {type: :ruby, callable: ->(_) { DAG::Success.new(value: :ok) }},
+      report: {type: :ruby, depends_on: [:process], callable: ->(_) { DAG::Success.new(value: :ok) }}
+    )
+    replacement = build_test_workflow(
+      leaf: {type: :ruby, callable: ->(_) { DAG::Success.new(value: :ok) }}
+    )
+
+    error = assert_raises(ArgumentError) do
+      DAG::Workflow.replace_subtree(
+        definition,
+        root_node: :process,
+        replacement: replacement,
+        reconnect: [{to: :report}]
+      )
+    end
+
+    assert_includes error.message, "reconnect entries must include :from"
+  end
+
+  def test_workflow_replace_subtree_rejects_reconnect_without_to
+    definition = build_test_workflow(
+      process: {type: :ruby, callable: ->(_) { DAG::Success.new(value: :ok) }},
+      report: {type: :ruby, depends_on: [:process], callable: ->(_) { DAG::Success.new(value: :ok) }}
+    )
+    replacement = build_test_workflow(
+      leaf: {type: :ruby, callable: ->(_) { DAG::Success.new(value: :ok) }}
+    )
+
+    error = assert_raises(ArgumentError) do
+      DAG::Workflow.replace_subtree(
+        definition,
+        root_node: :process,
+        replacement: replacement,
+        reconnect: [{from: :leaf}]
+      )
+    end
+
+    assert_includes error.message, "reconnect entries must include :to"
+  end
+
   def test_workflow_replace_subtree_preserves_source_path
     base = build_test_workflow(
       root: {type: :ruby, callable: ->(_) { DAG::Success.new(value: :ok) }}
