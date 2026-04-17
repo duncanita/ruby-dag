@@ -3,6 +3,25 @@
 module DAG
   module Workflow
     class << self
+      def subtree_replacement_impact(workflow_id:, definition:, root_node:, execution_store:)
+        raise ArgumentError, "definition must be a DAG::Workflow::Definition" unless definition.is_a?(Definition)
+
+        run = execution_store.load_run(workflow_id)
+        return {obsolete_nodes: [], stale_nodes: []} unless run
+
+        root = mutation_node_path(root_node)
+        obsolete_nodes = node_completed?(run, root) ? [root] : []
+        stale_nodes = definition.graph.descendants(root.last).sort.each_with_object([]) do |name, nodes|
+          node_path = mutation_node_path(name)
+          nodes << node_path if node_completed?(run, node_path)
+        end
+
+        {
+          obsolete_nodes: obsolete_nodes.sort_by { |node_path| node_path.map(&:to_s) },
+          stale_nodes: stale_nodes.sort_by { |node_path| node_path.map(&:to_s) }
+        }
+      end
+
       def replace_subtree(definition, root_node:, replacement:, reconnect: [])
         raise ArgumentError, "definition must be a DAG::Workflow::Definition" unless definition.is_a?(Definition)
         raise ArgumentError, "replacement must be a DAG::Workflow::Definition" unless replacement.is_a?(Definition)
@@ -71,6 +90,14 @@ module DAG
 
       def effective_input_key(from, metadata)
         (metadata[:as] || from).to_sym
+      end
+
+      def node_completed?(run, node_path)
+        run.dig(:nodes, node_path, :state) == :completed
+      end
+
+      def mutation_node_path(node_path)
+        Array(node_path).map(&:to_sym).freeze
       end
     end
   end
