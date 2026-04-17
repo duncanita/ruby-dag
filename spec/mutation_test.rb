@@ -102,4 +102,94 @@ class MutationTest < Minitest::Test
     assert definition.graph.node?(:process)
     refute definition.graph.node?(:normalize)
   end
+
+  def test_workflow_replace_subtree_preserves_unaffected_downstream_inputs
+    definition = build_test_workflow(
+      source: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "payload") }
+      },
+      config: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "v1") }
+      },
+      process: {
+        type: :ruby,
+        depends_on: [:source],
+        callable: ->(input) { DAG::Success.new(value: input[:source].upcase) }
+      },
+      report: {
+        type: :ruby,
+        depends_on: [{from: :process, as: :summary}, :config],
+        callable: ->(input) { DAG::Success.new(value: "#{input[:summary]}|#{input[:config]}") }
+      }
+    )
+
+    replacement = build_test_workflow(
+      normalize: {
+        type: :ruby,
+        callable: ->(input) { DAG::Success.new(value: "#{input[:source]}-normalized") }
+      },
+      summarize: {
+        type: :ruby,
+        depends_on: [:normalize],
+        callable: ->(input) { DAG::Success.new(value: input[:normalize].upcase) }
+      }
+    )
+
+    mutated = DAG::Workflow.replace_subtree(
+      definition,
+      root_node: :process,
+      replacement: replacement,
+      reconnect: [{from: :summarize, to: :report, metadata: {as: :summary}}]
+    )
+
+    result = DAG::Workflow::Runner.new(mutated, parallel: false).call
+
+    assert result.success?
+    assert_equal "PAYLOAD-NORMALIZED|v1", result.outputs[:report].value
+  end
+
+  def test_workflow_replace_subtree_rejects_duplicate_effective_downstream_aliases
+    definition = build_test_workflow(
+      source: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "payload") }
+      },
+      config: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "v1") }
+      },
+      process: {
+        type: :ruby,
+        depends_on: [:source],
+        callable: ->(input) { DAG::Success.new(value: input[:source].upcase) }
+      },
+      report: {
+        type: :ruby,
+        depends_on: [:process, {from: :config, as: :summary}],
+        callable: ->(input) { DAG::Success.new(value: input[:summary]) }
+      }
+    )
+
+    replacement = build_test_workflow(
+      summarize: {
+        type: :ruby,
+        callable: ->(input) { DAG::Success.new(value: input[:source].upcase) }
+      }
+    )
+
+    error = assert_raises(ArgumentError) do
+      DAG::Workflow.replace_subtree(
+        definition,
+        root_node: :process,
+        replacement: replacement,
+        reconnect: [{from: :summarize, to: :report, metadata: {as: :summary}}]
+      )
+    end
+
+    assert_includes error.message, "duplicate effective downstream alias"
+    assert_includes error.message, "report"
+    assert_includes error.message, "summary"
+  end
 end
