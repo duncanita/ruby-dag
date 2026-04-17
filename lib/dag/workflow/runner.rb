@@ -41,6 +41,7 @@ module DAG
         cross_workflow_resolver: nil,
         node_path_prefix: [],
         root_input: {},
+        clear_on_completion: false,
         register_execution_store: true,
         on_step_start: nil, on_step_finish: nil)
         graph, registry, definition_source_path = unpack_definition(graph_or_definition, registry)
@@ -53,6 +54,7 @@ module DAG
         @middleware = Array(middleware).freeze
         @workflow_id = workflow_id
         @execution_store = execution_store
+        @clear_on_completion = clear_on_completion
         @event_bus = event_bus
         @cross_workflow_resolver = cross_workflow_resolver
         @node_path_prefix = Array(node_path_prefix).map(&:to_sym).freeze
@@ -245,7 +247,7 @@ module DAG
       def build_run_result(outputs, trace, status, error, waiting_nodes)
         @execution_persistence.set_workflow_status(status: status, waiting_nodes: waiting_nodes)
 
-        RunResult.new(
+        result = RunResult.new(
           status: status,
           workflow_id: @workflow_id,
           outputs: outputs,
@@ -253,6 +255,9 @@ module DAG
           error: error,
           waiting_nodes: waiting_nodes
         )
+
+        @execution_persistence.clear_run if status == :completed && @clear_on_completion
+        result
       end
 
       # Callback ordering contract: every runnable :start in a layer fires

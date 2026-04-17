@@ -135,6 +135,12 @@ module DAG
           nil
         end
 
+        def clear_run(workflow_id:)
+          path = run_path(workflow_id)
+          File.delete(path) if File.exist?(path)
+          nil
+        end
+
         private
 
         def ensure_run(workflow_id)
@@ -291,6 +297,11 @@ module DAG
 
         def set_pause_flag(workflow_id:, paused:)
           ensure_run(workflow_id)[:paused] = paused
+          nil
+        end
+
+        def clear_run(workflow_id:)
+          @runs.delete(workflow_id)
           nil
         end
 

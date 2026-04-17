@@ -35,6 +35,13 @@ module DAG
         )
       end
 
+      def clear_run
+        return unless enabled?
+        return unless @execution_store.respond_to?(:clear_run)
+
+        @execution_store.clear_run(workflow_id: @workflow_id)
+      end
+
       def persist_waiting_node(name)
         return unless enabled?
 

@@ -197,4 +197,38 @@ class CheckpointResumeTest < Minitest::Test
       assert_equal "merged:payload-1", second.outputs[:merge].value
     end
   end
+
+  def test_clear_on_completion_removes_persisted_checkpoints_after_success
+    calls = 0
+    definition = build_test_workflow(
+      fetch: {
+        type: :ruby,
+        resume_key: "fetch-v1",
+        callable: ->(_input) do
+          calls += 1
+          DAG::Success.new(value: "payload-#{calls}")
+        end
+      }
+    )
+    store = build_memory_store
+
+    first = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      execution_store: store,
+      workflow_id: "wf-clear",
+      clear_on_completion: true).call
+
+    second = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      execution_store: store,
+      workflow_id: "wf-clear",
+      clear_on_completion: true).call
+
+    assert first.success?
+    assert second.success?
+    assert_nil store.load_run("wf-clear")
+    assert_equal 2, calls
+    assert_equal "payload-1", first.outputs[:fetch].value
+    assert_equal "payload-2", second.outputs[:fetch].value
+  end
 end
