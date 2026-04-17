@@ -361,6 +361,26 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Publish calls: 2"
   end
 
+  def test_immutable_subtree_replacement_example_executes_successfully
+    stdout, stderr, status = run_example("examples/immutable_subtree_replacement.rb")
+
+    assert status.success?, <<~MSG
+      expected immutable_subtree_replacement example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== Original Definition ==="
+    assert_includes stdout, "Original output: report:PAYLOAD"
+    assert_includes stdout, "=== Mutated Definition ==="
+    assert_includes stdout, "Mutated output: report:PAYLOAD-NORMALIZED|v1"
+    assert_includes stdout, "Original still has process? true"
+    assert_includes stdout, "Mutated has process? false"
+    assert_includes stdout, "Mutated has summarize? true"
+  end
+
   def test_graph_basics_example_executes_successfully
     stdout, stderr, status = run_example("examples/graph_basics.rb")
 
