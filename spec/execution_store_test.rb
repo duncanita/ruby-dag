@@ -151,6 +151,34 @@ class ExecutionStoreTest < Minitest::Test
     assert_equal [true], history.map { |entry| entry[:superseded] }
   end
 
+  def test_mark_obsolete_supersedes_reusable_outputs_and_records_obsolete_cause
+    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store.begin_run(workflow_id: "wf-obsolete", definition_fingerprint: "fp-1", node_paths: [[:fetch]])
+    store.save_output(
+      workflow_id: "wf-obsolete",
+      node_path: [:fetch],
+      version: 1,
+      result: DAG::Success.new(value: "v1"),
+      reusable: true,
+      superseded: false
+    )
+
+    store.mark_obsolete(
+      workflow_id: "wf-obsolete",
+      node_paths: [[:fetch]],
+      cause: {code: :subtree_replaced, replaced_from: [:fetch]}
+    )
+
+    node = store.load_node(workflow_id: "wf-obsolete", node_path: [:fetch])
+    assert_equal :obsolete, node[:state]
+    assert_equal({code: :subtree_replaced, replaced_from: [:fetch]}, node[:obsolete_cause])
+    assert_nil store.load_output(workflow_id: "wf-obsolete", node_path: [:fetch])
+
+    history = store.load_output(workflow_id: "wf-obsolete", node_path: [:fetch], version: :all)
+    assert_equal [1], history.map { |entry| entry[:version] }
+    assert_equal [true], history.map { |entry| entry[:superseded] }
+  end
+
   def test_file_store_persists_runs_outputs_and_trace_across_instances
     Dir.mktmpdir("dag-file-store") do |dir|
       store = DAG::Workflow::ExecutionStore::FileStore.new(dir: dir)

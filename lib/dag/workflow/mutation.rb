@@ -22,6 +22,35 @@ module DAG
         }
       end
 
+      def apply_subtree_replacement_impact(workflow_id:, definition:, root_node:, execution_store:, cause: nil)
+        impact = subtree_replacement_impact(
+          workflow_id: workflow_id,
+          definition: definition,
+          root_node: root_node,
+          execution_store: execution_store
+        )
+        root = mutation_node_path(root_node)
+        normalized_cause = subtree_replacement_cause(root, cause)
+
+        unless impact[:obsolete_nodes].empty?
+          execution_store.mark_obsolete(
+            workflow_id: workflow_id,
+            node_paths: impact[:obsolete_nodes],
+            cause: normalized_cause
+          )
+        end
+
+        unless impact[:stale_nodes].empty?
+          execution_store.mark_stale(
+            workflow_id: workflow_id,
+            node_paths: impact[:stale_nodes],
+            cause: normalized_cause
+          )
+        end
+
+        impact
+      end
+
       def replace_subtree(definition, root_node:, replacement:, reconnect: [])
         raise ArgumentError, "definition must be a DAG::Workflow::Definition" unless definition.is_a?(Definition)
         raise ArgumentError, "replacement must be a DAG::Workflow::Definition" unless replacement.is_a?(Definition)
@@ -90,6 +119,20 @@ module DAG
 
       def effective_input_key(from, metadata)
         (metadata[:as] || from).to_sym
+      end
+
+      def subtree_replacement_cause(root, custom_cause)
+        {code: :subtree_replaced}.merge(normalize_subtree_replacement_cause(custom_cause)).merge(replaced_from: root)
+      end
+
+      def normalize_subtree_replacement_cause(cause)
+        return {} if cause.nil?
+        raise ArgumentError, "cause must be a Hash" unless cause.is_a?(Hash)
+
+        normalized = cause.transform_keys(&:to_sym)
+        raise ArgumentError, "cause cannot override replaced_from" if normalized.key?(:replaced_from)
+
+        normalized
       end
 
       def node_completed?(run, node_path)
