@@ -25,6 +25,7 @@ module DAG
             allowed_inputs: allowed_condition_inputs(graph, step, node_name: node)
           ))
           errors.concat(validate_dependency_inputs(graph, step, node_name: node))
+          errors.concat(validate_retry(step, node_name: node))
           errors.concat(validate_emit_events(step, node_name: node))
           errors.concat(validate_sub_workflow(step, node_name: node)) if step.type == :sub_workflow
         end
@@ -57,10 +58,31 @@ module DAG
         local_errors + external_errors + duplicate_effective_input_key_errors(graph, step, node_name: node_name)
       end
 
+      VALID_RETRY_BACKOFFS = %i[fixed linear exponential].freeze
+
       def self.validate_dependency_version(version, dependency_name:, node_name:, errors:)
         return if version == :latest || version == :all || (version.is_a?(Integer) && version.positive?)
 
         errors << "Node #{node_name} dependency #{dependency_name} has invalid version #{version.inspect}; expected :latest, :all, or a positive Integer"
+      end
+
+      def self.validate_retry(step, node_name:)
+        config = step.config[:retry]
+        return [] if config.nil?
+        return ["Node #{node_name} retry must be a mapping"] unless config.is_a?(Hash)
+
+        cfg = config.transform_keys(&:to_sym)
+        errors = []
+        unknown = cfg.keys - %i[max_attempts backoff base_delay max_delay retry_on]
+        errors << "Node #{node_name} retry has unsupported keys #{unknown.map(&:inspect).join(", ")}" unless unknown.empty?
+
+        validate_retry_max_attempts(cfg[:max_attempts], node_name: node_name, errors: errors) if cfg.key?(:max_attempts)
+        validate_retry_backoff(cfg[:backoff], node_name: node_name, errors: errors) if cfg.key?(:backoff)
+        validate_retry_delay(cfg[:base_delay], node_name: node_name, key: :base_delay, errors: errors) if cfg.key?(:base_delay)
+        validate_retry_delay(cfg[:max_delay], node_name: node_name, key: :max_delay, errors: errors) if cfg.key?(:max_delay)
+        validate_retry_max_delay(cfg, node_name: node_name, errors: errors)
+        validate_retry_on(cfg[:retry_on], node_name: node_name, errors: errors) if cfg.key?(:retry_on)
+        errors
       end
 
       def self.validate_emit_events(step, node_name:)
@@ -130,6 +152,53 @@ module DAG
 
           "Node #{node_name} has duplicate effective input key #{key.inspect} from dependencies #{dependencies.sort_by(&:to_s).inspect}"
         end
+      end
+
+      def self.validate_retry_max_attempts(value, node_name:, errors:)
+        integer = Integer(value)
+        errors << "Node #{node_name} retry.max_attempts must be >= 1" if integer < 1
+      rescue ArgumentError, TypeError
+        errors << "Node #{node_name} retry.max_attempts must be an Integer >= 1"
+      end
+
+      def self.validate_retry_backoff(value, node_name:, errors:)
+        backoff = value.to_sym
+        return if VALID_RETRY_BACKOFFS.include?(backoff)
+
+        errors << "Node #{node_name} retry.backoff must be one of #{VALID_RETRY_BACKOFFS.join(", ")}"
+      rescue NoMethodError
+        errors << "Node #{node_name} retry.backoff must be one of #{VALID_RETRY_BACKOFFS.join(", ")}"
+      end
+
+      def self.validate_retry_delay(value, node_name:, key:, errors:)
+        numeric = Float(value)
+        errors << "Node #{node_name} retry.#{key} must be >= 0" if numeric.negative?
+      rescue ArgumentError, TypeError
+        errors << "Node #{node_name} retry.#{key} must be a number >= 0"
+      end
+
+      def self.validate_retry_max_delay(config, node_name:, errors:)
+        return unless config.key?(:base_delay) && config.key?(:max_delay)
+
+        base_delay = Float(config[:base_delay])
+        max_delay = Float(config[:max_delay])
+        return unless max_delay < base_delay
+
+        errors << "Node #{node_name} retry.max_delay must be >= retry.base_delay"
+      rescue ArgumentError, TypeError
+        nil
+      end
+
+      def self.validate_retry_on(value, node_name:, errors:)
+        unless value.is_a?(Array)
+          errors << "Node #{node_name} retry.retry_on must be an array of Symbols or Strings"
+          return
+        end
+
+        invalid = value.reject { |entry| symbol_like?(entry) }
+        return if invalid.empty?
+
+        errors << "Node #{node_name} retry.retry_on entries must be Symbols or Strings"
       end
 
       def self.blank?(value)

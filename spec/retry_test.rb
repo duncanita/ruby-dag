@@ -182,4 +182,81 @@ class RetryTest < Minitest::Test
     assert_equal 4, attempts
     assert_equal [0.5, 0.75, 0.75], sleeps
   end
+
+  def test_rejects_unknown_retry_backoff_at_validation_time
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Runner.new(build_test_workflow(
+        flaky: {
+          type: :ruby,
+          retry: {
+            max_attempts: 3,
+            backoff: :banana,
+            base_delay: 0.1
+          },
+          callable: ->(_input) { DAG::Success.new(value: "ok") }
+        }
+      ), parallel: false)
+    end
+
+    assert_match(/retry/, Array(error.message).join(" "))
+    assert_match(/backoff/, Array(error.message).join(" "))
+  end
+
+  def test_rejects_retry_config_with_negative_base_delay
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Runner.new(build_test_workflow(
+        flaky: {
+          type: :ruby,
+          retry: {
+            max_attempts: 3,
+            backoff: :fixed,
+            base_delay: -1
+          },
+          callable: ->(_input) { DAG::Success.new(value: "ok") }
+        }
+      ), parallel: false)
+    end
+
+    assert_match(/retry/, Array(error.message).join(" "))
+    assert_match(/base_delay/, Array(error.message).join(" "))
+  end
+
+  def test_rejects_retry_config_with_non_positive_max_attempts
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Runner.new(build_test_workflow(
+        flaky: {
+          type: :ruby,
+          retry: {
+            max_attempts: 0,
+            backoff: :fixed,
+            base_delay: 0.1
+          },
+          callable: ->(_input) { DAG::Success.new(value: "ok") }
+        }
+      ), parallel: false)
+    end
+
+    assert_match(/retry/, Array(error.message).join(" "))
+    assert_match(/max_attempts/, Array(error.message).join(" "))
+  end
+
+  def test_rejects_retry_config_with_invalid_retry_on_entries
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Runner.new(build_test_workflow(
+        flaky: {
+          type: :ruby,
+          retry: {
+            max_attempts: 3,
+            backoff: :fixed,
+            base_delay: 0.1,
+            retry_on: [:exec_failed, 12]
+          },
+          callable: ->(_input) { DAG::Success.new(value: "ok") }
+        }
+      ), parallel: false)
+    end
+
+    assert_match(/retry/, Array(error.message).join(" "))
+    assert_match(/retry_on/, Array(error.message).join(" "))
+  end
 end

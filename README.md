@@ -245,6 +245,8 @@ definition = DAG::Workflow::Loader.from_hash(
 result = DAG::Workflow::Runner.new(definition.graph, definition.registry).call
 ```
 
+Retry configuration is validated when the workflow is built: `max_attempts` must be an integer >= 1, `backoff` must be one of `fixed`, `linear`, or `exponential`, delays must be numeric and >= 0, `max_delay` must not be smaller than `base_delay`, and `retry_on` must be an array of symbol-like error codes.
+
 ### Checkpointing and Resume
 
 For durable execution, pass both a `workflow_id` and an `execution_store`.
