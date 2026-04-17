@@ -501,6 +501,38 @@ class MutationTest < Minitest::Test
     assert_equal "report:PAYLOAD", result.outputs[:report].value
   end
 
+  def test_workflow_replace_subtree_detects_duplicate_alias_with_string_keyed_metadata
+    definition = build_test_workflow(
+      source: {type: :ruby, callable: ->(_) { DAG::Success.new(value: "payload") }},
+      config: {type: :ruby, callable: ->(_) { DAG::Success.new(value: "v1") }},
+      process: {
+        type: :ruby,
+        depends_on: [:source],
+        callable: ->(_) { DAG::Success.new(value: "ok") }
+      },
+      report: {
+        type: :ruby,
+        depends_on: [:process, {from: :config, as: :summary}],
+        callable: ->(input) { DAG::Success.new(value: input[:summary]) }
+      }
+    )
+
+    replacement = build_test_workflow(
+      summarize: {type: :ruby, callable: ->(_) { DAG::Success.new(value: "s") }}
+    )
+
+    error = assert_raises(ArgumentError) do
+      DAG::Workflow.replace_subtree(
+        definition,
+        root_node: :process,
+        replacement: replacement,
+        reconnect: [{from: :summarize, to: :report, metadata: {"as" => :summary}}]
+      )
+    end
+
+    assert_includes error.message, "duplicate effective downstream alias"
+  end
+
   def test_workflow_replace_subtree_preserves_source_path
     base = build_test_workflow(
       root: {type: :ruby, callable: ->(_) { DAG::Success.new(value: :ok) }}

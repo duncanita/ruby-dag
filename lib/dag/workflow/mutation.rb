@@ -43,10 +43,14 @@ module DAG
         Array(reconnect).each do |descriptor|
           entry = descriptor.transform_keys(&:to_sym)
           target = entry.fetch(:to).to_sym
-          # Match the merge that `Graph#with_subtree_replaced` applies to
-          # reconnect metadata — otherwise the validator's idea of the
-          # effective alias drifts from the edge actually written.
-          merged = graph.edge_metadata(root, target).merge(entry[:metadata] || {})
+          # Match the normalization `Graph#with_subtree_replaced` performs —
+          # symbolize the inner metadata keys and then merge user-supplied
+          # values over the original root→target edge — otherwise the
+          # validator's idea of the effective alias drifts from the edge
+          # actually written (a String key like `"as"` would bypass the
+          # alias-collision check but still end up symbolized on the edge).
+          explicit = (entry[:metadata] || {}).transform_keys(&:to_sym)
+          merged = graph.edge_metadata(root, target).merge(explicit)
           alias_key = effective_input_key(entry.fetch(:from), merged)
 
           if aliases_by_target[target].include?(alias_key)
