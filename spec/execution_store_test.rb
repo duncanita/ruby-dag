@@ -1,8 +1,11 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "tmpdir"
 
 class ExecutionStoreTest < Minitest::Test
+  include TestHelpers
+
   def test_load_output_returns_isolated_result_snapshot
     store = DAG::Workflow::ExecutionStore::MemoryStore.new
     store.begin_run(workflow_id: "wf-store", definition_fingerprint: "fp-1", node_paths: [[:fetch]])
@@ -146,5 +149,47 @@ class ExecutionStoreTest < Minitest::Test
     history = store.load_output(workflow_id: "wf-stale", node_path: [:fetch], version: :all)
     assert_equal [1], history.map { |entry| entry[:version] }
     assert_equal [true], history.map { |entry| entry[:superseded] }
+  end
+
+  def test_file_store_persists_runs_outputs_and_trace_across_instances
+    Dir.mktmpdir("dag-file-store") do |dir|
+      store = DAG::Workflow::ExecutionStore::FileStore.new(dir: dir)
+      entry = DAG::Workflow::TraceEntry.new(
+        name: :fetch,
+        layer: 0,
+        started_at: 1.0,
+        finished_at: 2.0,
+        duration_ms: 1000.0,
+        status: :success,
+        input_keys: [:source],
+        attempt: 1,
+        retried: false
+      )
+
+      store.begin_run(workflow_id: "wf-file", definition_fingerprint: "fp-1", node_paths: [[:fetch]])
+      store.set_node_state(workflow_id: "wf-file", node_path: [:fetch], state: :completed)
+      store.append_trace(workflow_id: "wf-file", entry: entry)
+      store.save_output(
+        workflow_id: "wf-file",
+        node_path: [:fetch],
+        version: 1,
+        result: DAG::Success.new(value: {payload: ["a"]}),
+        reusable: true,
+        superseded: false,
+        saved_at: Time.utc(2026, 4, 17, 8, 0, 0)
+      )
+      store.set_workflow_status(workflow_id: "wf-file", status: :completed)
+
+      reopened = DAG::Workflow::ExecutionStore::FileStore.new(dir: dir)
+      run = reopened.load_run("wf-file")
+      output = reopened.load_output(workflow_id: "wf-file", node_path: [:fetch])
+
+      assert_equal :completed, run[:workflow_status]
+      assert_equal [:fetch], run[:trace].map(&:name)
+      assert_equal({payload: ["a"]}, output[:result].value)
+
+      output[:result].value[:payload] << "b"
+      assert_equal({payload: ["a"]}, reopened.load_output(workflow_id: "wf-file", node_path: [:fetch])[:result].value)
+    end
   end
 end

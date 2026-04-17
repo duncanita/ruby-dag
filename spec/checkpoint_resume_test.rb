@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "tmpdir"
 
 class CheckpointResumeTest < Minitest::Test
   include TestHelpers
@@ -151,5 +152,49 @@ class CheckpointResumeTest < Minitest::Test
 
     assert_equal 0, calls
     assert_includes error.message, "fingerprint"
+  end
+
+  def test_file_store_resume_reuses_completed_outputs_across_fresh_store_instances
+    fetch_calls = 0
+    merge_calls = 0
+
+    definition = build_test_workflow(
+      fetch: {
+        type: :ruby,
+        resume_key: "fetch-v1",
+        callable: ->(_input) do
+          fetch_calls += 1
+          DAG::Success.new(value: "payload-#{fetch_calls}")
+        end
+      },
+      merge: {
+        type: :ruby,
+        depends_on: [:fetch],
+        resume_key: "merge-v1",
+        callable: ->(input) do
+          merge_calls += 1
+          DAG::Success.new(value: "merged:#{input[:fetch]}")
+        end
+      }
+    )
+
+    Dir.mktmpdir("dag-checkpoint-file-store") do |dir|
+      first = DAG::Workflow::Runner.new(definition,
+        parallel: false,
+        execution_store: DAG::Workflow::ExecutionStore::FileStore.new(dir: dir),
+        workflow_id: "wf-file-resume").call
+
+      second = DAG::Workflow::Runner.new(definition,
+        parallel: false,
+        execution_store: DAG::Workflow::ExecutionStore::FileStore.new(dir: dir),
+        workflow_id: "wf-file-resume").call
+
+      assert first.success?
+      assert second.success?
+      assert_equal 1, fetch_calls
+      assert_equal 1, merge_calls
+      assert_equal "payload-1", second.outputs[:fetch].value
+      assert_equal "merged:payload-1", second.outputs[:merge].value
+    end
   end
 end
