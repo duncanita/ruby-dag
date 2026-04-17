@@ -411,6 +411,7 @@ module DAG
           middleware: @middleware,
           workflow_id: execution.workflow_id,
           execution_store: execution.execution_store,
+          event_bus: execution.event_bus.respond_to?(:publish) ? execution.event_bus : nil,
           cross_workflow_resolver: @cross_workflow_resolver,
           node_path_prefix: execution.node_path,
           root_input: mapped_input,

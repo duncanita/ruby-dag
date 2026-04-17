@@ -200,6 +200,41 @@ class EventMiddlewareTest < Minitest::Test
     assert_equal "wf-runner-events", bus.events.first.workflow_id
   end
 
+  def test_runner_emits_namespaced_events_from_nested_sub_workflow_steps
+    bus = MemoryEventBus.new
+    child = build_test_workflow(
+      analyze: {
+        type: :ruby,
+        emit_events: [
+          {
+            name: :child_ready,
+            payload: ->(attempt_result) { {normalized: attempt_result.value[:normalized]} }
+          }
+        ],
+        callable: ->(_input) { DAG::Success.new(value: {normalized: "HELLO"}) }
+      }
+    )
+    parent = build_test_workflow(
+      process: {
+        type: :sub_workflow,
+        definition: child,
+        output_key: :analyze
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(parent,
+      parallel: false,
+      workflow_id: "wf-nested-events",
+      event_bus: bus,
+      middleware: [DAG::Workflow::EventMiddleware.new(clock: build_clock)]).call
+
+    assert_equal :completed, result.status
+    assert_equal [:child_ready], bus.events.map(&:name)
+    assert_equal [:process, :analyze], bus.events.first.node_path
+    assert_equal({normalized: "HELLO"}, bus.events.first.payload)
+    assert_equal "wf-nested-events", bus.events.first.workflow_id
+  end
+
   def test_runner_emits_only_after_final_retry_success
     bus = MemoryEventBus.new
     attempts = 0

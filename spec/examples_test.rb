@@ -254,6 +254,26 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Node path: monitor"
   end
 
+  def test_nested_event_middleware_example_executes_successfully
+    stdout, stderr, status = run_example("examples/nested_event_middleware.rb")
+
+    assert status.success?, <<~MSG
+      expected nested_event_middleware example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== Nested Event Summary ==="
+    assert_includes stdout, "Status: completed"
+    assert_includes stdout, "Events captured: 1"
+    assert_includes stdout, "Event names: child_ready"
+    assert_includes stdout, "Event node path: process.analyze"
+    assert_includes stdout, "Event payload source: child"
+    assert_includes stdout, "Event payload normalized: HELLO"
+  end
+
   def test_invalidation_cascade_example_executes_successfully
     stdout, stderr, status = run_example("examples/invalidation_cascade.rb")
 

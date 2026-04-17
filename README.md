@@ -203,7 +203,7 @@ runner = DAG::Workflow::Runner.new(definition,
 Each event includes `name`, `workflow_id`, `node_path`, `payload`, and `emitted_at`.
 The recommended wiring is `event_bus:` on `Runner`, with `EventMiddleware` reading the bus from `execution.event_bus`; you can still inject a bus directly into the middleware when you need a one-off override.
 `emit_events:` must be an array of descriptors shaped like `{name: :event_name, if: ->(result) { ... }, payload: ->(result) { ... }}` where `name` is required and `if` / `payload` are optional but must be callable when present. When `payload` is omitted the event uses `result.value`; a payload callable may also return `nil`.
-See `examples/event_middleware.rb` for a runnable example.
+See `examples/event_middleware.rb` for a flat runnable example and `examples/nested_event_middleware.rb` for namespaced events emitted from child steps inside a sub-workflow.
 
 ### Build Programmatically and Dump to YAML
 
