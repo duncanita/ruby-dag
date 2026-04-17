@@ -38,6 +38,25 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Fetch calls: 1"
   end
 
+  def test_file_store_example_executes_successfully
+    stdout, stderr, status = run_example("examples/file_store.rb")
+
+    assert status.success?, <<~MSG
+      expected file_store example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== First Run (file store) ==="
+    assert_includes stdout, "=== Second Run (fresh store instance) ==="
+    assert_includes stdout, "Fetch calls: 1"
+    assert_includes stdout, "Transform calls: 1"
+    assert_includes stdout, "Stored workflow status: completed"
+    assert_includes stdout, "Stored versions: [1]"
+  end
+
   def test_sub_workflow_example_executes_successfully
     stdout, stderr, status = run_example("examples/sub_workflow.rb")
 
