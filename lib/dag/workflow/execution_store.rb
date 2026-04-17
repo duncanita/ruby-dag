@@ -107,17 +107,23 @@ module DAG
         end
 
         def mark_stale(workflow_id:, node_paths:, cause:)
-          run = ensure_run(workflow_id)
-          Array(node_paths).each do |node_path|
-            node = ensure_node(run, node_path)
-            node[:state] = :stale
-            node[:stale_cause] = deep_copy(cause)
-            Array(node[:outputs]).each do |output|
-              output[:superseded] = true if output[:reusable]
-            end
-          end
-          write_run(run)
-          nil
+          mark_nodes(
+            workflow_id: workflow_id,
+            node_paths: node_paths,
+            state: :stale,
+            cause_key: :stale_cause,
+            cause: cause
+          )
+        end
+
+        def mark_obsolete(workflow_id:, node_paths:, cause:)
+          mark_nodes(
+            workflow_id: workflow_id,
+            node_paths: node_paths,
+            state: :obsolete,
+            cause_key: :obsolete_cause,
+            cause: cause
+          )
         end
 
         def set_workflow_status(workflow_id:, status:, waiting_nodes: [])
@@ -142,6 +148,20 @@ module DAG
         end
 
         private
+
+        def mark_nodes(workflow_id:, node_paths:, state:, cause_key:, cause:)
+          run = ensure_run(workflow_id)
+          Array(node_paths).each do |node_path|
+            node = ensure_node(run, node_path)
+            node[:state] = state
+            node[cause_key] = deep_copy(cause)
+            Array(node[:outputs]).each do |output|
+              output[:superseded] = true if output[:reusable]
+            end
+          end
+          write_run(run)
+          nil
+        end
 
         def ensure_run(workflow_id)
           load_run(workflow_id) || raise(ArgumentError, "unknown workflow_id: #{workflow_id.inspect}")
@@ -277,15 +297,23 @@ module DAG
         end
 
         def mark_stale(workflow_id:, node_paths:, cause:)
-          Array(node_paths).each do |node_path|
-            node = ensure_node(workflow_id, node_path)
-            node[:state] = :stale
-            node[:stale_cause] = deep_copy(cause)
-            Array(node[:outputs]).each do |output|
-              output[:superseded] = true if output[:reusable]
-            end
-          end
-          nil
+          mark_nodes(
+            workflow_id: workflow_id,
+            node_paths: node_paths,
+            state: :stale,
+            cause_key: :stale_cause,
+            cause: cause
+          )
+        end
+
+        def mark_obsolete(workflow_id:, node_paths:, cause:)
+          mark_nodes(
+            workflow_id: workflow_id,
+            node_paths: node_paths,
+            state: :obsolete,
+            cause_key: :obsolete_cause,
+            cause: cause
+          )
         end
 
         def set_workflow_status(workflow_id:, status:, waiting_nodes: [])
@@ -306,6 +334,18 @@ module DAG
         end
 
         private
+
+        def mark_nodes(workflow_id:, node_paths:, state:, cause_key:, cause:)
+          Array(node_paths).each do |node_path|
+            node = ensure_node(workflow_id, node_path)
+            node[:state] = state
+            node[cause_key] = deep_copy(cause)
+            Array(node[:outputs]).each do |output|
+              output[:superseded] = true if output[:reusable]
+            end
+          end
+          nil
+        end
 
         def ensure_run(workflow_id)
           @runs.fetch(workflow_id) do
