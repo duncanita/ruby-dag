@@ -160,6 +160,40 @@ module DAG
       dup.tap { |g| g.replace_node(old_name, new_name) }.freeze
     end
 
+    def with_subtree_replaced(root:, replacement_graph:, reconnect: [])
+      root_sym = root.to_sym
+      raise UnknownNodeError, "Unknown node: #{root_sym}" unless @nodes.include?(root_sym)
+      raise ArgumentError, "replacement_graph must be a DAG::Graph" unless replacement_graph.is_a?(Graph)
+
+      replacement_roots = replacement_graph.roots.to_a
+      if replacement_roots.size != 1
+        raise ArgumentError, "replacement_graph must have exactly one root, got #{replacement_roots.sort.inspect}"
+      end
+
+      removed = Set.new([root_sym])
+      downstream = each_successor(root_sym).to_set
+      normalized_reconnect = Array(reconnect).map do |descriptor|
+        raise ArgumentError, "reconnect entries must be Hashes" unless descriptor.is_a?(Hash)
+
+        entry = descriptor.transform_keys(&:to_sym)
+        from = entry.fetch(:from).to_sym
+        to = entry.fetch(:to).to_sym
+        metadata = (entry[:metadata] || {}).transform_keys(&:to_sym)
+        raise ArgumentError, "reconnect from #{from.inspect} must reference a replacement leaf" unless replacement_graph.leaves.include?(from)
+        raise ArgumentError, "reconnect to #{to.inspect} must reference a downstream node outside the removed subtree" unless downstream.include?(to)
+
+        {from: from, to: to, metadata: metadata}
+      end
+
+      dup.tap do |graph|
+        removed.each { |node| graph.remove_node(node) }
+        replacement_graph.each_node { |node| graph.add_node(node) }
+        replacement_graph.each_edge { |edge| graph.add_edge(edge.from, edge.to, **edge.metadata) }
+        each_predecessor(root_sym) { |pred| graph.add_edge(pred, replacement_roots.first, **edge_metadata(pred, root_sym)) }
+        normalized_reconnect.each { |entry| graph.add_edge(entry[:from], entry[:to], **entry[:metadata]) }
+      end.freeze
+    end
+
     # --- Freezing ---
 
     def freeze
