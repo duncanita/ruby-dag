@@ -181,13 +181,7 @@ module DAG
         raise ArgumentError, "reconnect from #{from.inspect} must reference a replacement leaf" unless replacement_graph.leaves.include?(from)
         raise ArgumentError, "reconnect to #{to.inspect} must reference a downstream node outside the removed subtree" unless downstream.include?(to)
 
-        # Default to the original root→to edge's metadata so downstream
-        # input aliases (`:as`, `:version`, etc.) survive the reconnect.
-        # Explicit entry metadata still overrides per-key.
-        explicit = (entry[:metadata] || {}).transform_keys(&:to_sym)
-        metadata = edge_metadata(root_sym, to).merge(explicit)
-
-        {from: from, to: to, metadata: metadata}
+        {from: from, to: to, metadata: merged_edge_metadata(root_sym, to, entry[:metadata])}
       end
 
       dup.tap do |graph|
@@ -261,6 +255,10 @@ module DAG
 
     def edge_metadata(from, to)
       @edge_metadata.dig(from.to_sym, to.to_sym) || {}
+    end
+
+    def merged_edge_metadata(from, to, overrides = nil)
+      edge_metadata(from, to).merge((overrides || {}).transform_keys(&:to_sym))
     end
 
     # --- Neighbor queries ---
