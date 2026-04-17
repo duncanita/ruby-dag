@@ -230,6 +230,42 @@ class MutationTest < Minitest::Test
     assert_includes error.message, "reconnect entries must be Hashes"
   end
 
+  def test_graph_with_subtree_replaced_rejects_reconnect_without_from
+    graph = DAG::Graph.new
+    %i[root down].each { |n| graph.add_node(n) }
+    graph.add_edge(:root, :down)
+    graph.freeze
+    replacement = DAG::Graph.new.add_node(:leaf).freeze
+
+    error = assert_raises(ArgumentError) do
+      graph.with_subtree_replaced(
+        root: :root,
+        replacement_graph: replacement,
+        reconnect: [{to: :down}]
+      )
+    end
+
+    assert_includes error.message, "reconnect entries must include :from"
+  end
+
+  def test_graph_with_subtree_replaced_rejects_reconnect_without_to
+    graph = DAG::Graph.new
+    %i[root down].each { |n| graph.add_node(n) }
+    graph.add_edge(:root, :down)
+    graph.freeze
+    replacement = DAG::Graph.new.add_node(:leaf).freeze
+
+    error = assert_raises(ArgumentError) do
+      graph.with_subtree_replaced(
+        root: :root,
+        replacement_graph: replacement,
+        reconnect: [{from: :leaf}]
+      )
+    end
+
+    assert_includes error.message, "reconnect entries must include :to"
+  end
+
   def test_graph_with_subtree_replaced_rejects_reconnect_from_non_replacement_leaf
     graph = DAG::Graph.new
     %i[root down].each { |n| graph.add_node(n) }

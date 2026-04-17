@@ -173,15 +173,10 @@ module DAG
       removed = Set.new([root_sym])
       downstream = each_successor(root_sym).to_set
       normalized_reconnect = Array(reconnect).map do |descriptor|
-        raise ArgumentError, "reconnect entries must be Hashes" unless descriptor.is_a?(Hash)
-
-        entry = descriptor.transform_keys(&:to_sym)
-        from = entry.fetch(:from).to_sym
-        to = entry.fetch(:to).to_sym
-        raise ArgumentError, "reconnect from #{from.inspect} must reference a replacement leaf" unless replacement_graph.leaves.include?(from)
-        raise ArgumentError, "reconnect to #{to.inspect} must reference a downstream node outside the removed subtree" unless downstream.include?(to)
-
-        {from: from, to: to, metadata: merged_edge_metadata(root_sym, to, entry[:metadata])}
+        normalize_reconnect_entry(descriptor,
+          replacement_graph: replacement_graph,
+          downstream: downstream,
+          root: root_sym)
       end
 
       dup.tap do |graph|
@@ -259,6 +254,21 @@ module DAG
 
     def merged_edge_metadata(from, to, overrides = nil)
       edge_metadata(from, to).merge((overrides || {}).transform_keys(&:to_sym))
+    end
+
+    def normalize_reconnect_entry(descriptor, replacement_graph:, downstream:, root:)
+      raise ArgumentError, "reconnect entries must be Hashes" unless descriptor.is_a?(Hash)
+
+      entry = descriptor.transform_keys(&:to_sym)
+      raise ArgumentError, "reconnect entries must include :from" unless entry.key?(:from)
+      raise ArgumentError, "reconnect entries must include :to" unless entry.key?(:to)
+
+      from = entry.fetch(:from).to_sym
+      to = entry.fetch(:to).to_sym
+      raise ArgumentError, "reconnect from #{from.inspect} must reference a replacement leaf" unless replacement_graph.leaves.include?(from)
+      raise ArgumentError, "reconnect to #{to.inspect} must reference a downstream node outside the removed subtree" unless downstream.include?(to)
+
+      {from: from, to: to, metadata: merged_edge_metadata(root, to, entry[:metadata])}
     end
 
     # --- Neighbor queries ---
