@@ -30,6 +30,7 @@ module DAG
             workflow_id: execution.workflow_id,
             node_path: execution.node_path,
             payload: event_payload(event_config, result),
+            metadata: event_metadata(event_config, result),
             emitted_at: @clock.wall_now
           ))
         end
@@ -47,6 +48,13 @@ module DAG
         return result.value if payload_builder.nil?
 
         payload_builder.call(result)
+      end
+
+      def event_metadata(event_config, result)
+        metadata_builder = event_config[:metadata]
+        return {} if metadata_builder.nil?
+
+        metadata_builder.call(result)
       end
     end
   end

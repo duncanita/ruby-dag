@@ -100,14 +100,31 @@ class EventMiddlewareTest < Minitest::Test
     assert_match(/callable/, Array(error.message).join(" "))
   end
 
-  def test_emits_custom_payload_when_payload_callable_is_present
+  def test_rejects_emit_event_descriptor_with_non_callable_metadata
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Runner.new(build_test_workflow(
+        monitor: {
+          type: :ruby,
+          emit_events: [{name: :ready, metadata: :bad}],
+          callable: ->(_input) { DAG::Success.new(value: "ok") }
+        }
+      ), parallel: false)
+    end
+
+    assert_match(/emit_events\[0\]/, Array(error.message).join(" "))
+    assert_match(/metadata/, Array(error.message).join(" "))
+    assert_match(/callable/, Array(error.message).join(" "))
+  end
+
+  def test_emits_custom_payload_and_metadata_when_callables_are_present
     bus = MemoryEventBus.new
     middleware = DAG::Workflow::EventMiddleware.new(event_bus: bus, clock: build_clock)
 
     result = middleware.call(build_step(emit_events: [
       {
         name: :anomaly_detected,
-        payload: ->(attempt_result) { {score: attempt_result.value[:score], level: :high} }
+        payload: ->(attempt_result) { {score: attempt_result.value[:score], level: :high} },
+        metadata: ->(attempt_result) { {priority: attempt_result.value[:priority], source: :detector} }
       }
     ]), {}, context: nil, execution: build_execution, next_step: lambda do |_step, _input, context:, execution:|
       assert_nil context
@@ -118,6 +135,7 @@ class EventMiddlewareTest < Minitest::Test
     assert result.success?
     assert_equal 1, bus.events.size
     assert_equal({score: 0.91, level: :high}, bus.events.first.payload)
+    assert_equal({priority: :high, source: :detector}, bus.events.first.metadata)
   end
 
   def test_payload_callable_is_not_invoked_when_event_condition_is_false
@@ -145,12 +163,12 @@ class EventMiddlewareTest < Minitest::Test
     assert_empty bus.events
   end
 
-  def test_payload_callable_may_return_nil
+  def test_payload_callable_may_return_nil_and_metadata_normalizes_to_empty_hash
     bus = MemoryEventBus.new
     middleware = DAG::Workflow::EventMiddleware.new(event_bus: bus, clock: build_clock)
 
     result = middleware.call(build_step(emit_events: [
-      {name: :heartbeat, payload: ->(_result = nil) {}}
+      {name: :heartbeat, payload: ->(_result = nil) {}, metadata: ->(_result = nil) {}}
     ]), {}, context: nil, execution: build_execution, next_step: lambda do |_step, _input, context:, execution:|
       assert_nil context
       assert_equal [:monitor], execution.node_path
@@ -160,6 +178,7 @@ class EventMiddlewareTest < Minitest::Test
     assert result.success?
     assert_equal 1, bus.events.size
     assert_nil bus.events.first.payload
+    assert_equal({}, bus.events.first.metadata)
   end
 
   def test_does_not_emit_events_for_failed_attempts
@@ -232,6 +251,7 @@ class EventMiddlewareTest < Minitest::Test
     assert_equal [:child_ready], bus.events.map(&:name)
     assert_equal [:process, :analyze], bus.events.first.node_path
     assert_equal({normalized: "HELLO"}, bus.events.first.payload)
+    assert_equal({}, bus.events.first.metadata)
     assert_equal "wf-nested-events", bus.events.first.workflow_id
   end
 

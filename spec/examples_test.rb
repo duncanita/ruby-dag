@@ -250,6 +250,7 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Events captured: 2"
     assert_includes stdout, "Event names: anomaly_detected, high_priority"
     assert_includes stdout, "First payload severity: high"
+    assert_includes stdout, "First metadata source: detector"
     assert_includes stdout, "Second payload priority: high"
     assert_includes stdout, "Node path: monitor"
   end
@@ -272,6 +273,8 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Event node path: process.analyze"
     assert_includes stdout, "Event payload source: child"
     assert_includes stdout, "Event payload normalized: HELLO"
+    assert_includes stdout, "Event metadata scope: nested"
+    assert_includes stdout, "Event metadata producer: analyze"
   end
 
   def test_invalidation_cascade_example_executes_successfully

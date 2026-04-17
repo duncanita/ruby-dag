@@ -27,7 +27,8 @@ child = DAG::Workflow::Loader.from_hash(
     emit_events: [
       {
         name: :child_ready,
-        payload: ->(result) { {normalized: result.value[:normalized], source: :child} }
+        payload: ->(result) { {normalized: result.value[:normalized], source: :child} },
+        metadata: ->(_result) { {scope: :nested, producer: :analyze} }
       }
     ],
     callable: ->(_input) { DAG::Success.new(value: {normalized: "HELLO"}) }
@@ -55,3 +56,5 @@ puts "Event names: #{bus.events.map(&:name).join(", ")}"
 puts "Event node path: #{bus.events.first.node_path.join(".")}"
 puts "Event payload source: #{bus.events.first.payload[:source]}"
 puts "Event payload normalized: #{bus.events.first.payload[:normalized]}"
+puts "Event metadata scope: #{bus.events.first.metadata[:scope]}"
+puts "Event metadata producer: #{bus.events.first.metadata[:producer]}"

@@ -27,7 +27,8 @@ definition = DAG::Workflow::Loader.from_hash(
       {
         name: :anomaly_detected,
         if: ->(result) { result.value[:score] > 0.8 },
-        payload: ->(result) { {score: result.value[:score], severity: :high} }
+        payload: ->(result) { {score: result.value[:score], severity: :high} },
+        metadata: ->(result) { {priority: result.value[:priority], source: :detector} }
       },
       {name: :high_priority, if: ->(result) { result.value[:priority] == :high }}
     ],
@@ -46,5 +47,6 @@ puts "Status: #{result.status}"
 puts "Events captured: #{bus.events.size}"
 puts "Event names: #{bus.events.map(&:name).join(", ")}"
 puts "First payload severity: #{bus.events.first.payload[:severity]}"
+puts "First metadata source: #{bus.events.first.metadata[:source]}"
 puts "Second payload priority: #{bus.events.last.payload[:priority]}"
 puts "Node path: #{bus.events.first.node_path.join(".")}"
