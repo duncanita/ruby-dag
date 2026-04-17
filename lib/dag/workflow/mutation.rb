@@ -43,7 +43,11 @@ module DAG
         Array(reconnect).each do |descriptor|
           entry = descriptor.transform_keys(&:to_sym)
           target = entry.fetch(:to).to_sym
-          alias_key = effective_input_key(entry.fetch(:from), entry[:metadata] || {})
+          # Match the merge that `Graph#with_subtree_replaced` applies to
+          # reconnect metadata — otherwise the validator's idea of the
+          # effective alias drifts from the edge actually written.
+          merged = graph.edge_metadata(root, target).merge(entry[:metadata] || {})
+          alias_key = effective_input_key(entry.fetch(:from), merged)
 
           if aliases_by_target[target].include?(alias_key)
             raise ArgumentError, "duplicate effective downstream alias for #{target}: #{alias_key}"

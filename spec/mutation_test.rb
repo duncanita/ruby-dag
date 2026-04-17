@@ -428,6 +428,79 @@ class MutationTest < Minitest::Test
     assert mutated.registry.key?(:new_b)
   end
 
+  def test_graph_with_subtree_replaced_preserves_original_edge_metadata_when_reconnect_omits_metadata
+    graph = DAG::Graph.new
+    %i[root down].each { |n| graph.add_node(n) }
+    graph.add_edge(:root, :down, as: :summary, weight: 3)
+    graph.freeze
+
+    replacement = DAG::Graph.new.add_node(:leaf).freeze
+
+    result = graph.with_subtree_replaced(
+      root: :root,
+      replacement_graph: replacement,
+      reconnect: [{from: :leaf, to: :down}]
+    )
+
+    assert_equal({as: :summary, weight: 3}, result.edge_metadata(:leaf, :down))
+  end
+
+  def test_graph_with_subtree_replaced_merges_explicit_reconnect_metadata_over_original
+    graph = DAG::Graph.new
+    %i[root down].each { |n| graph.add_node(n) }
+    graph.add_edge(:root, :down, as: :old_alias, weight: 1)
+    graph.freeze
+
+    replacement = DAG::Graph.new.add_node(:leaf).freeze
+
+    result = graph.with_subtree_replaced(
+      root: :root,
+      replacement_graph: replacement,
+      reconnect: [{from: :leaf, to: :down, metadata: {as: :new_alias}}]
+    )
+
+    assert_equal({as: :new_alias, weight: 1}, result.edge_metadata(:leaf, :down))
+  end
+
+  def test_workflow_replace_subtree_preserves_downstream_alias_without_explicit_metadata
+    definition = build_test_workflow(
+      source: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "payload") }
+      },
+      process: {
+        type: :ruby,
+        depends_on: [:source],
+        callable: ->(input) { DAG::Success.new(value: input[:source].upcase) }
+      },
+      report: {
+        type: :ruby,
+        depends_on: [{from: :process, as: :summary}],
+        callable: ->(input) { DAG::Success.new(value: "report:#{input[:summary]}") }
+      }
+    )
+
+    replacement = build_test_workflow(
+      summary: {
+        type: :ruby,
+        callable: ->(input) { DAG::Success.new(value: input[:source].upcase) }
+      }
+    )
+
+    mutated = DAG::Workflow.replace_subtree(
+      definition,
+      root_node: :process,
+      replacement: replacement,
+      reconnect: [{from: :summary, to: :report}]
+    )
+
+    assert_equal({as: :summary}, mutated.graph.edge_metadata(:summary, :report))
+
+    result = DAG::Workflow::Runner.new(mutated, parallel: false).call
+    assert result.success?
+    assert_equal "report:PAYLOAD", result.outputs[:report].value
+  end
+
   def test_workflow_replace_subtree_preserves_source_path
     base = build_test_workflow(
       root: {type: :ruby, callable: ->(_) { DAG::Success.new(value: :ok) }}

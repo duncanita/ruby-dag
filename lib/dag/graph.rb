@@ -178,9 +178,14 @@ module DAG
         entry = descriptor.transform_keys(&:to_sym)
         from = entry.fetch(:from).to_sym
         to = entry.fetch(:to).to_sym
-        metadata = (entry[:metadata] || {}).transform_keys(&:to_sym)
         raise ArgumentError, "reconnect from #{from.inspect} must reference a replacement leaf" unless replacement_graph.leaves.include?(from)
         raise ArgumentError, "reconnect to #{to.inspect} must reference a downstream node outside the removed subtree" unless downstream.include?(to)
+
+        # Default to the original root→to edge's metadata so downstream
+        # input aliases (`:as`, `:version`, etc.) survive the reconnect.
+        # Explicit entry metadata still overrides per-key.
+        explicit = (entry[:metadata] || {}).transform_keys(&:to_sym)
+        metadata = edge_metadata(root_sym, to).merge(explicit)
 
         {from: from, to: to, metadata: metadata}
       end
