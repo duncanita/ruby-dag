@@ -33,6 +33,16 @@ module DAG
           run ? deep_copy(run) : nil
         end
 
+        def paused?(workflow_id)
+          @runs[workflow_id]&.fetch(:paused, false) || false
+        end
+
+        def next_output_version(workflow_id:, node_path:)
+          node = fetch_node(@runs[workflow_id], node_path)
+          outputs = node ? Array(node[:outputs]) : []
+          (outputs.map { |entry| entry[:version] }.max || 0) + 1
+        end
+
         def load_node(workflow_id:, node_path:)
           node = fetch_node(@runs[workflow_id], node_path)
           node ? deep_copy(node) : nil

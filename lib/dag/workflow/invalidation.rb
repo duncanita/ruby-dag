@@ -17,7 +17,10 @@ module DAG
       end
 
       def upstream_change_cause(source: nil, **extra)
-        manual_invalidation_cause(**extra.merge(code: :upstream_changed, source: source).compact)
+        cause = extra.transform_keys(&:to_sym)
+        cause[:source] = source unless source.nil?
+        cause[:code] = :upstream_changed
+        cause.compact
       end
 
       def invalidate(workflow_id:, node:, definition:, execution_store:, max_cascade_depth: nil, cause: nil)

@@ -64,6 +64,16 @@ module DAG
           condition.respond_to?(:call)
         end
 
+        def referenced_from_keys(condition)
+          return [] if condition.nil? || callable?(condition) || !condition.is_a?(Hash)
+
+          keys = []
+          each_leaf(condition) do |leaf|
+            keys << leaf[:from].to_sym if leaf.is_a?(Hash) && leaf.key?(:from)
+          end
+          keys
+        end
+
         private
 
         def normalize_condition(condition, context:)

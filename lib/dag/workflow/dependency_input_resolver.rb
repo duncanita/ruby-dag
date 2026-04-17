@@ -143,11 +143,12 @@ module DAG
       end
 
       def local_dependencies_for(name)
-        @graph.each_predecessor(name).sort.map do |dependency_name|
+        @local_dependencies ||= {}
+        @local_dependencies[name] ||= @graph.each_predecessor(name).sort.map do |dependency_name|
           metadata = @graph.edge_metadata(dependency_name, name)
           LocalDependency.new(
             name: dependency_name,
-            input_key: effective_input_key(metadata[:as] || dependency_name),
+            input_key: (metadata[:as] || dependency_name).to_sym,
             version: metadata.fetch(:version, :latest),
             node_path: node_path_for(dependency_name)
           )
@@ -155,11 +156,12 @@ module DAG
       end
 
       def external_dependencies_for(step)
-        Array(step.config[:external_dependencies]).map do |dependency|
+        @external_dependencies ||= {}
+        @external_dependencies[step.name] ||= Array(step.config[:external_dependencies]).map do |dependency|
           ExternalDependency.new(
             workflow_id: dependency.fetch(:workflow_id),
             node_name: dependency.fetch(:node),
-            input_key: effective_input_key(dependency[:as] || dependency[:node]),
+            input_key: (dependency[:as] || dependency[:node]).to_sym,
             version: dependency.fetch(:version, :latest)
           )
         end
@@ -194,25 +196,16 @@ module DAG
         end
       end
 
-      def condition_value_for_local_dependency(dependency, outputs)
-        resolve_local_dependency_value(dependency, outputs)
-      end
-
-      def condition_status_for_local_dependency(dependency, statuses)
-        return statuses.fetch(dependency.name) if dependency.version == :latest
-
-        :success
-      end
-
       def root_condition_context
         @root_input.transform_values { |value| {value: value, status: :success} }
       end
 
       def local_condition_context(name, outputs, statuses)
         local_dependencies_for(name).to_h do |dependency|
+          status = (dependency.version == :latest) ? statuses.fetch(dependency.name) : :success
           [dependency.name, {
-            value: condition_value_for_local_dependency(dependency, outputs),
-            status: condition_status_for_local_dependency(dependency, statuses)
+            value: resolve_local_dependency_value(dependency, outputs),
+            status: status
           }]
         end
       end
@@ -234,24 +227,7 @@ module DAG
       end
 
       def extract_condition_dependency_keys(condition)
-        return [] if condition.nil? || Condition.callable?(condition)
-
-        case condition
-        when Hash
-          if condition.key?(:all)
-            condition.fetch(:all).flat_map { |entry| extract_condition_dependency_keys(entry) }
-          elsif condition.key?(:any)
-            condition.fetch(:any).flat_map { |entry| extract_condition_dependency_keys(entry) }
-          elsif condition.key?(:not)
-            extract_condition_dependency_keys(condition.fetch(:not))
-          elsif condition.key?(:from)
-            [condition.fetch(:from).to_sym]
-          else
-            []
-          end
-        else
-          []
-        end
+        Condition.referenced_from_keys(condition)
       end
 
       def resolve_external_dependency_value(dependency)
@@ -315,10 +291,6 @@ module DAG
         return value.value if value.is_a?(Success)
 
         value
-      end
-
-      def effective_input_key(value)
-        value.to_sym
       end
 
       def node_path_for(dependency_name)

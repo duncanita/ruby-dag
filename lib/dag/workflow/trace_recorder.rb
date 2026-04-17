@@ -54,8 +54,10 @@ module DAG
 
       def observed_status_for_task(task:, result:, entries:)
         task_name = trace_name_for(task.execution.node_path)
-        task_entries = entries.select { |entry| entry.name == task_name }
-        return task_entries.last.status if task_entries.any?
+        # standard:disable Style/ReverseFind -- Array#rfind is unavailable on Ruby 3.2, which this gem still tests against.
+        last_entry = entries.reverse_each.find { |entry| entry.name == task_name }
+        # standard:enable Style/ReverseFind
+        return last_entry.status if last_entry
 
         result.success? ? :success : :failure
       end

@@ -80,8 +80,7 @@ module DAG
         @task_completion_handler = TaskCompletionHandler.new(
           trace_recorder: @trace_recorder,
           execution_persistence: @execution_persistence,
-          callbacks: @callbacks,
-          lifecycle_callback_result: method(:callback_result_for_lifecycle)
+          callbacks: @callbacks
         )
         @layer_admitter = LayerAdmitter.new(
           graph: @graph,
@@ -360,11 +359,14 @@ module DAG
 
       def core_step_invoker(step)
         executor = (step.type == :sub_workflow) ? nil : executor_class(step.type).new
+        accepts_context = executor && executor_accepts_context?(executor.class)
         ->(current_step, current_input, context:, execution:) do
           result = if current_step.type == :sub_workflow
             run_sub_workflow_step(current_step, current_input, context: context, execution: execution)
+          elsif accepts_context
+            executor.call(current_step, current_input, context: context)
           else
-            invoke_step_executor(executor, current_step, current_input, context: context)
+            executor.call(current_step, current_input)
           end
           unless result.is_a?(Result)
             result = Failure.new(error: {
@@ -382,15 +384,6 @@ module DAG
           Result.exception_failure(:step_raised, e,
             message: "step #{current_step.name} raised: #{e.message}",
             strategy: @strategy.name)
-        end
-      end
-
-      def invoke_step_executor(executor, step, input, context:)
-        call_method = executor.method(:call)
-        if accepts_context_keyword?(call_method)
-          executor.call(step, input, context: context)
-        else
-          executor.call(step, input)
         end
       end
 
@@ -532,13 +525,14 @@ module DAG
         }
       end
 
-      def callback_result_for_lifecycle(_lifecycle)
-        Success.new(value: nil)
-      end
+      def executor_accepts_context?(executor_class)
+        @executor_accepts_context ||= {}
+        return @executor_accepts_context[executor_class] if @executor_accepts_context.key?(executor_class)
 
-      def accepts_context_keyword?(call_method)
-        call_method.parameters.any? { |kind, name| [:key, :keyreq].include?(kind) && name == :context } ||
-          call_method.parameters.any? { |kind, _name| kind == :keyrest }
+        parameters = executor_class.instance_method(:call).parameters
+        @executor_accepts_context[executor_class] =
+          parameters.any? { |kind, name| [:key, :keyreq].include?(kind) && name == :context } ||
+          parameters.any? { |kind, _name| kind == :keyrest }
       end
 
       def build_middleware_invoker(middleware, next_step)
@@ -565,10 +559,6 @@ module DAG
 
       def pause_requested?
         @execution_persistence.pause_requested?
-      end
-
-      def blank?(value)
-        value.nil? || (value.respond_to?(:empty?) && value.empty?)
       end
 
       def normalize_initial_outputs(initial_outputs)

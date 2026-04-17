@@ -18,7 +18,11 @@ module DAG
       def pause_requested?
         return false unless enabled?
 
-        @execution_store.load_run(@workflow_id)&.fetch(:paused, false)
+        if @execution_store.respond_to?(:paused?)
+          @execution_store.paused?(@workflow_id)
+        else
+          @execution_store.load_run(@workflow_id)&.fetch(:paused, false)
+        end
       end
 
       def set_workflow_status(status:, waiting_nodes: [])
@@ -110,6 +114,10 @@ module DAG
       private
 
       def next_output_version(node_path)
+        if @execution_store.respond_to?(:next_output_version)
+          return @execution_store.next_output_version(workflow_id: @workflow_id, node_path: node_path)
+        end
+
         stored_versions = Array(@execution_store.load_output(
           workflow_id: @workflow_id,
           node_path: node_path,
