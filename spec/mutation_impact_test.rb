@@ -159,6 +159,110 @@ class MutationImpactTest < Minitest::Test
     assert_match(/currently be :running/, error.message)
   end
 
+  def test_subtree_replacement_impact_preserves_upstream_outputs_when_mutated_workflow_reruns
+    source_calls = 0
+    process_calls = 0
+    normalize_calls = 0
+    summarize_calls = 0
+    report_calls = 0
+    store = build_memory_store
+
+    original = build_test_workflow(
+      source: {
+        type: :ruby,
+        resume_key: "source-v1",
+        callable: ->(_input) do
+          source_calls += 1
+          DAG::Success.new(value: "payload")
+        end
+      },
+      process: {
+        type: :ruby,
+        depends_on: [:source],
+        resume_key: "process-v1",
+        callable: ->(input) do
+          process_calls += 1
+          DAG::Success.new(value: input[:source].upcase)
+        end
+      },
+      report: {
+        type: :ruby,
+        depends_on: [:process],
+        resume_key: "report-v1",
+        callable: ->(input) do
+          report_calls += 1
+          DAG::Success.new(value: "report:#{input[:process]}:v#{report_calls}")
+        end
+      }
+    )
+
+    initial = DAG::Workflow::Runner.new(original,
+      parallel: false,
+      workflow_id: "wf-rerun-impact",
+      execution_store: store).call
+
+    replacement = build_test_workflow(
+      normalize: {
+        type: :ruby,
+        resume_key: "normalize-v1",
+        callable: ->(input) do
+          normalize_calls += 1
+          DAG::Success.new(value: "#{input[:source]}-normalized")
+        end
+      },
+      summarize: {
+        type: :ruby,
+        depends_on: [:normalize],
+        resume_key: "summarize-v1",
+        callable: ->(input) do
+          summarize_calls += 1
+          DAG::Success.new(value: input[:normalize].upcase)
+        end
+      }
+    )
+
+    mutated = DAG::Workflow.replace_subtree(
+      original,
+      root_node: :process,
+      replacement: replacement,
+      reconnect: [{from: :summarize, to: :report, metadata: {as: :process}}]
+    )
+
+    impact = DAG::Workflow.apply_subtree_replacement_impact(
+      workflow_id: "wf-rerun-impact",
+      definition: original,
+      root_node: :process,
+      execution_store: store,
+      cause: {source: :planner},
+      new_definition: mutated
+    )
+
+    rerun = DAG::Workflow::Runner.new(mutated,
+      parallel: false,
+      workflow_id: "wf-rerun-impact",
+      execution_store: store).call
+
+    assert initial.success?
+    assert rerun.success?
+    assert_equal [[:process]], impact[:obsolete_nodes]
+    assert_equal [[:report]], impact[:stale_nodes]
+    assert_equal 1, source_calls
+    assert_equal 1, process_calls
+    assert_equal 1, normalize_calls
+    assert_equal 1, summarize_calls
+    assert_equal 2, report_calls
+    assert_equal "payload", rerun.outputs[:source].value
+    assert_equal "PAYLOAD-NORMALIZED", rerun.outputs[:summarize].value
+    assert_equal "report:PAYLOAD-NORMALIZED:v2", rerun.outputs[:report].value
+
+    source_history = store.load_output(workflow_id: "wf-rerun-impact", node_path: [:source], version: :all)
+    report_history = store.load_output(workflow_id: "wf-rerun-impact", node_path: [:report], version: :all)
+
+    assert_equal [1], source_history.map { |entry| entry[:version] }
+    assert_equal [1, 2], report_history.map { |entry| entry[:version] }
+    assert_equal [true, false], report_history.map { |entry| entry[:superseded] }
+  end
+
   def test_subtree_replacement_impact_returns_empty_arrays_when_run_missing
     definition = build_test_workflow(
       process: {type: :ruby, callable: ->(_) { DAG::Success.new(value: :process) }}

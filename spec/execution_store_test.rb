@@ -179,6 +179,26 @@ class ExecutionStoreTest < Minitest::Test
     assert_equal [true], history.map { |entry| entry[:superseded] }
   end
 
+  def test_update_definition_replaces_fingerprint_and_unions_node_paths
+    store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    store.begin_run(
+      workflow_id: "wf-definition-update",
+      definition_fingerprint: "fp-1",
+      node_paths: [[:source], [:process], [:report]]
+    )
+
+    store.update_definition(
+      workflow_id: "wf-definition-update",
+      definition_fingerprint: "fp-2",
+      node_paths: [[:source], [:normalize], [:summarize], [:report]]
+    )
+
+    run = store.load_run("wf-definition-update")
+
+    assert_equal "fp-2", run[:definition_fingerprint]
+    assert_equal [[:normalize], [:process], [:report], [:source], [:summarize]], run[:node_paths].sort_by { |path| path.map(&:to_s) }
+  end
+
   def test_file_store_persists_runs_outputs_and_trace_across_instances
     Dir.mktmpdir("dag-file-store") do |dir|
       store = DAG::Workflow::ExecutionStore::FileStore.new(dir: dir)

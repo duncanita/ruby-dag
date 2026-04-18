@@ -24,7 +24,7 @@ module DAG
         }
       end
 
-      def apply_subtree_replacement_impact(workflow_id:, definition:, root_node:, execution_store:, cause: nil)
+      def apply_subtree_replacement_impact(workflow_id:, definition:, root_node:, execution_store:, cause: nil, new_definition: nil)
         impact = subtree_replacement_impact(
           workflow_id: workflow_id,
           definition: definition,
@@ -49,6 +49,8 @@ module DAG
             cause: normalized_cause
           )
         end
+
+        update_mutated_definition!(execution_store, workflow_id, new_definition)
 
         impact
       end
@@ -145,6 +147,18 @@ module DAG
         return unless run.dig(:nodes, root, :state) == :running
 
         raise ArgumentError, "replaced subtree root cannot currently be :running"
+      end
+
+      def update_mutated_definition!(execution_store, workflow_id, new_definition)
+        return if new_definition.nil?
+        raise ArgumentError, "new_definition must be a DAG::Workflow::Definition" unless new_definition.is_a?(Definition)
+        return unless execution_store.respond_to?(:update_definition)
+
+        execution_store.update_definition(
+          workflow_id: workflow_id,
+          definition_fingerprint: DefinitionFingerprint.for(new_definition),
+          node_paths: new_definition.graph.topological_sort.map { |name| mutation_node_path(name) }
+        )
       end
 
       def mutation_node_path(node_path)
