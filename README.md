@@ -377,6 +377,39 @@ Notes:
 - `max_cascade_depth:` limits how far descendants are traversed from the invalidated root
 - see `examples/invalidation_cascade.rb`, `examples/nested_invalidation_cascade.rb`, and `examples/yaml_nested_invalidation_cascade.rb` for runnable end-to-end examples exercised in the test suite
 
+### Dynamic graph mutation impact
+
+Subtree replacement is a between-invocations operation: first derive a new
+workflow definition with `replace_subtree`, then inspect/apply the persisted
+state impact for the branch being replaced.
+
+```ruby
+impact = DAG::Workflow.subtree_replacement_impact(
+  workflow_id: "demo-mutation",
+  definition: workflow,
+  root_node: :process,
+  execution_store: store
+)
+
+DAG::Workflow.apply_subtree_replacement_impact(
+  workflow_id: "demo-mutation",
+  definition: workflow,
+  root_node: :process,
+  execution_store: store,
+  cause: {source: :planner}
+)
+```
+
+Notes:
+- `subtree_replacement_impact` is read-only and returns `{obsolete_nodes:, stale_nodes:}`
+- the replaced root is included in `obsolete_nodes` only when it is currently `:completed`
+- completed downstream descendants reachable from the replaced root are included in `stale_nodes`
+- `apply_subtree_replacement_impact` marks obsolete roots with `obsolete_cause` and stale descendants with `stale_cause`
+- both helpers preserve audit history by superseding reusable outputs instead of deleting historical versions
+- the replaced root cannot currently be `:running`; mutation is only legal between runner invocations
+- `cause:` accepts any Hash merged into the stored transition cause, but `replaced_from` is reserved and always set from `root_node`
+- see `examples/immutable_subtree_replacement.rb` for definition mutation and `examples/subtree_replacement_impact.rb` for runnable persisted-state impact planning/application
+
 ### Waiting and not_before scheduling
 
 Scheduling is eligibility-based. The runner does not sleep: if a node has a

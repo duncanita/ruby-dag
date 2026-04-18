@@ -192,6 +192,27 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Stored versions: [1, 2]"
   end
 
+  def test_subtree_replacement_impact_example_executes_successfully
+    stdout, stderr, status = run_example("examples/subtree_replacement_impact.rb")
+
+    assert status.success?, <<~MSG
+      expected subtree_replacement_impact example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== Planned Impact ==="
+    assert_includes stdout, "Obsolete nodes: [[:process]]"
+    assert_includes stdout, "Stale nodes: [[:report]]"
+    assert_includes stdout, "=== Applied Impact ==="
+    assert_includes stdout, "Process state: obsolete"
+    assert_includes stdout, "Report state: stale"
+    assert_includes stdout, "Report stale cause code: subtree_replaced"
+    assert_includes stdout, "Running-root guard: replaced subtree root cannot currently be :running"
+  end
+
   def test_missing_requested_version_waiting_example_executes_successfully
     stdout, stderr, status = run_example("examples/missing_requested_version_waiting.rb")
 
