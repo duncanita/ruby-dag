@@ -109,6 +109,56 @@ class MutationImpactTest < Minitest::Test
     assert_match(/replaced_from/, error.message)
   end
 
+  def test_subtree_replacement_impact_rejects_running_root
+    definition = build_test_workflow(
+      process: {type: :ruby, callable: ->(_) { DAG::Success.new(value: :process) }},
+      report: {type: :ruby, depends_on: [:process], callable: ->(_) { DAG::Success.new(value: :report) }}
+    )
+    store = build_memory_store
+    store.begin_run(
+      workflow_id: "wf-running-root",
+      definition_fingerprint: "fp-1",
+      node_paths: [[:process], [:report]]
+    )
+    store.set_node_state(workflow_id: "wf-running-root", node_path: [:process], state: :running)
+
+    error = assert_raises(ArgumentError) do
+      DAG::Workflow.subtree_replacement_impact(
+        workflow_id: "wf-running-root",
+        definition: definition,
+        root_node: :process,
+        execution_store: store
+      )
+    end
+
+    assert_match(/currently be :running/, error.message)
+  end
+
+  def test_apply_subtree_replacement_impact_rejects_running_root
+    definition = build_test_workflow(
+      process: {type: :ruby, callable: ->(_) { DAG::Success.new(value: :process) }},
+      report: {type: :ruby, depends_on: [:process], callable: ->(_) { DAG::Success.new(value: :report) }}
+    )
+    store = build_memory_store
+    store.begin_run(
+      workflow_id: "wf-running-root-apply",
+      definition_fingerprint: "fp-1",
+      node_paths: [[:process], [:report]]
+    )
+    store.set_node_state(workflow_id: "wf-running-root-apply", node_path: [:process], state: :running)
+
+    error = assert_raises(ArgumentError) do
+      DAG::Workflow.apply_subtree_replacement_impact(
+        workflow_id: "wf-running-root-apply",
+        definition: definition,
+        root_node: :process,
+        execution_store: store
+      )
+    end
+
+    assert_match(/currently be :running/, error.message)
+  end
+
   def test_subtree_replacement_impact_returns_empty_arrays_when_run_missing
     definition = build_test_workflow(
       process: {type: :ruby, callable: ->(_) { DAG::Success.new(value: :process) }}

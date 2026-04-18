@@ -10,6 +10,8 @@ module DAG
         return {obsolete_nodes: [], stale_nodes: []} unless run
 
         root = mutation_node_path(root_node)
+        raise_if_running_mutation_root!(run, root)
+
         obsolete_nodes = node_completed?(run, root) ? [root] : []
         stale_nodes = definition.graph.descendants(root.last).sort.each_with_object([]) do |name, nodes|
           node_path = mutation_node_path(name)
@@ -137,6 +139,12 @@ module DAG
 
       def node_completed?(run, node_path)
         run.dig(:nodes, node_path, :state) == :completed
+      end
+
+      def raise_if_running_mutation_root!(run, root)
+        return unless run.dig(:nodes, root, :state) == :running
+
+        raise ArgumentError, "replaced subtree root cannot currently be :running"
       end
 
       def mutation_node_path(node_path)
