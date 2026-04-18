@@ -396,7 +396,8 @@ DAG::Workflow.apply_subtree_replacement_impact(
   definition: workflow,
   root_node: :process,
   execution_store: store,
-  cause: {source: :planner}
+  cause: {source: :planner},
+  new_definition: mutated_workflow
 )
 ```
 
@@ -405,6 +406,7 @@ Notes:
 - the replaced root is included in `obsolete_nodes` only when it is currently `:completed`
 - completed downstream descendants reachable from the replaced root are included in `stale_nodes`
 - `apply_subtree_replacement_impact` marks obsolete roots with `obsolete_cause` and stale descendants with `stale_cause`
+- pass `new_definition:` when you want the persisted run fingerprint and known node paths updated for the next runner invocation against the mutated workflow
 - both helpers preserve audit history by superseding reusable outputs instead of deleting historical versions
 - the replaced root cannot currently be `:running`; mutation is only legal between runner invocations
 - `cause:` accepts any Hash merged into the stored transition cause, but `replaced_from` is reserved and always set from `root_node`

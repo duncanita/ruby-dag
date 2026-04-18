@@ -134,6 +134,14 @@ module DAG
           nil
         end
 
+        def update_definition(workflow_id:, definition_fingerprint:, node_paths:)
+          run = ensure_run(workflow_id)
+          run[:definition_fingerprint] = definition_fingerprint
+          run[:node_paths] |= normalized_node_paths(node_paths)
+          write_run(run)
+          nil
+        end
+
         def set_pause_flag(workflow_id:, paused:)
           run = ensure_run(workflow_id)
           run[:paused] = paused
@@ -320,6 +328,13 @@ module DAG
           run = ensure_run(workflow_id)
           run[:workflow_status] = status
           run[:waiting_nodes] = normalized_node_paths(waiting_nodes)
+          nil
+        end
+
+        def update_definition(workflow_id:, definition_fingerprint:, node_paths:)
+          run = ensure_run(workflow_id)
+          run[:definition_fingerprint] = definition_fingerprint
+          run[:node_paths] |= normalized_node_paths(node_paths)
           nil
         end
 

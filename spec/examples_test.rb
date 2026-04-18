@@ -210,6 +210,8 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Process state: obsolete"
     assert_includes stdout, "Report state: stale"
     assert_includes stdout, "Report stale cause code: subtree_replaced"
+    assert_includes stdout, "Stored fingerprint updated: true"
+    assert_includes stdout, "Known node paths include summarize: true"
     assert_includes stdout, "Running-root guard: replaced subtree root cannot currently be :running"
   end
 
