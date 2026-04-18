@@ -215,6 +215,30 @@ class ExamplesTest < Minitest::Test
     assert_includes stdout, "Running-root guard: replaced subtree root cannot currently be :running"
   end
 
+  def test_subtree_replacement_file_store_example_executes_successfully
+    stdout, stderr, status = run_example("examples/subtree_replacement_file_store.rb")
+
+    assert status.success?, <<~MSG
+      expected subtree_replacement_file_store example to succeed
+      stdout:
+      #{stdout}
+      stderr:
+      #{stderr}
+    MSG
+
+    assert_includes stdout, "=== First Run (file store) ==="
+    assert_includes stdout, "Initial report: report:PAYLOAD:v1"
+    assert_includes stdout, "=== Mutation Impact Applied ==="
+    assert_includes stdout, "Obsolete nodes: [[:process]]"
+    assert_includes stdout, "Stale nodes: [[:report]]"
+    assert_includes stdout, "=== Second Run (mutated definition, fresh store instance) ==="
+    assert_includes stdout, "Source reused calls: 1"
+    assert_includes stdout, "Normalize calls: 1"
+    assert_includes stdout, "Summarize calls: 1"
+    assert_includes stdout, "Report calls: 2"
+    assert_includes stdout, "Final report: report:PAYLOAD-NORMALIZED:v2"
+  end
+
   def test_missing_requested_version_waiting_example_executes_successfully
     stdout, stderr, status = run_example("examples/missing_requested_version_waiting.rb")
 
