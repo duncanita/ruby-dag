@@ -263,6 +263,31 @@ class MutationImpactTest < Minitest::Test
     assert_equal [true, false], report_history.map { |entry| entry[:superseded] }
   end
 
+  def test_apply_subtree_replacement_impact_rejects_non_definition_new_definition
+    definition = build_test_workflow(
+      process: {type: :ruby, callable: ->(_) { DAG::Success.new(value: :process) }}
+    )
+    store = build_memory_store
+    store.begin_run(
+      workflow_id: "wf-invalid-new-definition",
+      definition_fingerprint: "fp-1",
+      node_paths: [[:process]]
+    )
+    store.set_node_state(workflow_id: "wf-invalid-new-definition", node_path: [:process], state: :completed)
+
+    error = assert_raises(ArgumentError) do
+      DAG::Workflow.apply_subtree_replacement_impact(
+        workflow_id: "wf-invalid-new-definition",
+        definition: definition,
+        root_node: :process,
+        execution_store: store,
+        new_definition: Object.new
+      )
+    end
+
+    assert_match(/new_definition must be a DAG::Workflow::Definition/, error.message)
+  end
+
   def test_subtree_replacement_impact_returns_empty_arrays_when_run_missing
     definition = build_test_workflow(
       process: {type: :ruby, callable: ->(_) { DAG::Success.new(value: :process) }}
