@@ -995,14 +995,20 @@ runner = Runner.new(definition,
 - Duplicate input aliases are validation errors.
 - External resolution failure is surfaced as explicit workflow error, not silent skip.
 
-**Status:** `partial` | **Priority:** low
+**Status:** `implemented` | **Priority:** low
 
-Current repo reality: cross-workflow dependency descriptors, resolver-driven
-waiting/failure behavior, loader/dumper round-trip, and runnable examples/tests
-exist today. It remains `partial` because the concrete resolver contract that
-landed in code is simpler and more Ruby-native than the original structured
-`CrossWorkflowResolution` sketch in this document.
+All acceptance criteria are satisfied:
+- `spec/dependency_input_resolver_test.rb` exercises local+cross-workflow coexistence,
+  positional/keyword resolver auto-detection, `nil` → `WaitingForDependencyError`,
+  resolver exception → `ResolverError`, and missing resolver → `MissingCrossWorkflowResolverError`
+- `spec/loader_test.rb:test_from_hash_treats_cross_workflow_dependency` verifies loading
+- `spec/dumper_test.rb:test_round_trips_cross_workflow_dependency` verifies round-trip
+- `examples/missing_requested_version_waiting.rb` is exercised in `spec/examples_test.rb`
+- duplicate alias validation via `Validator.duplicate_effective_input_key_errors`
 
+The resolver contract is intentionally Ruby-native (positional or keyword, auto-detected
+via callable parameters inspection — no `CrossWorkflowResolution` wrapper). This is the
+blessed simpler contract per the Phase B roadmap guidance.
 ---
 
 ## Feature 11: Pause and Resume
@@ -1134,7 +1140,7 @@ one isolated milestone PR.
 | 7 | Invalidation cascade | medium | `implemented` | small |
 | 8 | Dynamic graph mutation | medium | `partial` | large |
 | 9 | Event emission from steps | low | `implemented` | small |
-| 10 | Cross-workflow dependencies | low | `partial` | medium |
+| 10 | Cross-workflow dependencies | low | `implemented` | medium |
 | 11 | Pause and resume | medium | `implemented` | medium |
 | 12 | Step middleware | medium | `implemented` | small |
 
@@ -1185,10 +1191,7 @@ From here, the goal is to close the partials in a deliberate order.
    - enforce and document any remaining nesting/depth limits
    - re-check deadline inheritance and edge-case validation coverage
    - make the supported contract explicit instead of implied by tests
-2. Feature 10: cross-workflow dependencies
-   - either bless the simpler resolver contract that shipped
-   - or add a thin normalization layer if the original structured contract is still preferred
-4. Feature 8: dynamic graph mutation
+2. Feature 8: dynamic graph mutation
    - document that the implemented slice is subtree replacement between invocations
    - decide whether the roadmap should stop there for v1 or grow beyond it in a later phase
 
