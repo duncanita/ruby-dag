@@ -8,6 +8,68 @@ This document is the implementation-oriented roadmap for future ruby-dag feature
 It is intentionally stricter than a product wishlist. Every section below is
 written to remove ambiguity for the engineer who eventually implements it.
 
+## Reality check: revised status as of 2026-04-19
+
+This roadmap was originally written as a clean forward plan before a large part
+of the runtime work had landed. Since then, implementation progressed through a
+mix of refactor-first slices, test-driven feature slices, and example-driven
+hardening. As a result, the repository no longer matches the original
+"not-started / partial / implemented" labels in this file.
+
+This revised version keeps the original architectural intent, but updates the
+document to answer three practical questions clearly:
+
+1. where the codebase actually is now
+2. why implementation did not follow the roadmap in a neat linear order
+3. what remains to finish the roadmap deliberately instead of wandering feature-by-feature
+
+### Why implementation did not follow the roadmap exactly
+
+The short version: the roadmap was directionally right, but real development
+followed the seams that made the code safer to evolve.
+
+The main reasons were:
+
+- refactor-first pressure in `Runner`: several roadmap items wanted to add more
+  behavior to the runtime hotspot, so work first extracted collaborators such as
+  scheduling policy, execution persistence, layer admission, trace recording,
+  and task completion handling
+- vertical slices beat abstract milestones: instead of "finish Feature N in one
+  shot", many changes landed as narrow end-to-end slices with tests, examples,
+  and docs together
+- later roadmap items unlocked earlier partials: versioned outputs,
+  invalidation, event emission, cross-workflow waiting, and subtree mutation
+  were often easier to implement once the runtime seams were in place, even if
+  the original roadmap listed them later
+- durable execution semantics were discovered through examples: file-store,
+  invalidation, subtree replacement, and nested sub-workflow examples exposed
+  real edge cases that reshaped the order of work
+
+So the roadmap was not ignored; it was executed opportunistically around the
+real code seams. This matters because the remaining work is now less about
+starting untouched features and more about closing the gaps in partially-landed
+areas.
+
+### Where we are now
+
+- the runtime foundations are in place and actively supporting real features
+- retry, middleware, context injection, pause/resume, event emission,
+  versioned outputs, invalidation, and substantial cross-workflow dependency
+  support all exist in code
+- checkpointing/resume, sub-workflow composition, scheduling, dynamic mutation,
+  and cross-workflow dependencies still have "finish the contract" work left
+- the most important remaining task is no longer inventing new primitives; it
+  is tightening documented semantics so the implementation and roadmap line up
+
+### How to read statuses in this revised document
+
+- `implemented`: the feature exists in the repo in a form that matches the
+  roadmap closely enough to be considered landed
+- `partial`: the feature is real and usable, but either the contract differs
+  from the original roadmap or important boundary cases / docs / validation are
+  still incomplete
+- `not-started`: still genuinely absent
+
 ## Principle: what belongs in the gem vs. what stays out of scope
 
 ruby-dag is a generic DAG execution engine. Features belong here if they are
@@ -28,18 +90,21 @@ application orchestration.
 
 ---
 
-## Current capabilities (v0.4.0)
+## Current capabilities (revised as of 2026-04-19)
 
-- Graph: nodes, edges, topological sort, layers, shortest/longest/critical path, subgraph, DOT export, immutable builders, `each_successor`
+- Graph: nodes, edges, topological sort, layers, shortest/longest/critical path, subgraph, DOT export, immutable builders, `each_successor`, immutable subtree replacement helpers
 - Workflow: synchronous `Runner#call` with 3 parallel strategies (`sequential`, `threads`, `processes`)
-- Steps: `exec`, `ruby_script`, `file_read`, `file_write`, `ruby` (Proc), custom registration
+- Steps: `exec`, `ruby_script`, `file_read`, `file_write`, `ruby` (Proc), `sub_workflow`, custom registration
 - Conditional execution: callable `run_if` for programmatic workflows and declarative `run_if` DSL for YAML/programmatic definitions
+- Middleware/runtime seams: step middleware, retry middleware, event middleware, structured logging example middleware, runner collaborators for scheduling/admission/persistence/trace completion
+- Durable execution: `ExecutionStore`, in-memory store, file-backed store, durable fingerprints, reusable outputs, `clear_on_completion:`, pause flags, waiting state, stale/obsolete markers
+- Scheduling/history: `not_before`, `not_after`, `ttl`, cron metadata round-trip, versioned outputs, invalidation helpers, subtree replacement impact helpers
+- Cross-workflow and nesting: namespaced sub-workflow persistence, versioned dependency inputs, cross-workflow resolver support, nested event emission, nested invalidation
 - Timeouts: per-step (`exec`, `ruby_script`) plus workflow wall-clock timeout checked between layers
-- Result monad: `Success` / `Failure` for step execution
-- Trace: `TraceEntry` per step with `name`, `layer`, timing, `status`, `input_keys`
-- Callbacks: `on_step_start`, `on_step_finish`
-- YAML: Loader/Dumper with round-trip fidelity, edge metadata, declarative `run_if`
-- Validation: graph validation plus workflow-level `run_if` reference validation
+- Result model: workflow-level `RunResult` plus step-level `Success` / `Failure`
+- Trace/callbacks: flat `TraceEntry` history, attempt tracing, `on_step_start`, `on_step_finish`
+- YAML: Loader/Dumper with round-trip fidelity, edge metadata, declarative `run_if`, version metadata, and sub-workflow `definition_path:` support
+- Validation: graph validation, workflow-level `run_if` reference validation, retry/event/dependency/mutation validation, durable execution guardrails
 
 ---
 
@@ -55,7 +120,7 @@ The roadmap must respect the actual shape of the codebase today:
 - Current callbacks are observational only. They are not a durable state model.
 - `TraceEntry` is currently a flat, append-only per-step attempt record. It is not durable state.
 - Loader/Dumper are intentionally strict. YAML only supports YAML-safe step types and YAML-safe config shapes.
-- Graph mutation today is limited to single-node replacement through `Graph#replace_node` / `Definition#replace_step`.
+- Graph mutation today includes immutable subtree replacement plus persisted impact helpers, but it is still intentionally between-invocations and narrower than fully general live graph surgery.
 
 Any roadmap item that conflicts with these constraints must either:
 
@@ -328,6 +393,12 @@ milestone, not Feature 0.
 
 **Status:** `partial` | **Complexity:** large
 
+Current repo reality: most of Milestone 0 is landed in practice (`RunResult`,
+`ExecutionStore`, fingerprinting, `Clock`, middleware handoff, runner
+collaborators). It remains `partial` only because the milestone was delivered
+incrementally and some later feature contracts ended up refining the foundation
+instead of waiting for a single formal "Milestone 0 complete" moment.
+
 ---
 
 ## Feature 1: Step Retry with Backoff
@@ -443,7 +514,12 @@ Minimum `FileStore` guarantees in v1:
 - Expired reusable output is ignored.
 - Two runs with the same `workflow_id` but different graph structure do not silently share checkpoints.
 
-**Status:** `partial` | **Priority:** high
+**Status:** `implemented` | **Priority:** high
+
+Current repo reality: checkpointing/resume is present with `ExecutionStore`,
+`FileStore`, reusable output loading, durable fingerprints, TTL-aware reuse, and
+`clear_on_completion:`. Future work here is mostly documentation and polish, not
+missing core behavior.
 
 ---
 
@@ -519,6 +595,11 @@ nodes:
 - Inline `definition:` is rejected by YAML dumper.
 
 **Status:** `partial` | **Priority:** high
+
+Current repo reality: sub-workflows are real and heavily exercised, including
+durable namespaced node paths and `definition_path:` support. This remains
+`partial` because it still needs a final contract-closing pass around depth /
+boundary hardening and clearer documentation of the supported semantics.
 
 ---
 
@@ -608,6 +689,11 @@ runner = Runner.new(definition, clock: my_clock)
 
 **Status:** `partial` | **Priority:** medium
 
+Current repo reality: `not_before`, `not_after`, `ttl`, waiting state, and cron
+metadata round-trip all exist. This remains `partial` because scheduling is
+implemented as runner-time eligibility plus stored metadata, but still needs a
+more explicit closeout pass in the roadmap/docs.
+
 ---
 
 ## Feature 6: Versioned Step Outputs
@@ -652,7 +738,7 @@ Step.new(
   resolution and reusable-output lookup. It does not create a separate waiting
   state by itself.
 - For local dependencies, requesting an explicit integer version that does not
-  exist fails the workflow with `code: :version_not_found`.
+  exist fails the workflow with `code: :missing_dependency_version`.
 - For local dependencies, `version: :all` returns `[]` when no historical
   versions exist.
 - If `as:` is omitted:
@@ -664,11 +750,16 @@ Step.new(
 
 - Loader/Dumper round-trip `version:` metadata.
 - `:all` produces ordered arrays of raw values, not `DAG::Result` objects.
-- Missing explicit local integer versions fail with `:version_not_found`.
+- Missing explicit local integer versions fail with `:missing_dependency_version`.
 - `:all` over an empty local history returns `[]`.
 - Resume always reuses the latest reusable successful version only.
 
-**Status:** `not-started` | **Priority:** medium
+**Status:** `implemented` | **Priority:** medium
+
+Current repo reality: versioned outputs, explicit version selection,
+`version: :all`, `as:`, durable history, and runnable examples/tests are all in
+the repo. The implementation uses the refined runtime contract discovered during
+development rather than the exact placeholder wording of the original roadmap.
 
 ---
 
@@ -701,7 +792,12 @@ DAG::Workflow.stale_nodes(workflow_id: "pipeline-001", execution_store: store)
 - Superseded outputs are never reused for resume.
 - Depth limit stops propagation deterministically.
 
-**Status:** `not-started` | **Priority:** medium
+**Status:** `implemented` | **Priority:** medium
+
+Current repo reality: invalidation is implemented, including stale-node
+inspection, cascade depth limiting, nested node paths, ancestor stale
+propagation for sub-workflows, and reusable-output supersession with history
+preserved.
 
 ---
 
@@ -764,7 +860,14 @@ graph.with_subtree_replaced(
 - Reconnect metadata rules are validated deterministically before state mutation.
 - Old subtree state is auditable but not reusable.
 
-**Status:** `not-started` | **Priority:** medium
+**Status:** `partial` | **Priority:** medium
+
+Current repo reality: immutable subtree replacement, impact planning,
+state-application helpers, obsolete/stale transitions, running-root guards, and
+file-store rerun flows are implemented. It remains `partial` because the current
+mutation story is intentionally narrower than the full feature name suggests:
+today it is subtree replacement between invocations, not arbitrary dynamic
+graph surgery.
 
 ---
 
@@ -823,7 +926,11 @@ end
 - `publish(event)` is called once per emitted event.
 - Event emission never changes the workflow result branch.
 
-**Status:** `not-started` | **Priority:** low
+**Status:** `implemented` | **Priority:** low
+
+Current repo reality: `Event`, `EventBus`, `EventMiddleware`, payload/metadata
+callables, retry-aware emission semantics, nested sub-workflow propagation, and
+runnable examples/tests are all implemented.
 
 ---
 
@@ -848,16 +955,9 @@ nodes:
 ```
 
 ```ruby
-CrossWorkflowResolution = Data.define(:status, :value, :error)
-# status: :ready | :waiting | :error
-
 resolver = ->(workflow_id, node_name, version) {
-  value = store.load_output(workflow_id: workflow_id, node_path: [node_name], version: version)
-  if value
-    CrossWorkflowResolution.new(status: :ready, value: value, error: nil)
-  else
-    CrossWorkflowResolution.new(status: :waiting, value: nil, error: nil)
-  end
+  entry = store.load_output(workflow_id: workflow_id, node_path: [node_name], version: version)
+  entry ? entry[:result] : nil
 }
 
 runner = Runner.new(definition,
@@ -871,26 +971,34 @@ runner = Runner.new(definition,
 
 - Cross-workflow dependency descriptors are not stored as edges in the local graph.
 - Resolution occurs before the step attempt is built.
-- The resolver returns one of:
-  - `:ready` with `value`
-  - `:waiting`
-  - `:error` with an explicit error payload
-- Resolver output determines whether missing external data is waitable or terminal.
-- If the resolver returns `:waiting`, the node transitions to `:waiting`.
-- If the resolver returns `:error`, the workflow fails explicitly.
+- The resolver is called with `workflow_id`, `node_name`, and `version`.
+- The resolver may be positional or keyword-style.
+- The resolver may return:
+  - a raw value
+  - a `DAG::Success`
+  - a Hash shaped like a stored output entry (`{result: ...}`)
+  - `nil` to signal "not yet available"
+- `nil` means the node becomes `:waiting`.
+- Resolver exceptions fail the workflow explicitly.
 - Resolved values enter the input hash under `as:` or the default alias.
 - No cross-workflow cycle detection is provided by the gem.
-- The gem does not infer waitability for missing external data on its own.
+- The gem does not infer waitability for missing external data beyond `nil` from the resolver.
 
 ### Acceptance criteria
 
 - Local and cross-workflow dependencies can coexist on the same node.
-- Resolver `:waiting` yields `RunResult(status: :waiting)`.
-- Resolver `:error` yields explicit workflow failure.
+- Resolver `nil` yields `RunResult(status: :waiting)` when no runnable work remains.
+- Resolver exceptions yield explicit workflow failure.
 - Duplicate input aliases are validation errors.
 - External resolution failure is surfaced as explicit workflow error, not silent skip.
 
-**Status:** `not-started` | **Priority:** low
+**Status:** `partial` | **Priority:** low
+
+Current repo reality: cross-workflow dependency descriptors, resolver-driven
+waiting/failure behavior, loader/dumper round-trip, and runnable examples/tests
+exist today. It remains `partial` because the concrete resolver contract that
+landed in code is simpler and more Ruby-native than the original structured
+`CrossWorkflowResolution` sketch in this document.
 
 ---
 
@@ -998,28 +1106,32 @@ runner = Runner.new(definition,
 
 ## Milestone and feature summary
 
-The feature table below assumes Milestone 0 has landed first.
+The tables below reflect the current repo state, not the original untouched plan.
+Milestone 0 remains marked `partial` only as a bookkeeping reminder that some
+foundation contracts were finished through later feature work instead of through
+one isolated milestone PR.
 
 ### Milestone 0 summary
 
 | Milestone | Scope | Status | Complexity |
 |-----------|-------|--------|------------|
 | 0 | `RunResult`, `ExecutionStore`, fingerprinting, `Clock`, middleware handoff | `partial` | large |
+| 0a | runtime reality | most foundation pieces are landed; remaining work is contract/documentation closeout | - |
 
 ### Feature summary
 
 | # | Feature | Priority | Status | Complexity |
 |---|---------|----------|--------|------------|
 | 1 | Step retry with backoff | high | `implemented` | small |
-| 2 | Checkpointing and resume | high | `partial` | medium |
+| 2 | Checkpointing and resume | high | `implemented` | medium |
 | 3 | Sub-workflow composition | high | `partial` | medium |
 | 4 | Runner context injection | high | `implemented` | small |
 | 5 | Node scheduling constraints | medium | `partial` | medium |
-| 6 | Versioned step outputs | medium | `not-started` | medium |
-| 7 | Invalidation cascade | medium | `not-started` | small |
-| 8 | Dynamic graph mutation | medium | `not-started` | large |
-| 9 | Event emission from steps | low | `not-started` | small |
-| 10 | Cross-workflow dependencies | low | `not-started` | medium |
+| 6 | Versioned step outputs | medium | `implemented` | medium |
+| 7 | Invalidation cascade | medium | `implemented` | small |
+| 8 | Dynamic graph mutation | medium | `partial` | large |
+| 9 | Event emission from steps | low | `implemented` | small |
+| 10 | Cross-workflow dependencies | low | `partial` | medium |
 | 11 | Pause and resume | medium | `implemented` | medium |
 | 12 | Step middleware | medium | `implemented` | small |
 
@@ -1050,39 +1162,52 @@ Milestone 0 (RunResult + ExecutionStore + fingerprinting + Clock + middleware ha
     +--> Feature 8 (Dynamic graph mutation)
 ```
 
-## Suggested implementation order
+## Revised completion order from the current repo state
 
-### Milestone 0: runtime foundations
+The original implementation order was useful as a bootstrap sequence, but it is
+no longer the right way to think about the project. Too much has already landed.
+From here, the goal is to close the partials in a deliberate order.
 
-1. workflow `RunResult`
-2. `ExecutionStore`
-3. step fingerprinting rules
-4. `Clock` and time injection
-5. strategy / middleware handoff
+### Phase A: reconcile contracts with reality
 
-### Batch 1: execution surface
+1. keep this roadmap aligned with the codebase
+2. make README, examples, and feature-status claims agree
+3. explicitly document where the shipped contract differs from the original sketch
+   - especially cross-workflow resolver semantics
+   - and the narrower current scope of dynamic mutation
 
-1. step middleware
-2. context injection
+### Phase B: close the highest-value partials
 
-### Batch 2: reliability and composition
+1. Feature 3: sub-workflow composition
+   - enforce and document any remaining nesting/depth limits
+   - re-check deadline inheritance and edge-case validation coverage
+   - make the supported contract explicit instead of implied by tests
+2. Feature 5: scheduling constraints
+   - decide whether this is effectively done after docs cleanup
+   - or land the small remaining gaps and promote it to `implemented`
+3. Feature 10: cross-workflow dependencies
+   - either bless the simpler resolver contract that shipped
+   - or add a thin normalization layer if the original structured contract is still preferred
+4. Feature 8: dynamic graph mutation
+   - document that the implemented slice is subtree replacement between invocations
+   - decide whether the roadmap should stop there for v1 or grow beyond it in a later phase
 
-1. retry
-2. checkpointing / resume
-3. sub-workflow composition
-4. pause / resume
+### Phase C: milestone closeout
 
-### Batch 3: time and history
+1. revisit Milestone 0 and mark it complete only after the remaining partial
+   contracts are documented and intentionally accepted
+2. remove stale "not-started" assumptions from companion docs and planning notes
+3. treat new feature work as optional only after the current contract is coherent
 
-1. scheduling constraints
-2. versioned outputs
-3. invalidation cascade
+### Practical next-step recommendation
 
-### Batch 4: advanced orchestration
+If choosing just one next engineering slice, do this:
 
-1. dynamic graph mutation
-2. event emission
-3. cross-workflow dependencies
+1. finish the documentation/status reconciliation
+2. then take a narrow sub-workflow hardening PR
+
+That order keeps the roadmap trustworthy and uses the next code change to close a
+real remaining gap instead of starting yet another side branch of functionality.
 
 ## Explicit non-goals for this roadmap
 
