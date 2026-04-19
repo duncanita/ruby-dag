@@ -687,12 +687,15 @@ runner = Runner.new(definition, clock: my_clock)
 - `cron` metadata round-trips through Loader/Dumper for YAML-safe step types.
 - Scheduling tests can run against a fake clock without real sleeping.
 
-**Status:** `partial` | **Priority:** medium
+**Status:** `implemented` | **Priority:** medium
 
-Current repo reality: `not_before`, `not_after`, `ttl`, waiting state, and cron
-metadata round-trip all exist. This remains `partial` because scheduling is
-implemented as runner-time eligibility plus stored metadata, but still needs a
-more explicit closeout pass in the roadmap/docs.
+All acceptance criteria are satisfied and exercised in the test suite:
+`not_before` via `spec/scheduling_test.rb`, `not_after` and deadline-exceeded
+failure via the same, `ttl` expiry via the same, cron round-trip via
+`spec/dumper_test.rb:test_round_trip_schedule_metadata_with_yaml_safe_values`,
+and scheduling examples via `spec/examples_test.rb`. Fake-clock testing is
+verified without real sleeping in `spec/schedule_policy_test.rb` and
+`spec/scheduling_test.rb` via the `MutableClock` test helper.
 
 ---
 
@@ -1126,7 +1129,7 @@ one isolated milestone PR.
 | 2 | Checkpointing and resume | high | `implemented` | medium |
 | 3 | Sub-workflow composition | high | `partial` | medium |
 | 4 | Runner context injection | high | `implemented` | small |
-| 5 | Node scheduling constraints | medium | `partial` | medium |
+| 5 | Node scheduling constraints | medium | `implemented` | medium |
 | 6 | Versioned step outputs | medium | `implemented` | medium |
 | 7 | Invalidation cascade | medium | `implemented` | small |
 | 8 | Dynamic graph mutation | medium | `partial` | large |
@@ -1182,10 +1185,7 @@ From here, the goal is to close the partials in a deliberate order.
    - enforce and document any remaining nesting/depth limits
    - re-check deadline inheritance and edge-case validation coverage
    - make the supported contract explicit instead of implied by tests
-2. Feature 5: scheduling constraints
-   - decide whether this is effectively done after docs cleanup
-   - or land the small remaining gaps and promote it to `implemented`
-3. Feature 10: cross-workflow dependencies
+2. Feature 10: cross-workflow dependencies
    - either bless the simpler resolver contract that shipped
    - or add a thin normalization layer if the original structured contract is still preferred
 4. Feature 8: dynamic graph mutation
