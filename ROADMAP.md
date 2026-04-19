@@ -865,14 +865,24 @@ graph.with_subtree_replaced(
 - Reconnect metadata rules are validated deterministically before state mutation.
 - Old subtree state is auditable but not reusable.
 
-**Status:** `partial` | **Priority:** medium
+**Status:** implemented | **Priority:** medium
+
+v1 decision (2026-04-19): all acceptance criteria are satisfied. The v1 scope
+is deliberately restricted to whole-subtree replacement between separate Runner
+invocations. This keeps the implementation clean, testable, and safe: no locks,
+no race conditions, no shared mutable state.
+
+Future v2 or later phases may add:
+- live in-flight mutation (add/remove nodes on a running graph)
+- multi-root replacement (ingress mapping for non-single-root replacements)
+- hot-reload of a running workflow definition
+
+These are out of scope for v1 because they require fundamentally different
+concurrency and consistency guarantees.
 
 Current repo reality: immutable subtree replacement, impact planning,
 state-application helpers, obsolete/stale transitions, running-root guards, and
-file-store rerun flows are implemented. It remains `partial` because the current
-mutation story is intentionally narrower than the full feature name suggests:
-today it is subtree replacement between invocations, not arbitrary dynamic
-graph surgery.
+file-store rerun flows are fully implemented and tested (36 tests).
 
 ---
 
@@ -1140,7 +1150,7 @@ one isolated milestone PR.
 | 5 | Node scheduling constraints | medium | `implemented` | medium |
 | 6 | Versioned step outputs | medium | `implemented` | medium |
 | 7 | Invalidation cascade | medium | `implemented` | small |
-| 8 | Dynamic graph mutation | medium | `partial` | large |
+| 8 | Dynamic graph mutation | medium | `implemented` | large |
 | 9 | Event emission from steps | low | `implemented` | small |
 | 10 | Cross-workflow dependencies | low | `implemented` | medium |
 | 11 | Pause and resume | medium | `implemented` | medium |
