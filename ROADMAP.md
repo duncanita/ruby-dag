@@ -54,12 +54,10 @@ areas.
 
 - the runtime foundations are in place and actively supporting real features
 - retry, middleware, context injection, pause/resume, event emission,
-  versioned outputs, invalidation, and substantial cross-workflow dependency
-  support all exist in code
-- checkpointing/resume, sub-workflow composition, scheduling, dynamic mutation,
-  and cross-workflow dependencies still have "finish the contract" work left
-- the most important remaining task is no longer inventing new primitives; it
-  is tightening documented semantics so the implementation and roadmap line up
+  versioned outputs, invalidation, and cross-workflow dependency support all exist in code
+- all roadmap features (1–12) and Milestone 0 are marked `implemented`
+- the most important remaining task is tightening documented semantics and
+  companion docs so the implementation and roadmap line up
 
 ### How to read statuses in this revised document
 
@@ -391,13 +389,24 @@ milestone, not Feature 0.
 - Time-based tests can run against a fake clock without real sleeping.
 - Trace and node-path invariants hold across retries and nested sub-workflows.
 
-**Status:** `partial` | **Complexity:** large
+**Status:** `implemented` | **Complexity:** large
 
-Current repo reality: most of Milestone 0 is landed in practice (`RunResult`,
-`ExecutionStore`, fingerprinting, `Clock`, middleware handoff, runner
-collaborators). It remains `partial` only because the milestone was delivered
-incrementally and some later feature contracts ended up refining the foundation
-instead of waiting for a single formal "Milestone 0 complete" moment.
+All components of Milestone 0 are present in the codebase and are exercised by
+subsequent feature tests. `RunResult` provides a workflow-level status/value
+model with strict invariants; `ExecutionStore` unifies durable state behind
+one protocol with both in-memory and file-backed implementations;
+fingerprinting validates step definitions at `Runner` construction and fails fast
+when durable features are enabled without a fingerprint strategy; `Clock` is
+injected throughout the runtime and is stubbed by tests; middleware handoff is
+implemented as a composed chain built by the runner and handed to the strategy as
+a prepared callable. The runner owns dependency resolution, middleware
+composition, `StepExecution` construction, and lifecycle transitions; the
+strategy owns only execution of prepared attempts and timing measurement.
+
+This milestone was delivered incrementally — `ExecutionStore` landed via Feature 2,
+fingerprinting via Features 2 and 8, `Clock` via Feature 5, middleware via Feature 12,
+and runner collaborator separation via Features 1, 3, 11, and 12 — but the
+contract specified in this document is fully satisfied.
 
 ---
 
@@ -1125,19 +1134,17 @@ runner = Runner.new(definition,
 
 ---
 
-## Milestone and feature summary
+### Milestone and feature summary
 
 The tables below reflect the current repo state, not the original untouched plan.
-Milestone 0 remains marked `partial` only as a bookkeeping reminder that some
-foundation contracts were finished through later feature work instead of through
-one isolated milestone PR.
+All roadmap milestones are now closed out — Milestone 0 is marked `implemented`
+after incremental delivery through subsequent feature work.
 
 ### Milestone 0 summary
 
 | Milestone | Scope | Status | Complexity |
 |-----------|-------|--------|------------|
-| 0 | `RunResult`, `ExecutionStore`, fingerprinting, `Clock`, middleware handoff | `partial` | large |
-| 0a | runtime reality | most foundation pieces are landed; remaining work is contract/documentation closeout | - |
+| 0 | `RunResult`, `ExecutionStore`, fingerprinting, `Clock`, middleware handoff | `implemented` | large |
 
 ### Feature summary
 
@@ -1187,7 +1194,8 @@ Milestone 0 (RunResult + ExecutionStore + fingerprinting + Clock + middleware ha
 
 The original implementation order was useful as a bootstrap sequence, but it is
 no longer the right way to think about the project. Too much has already landed.
-From here, the goal is to close the partials in a deliberate order.
+With all milestones and features now marked `implemented`, remaining work is
+maintenance, hardening, and companion documentation.
 
 ### Phase A: reconcile contracts with reality
 
@@ -1197,25 +1205,23 @@ From here, the goal is to close the partials in a deliberate order.
    - especially cross-workflow resolver semantics
    - and the narrower current scope of dynamic mutation
 
-### Phase B: close the highest-value partials
+### Phase B: future hardening
 
-1. Feature 8: dynamic graph mutation
-   - document that the implemented slice is subtree replacement between invocations
-   - decide whether the roadmap should stop there for v1 or grow beyond it in a later phase
+With Milestone 0 closed, remaining roadmap work is:
 
-### Phase C: milestone closeout
-
-1. revisit Milestone 0 and mark it complete only after the remaining partial
-   contracts are documented and intentionally accepted
-2. remove stale "not-started" assumptions from companion docs and planning notes
-3. treat new feature work as optional only after the current contract is coherent
+1. narrow sub-workflow hardening (validation polish, error message quality)
+2. companion docs for durable-state semantics, graph mutation scope, and
+   temporal/versioning behavior
+3. any remaining feature acceptance-criteria gaps surfaced during example work
 
 ### Practical next-step recommendation
 
-If choosing just one next engineering slice, do this:
+Milestone 0 is now closed. The highest-value next slice is one of:
 
-1. finish the documentation/status reconciliation
-2. then take a narrow sub-workflow hardening PR
+1. sub-workflow hardening (validation, error codes, docs) — bounded, low-risk
+2. companion docs (`durable-state-and-filestore.md`, `dynamic-graph-mutation.md`,
+   `temporal-execution-and-versioning.md`) — validates the shipped contracts
+3. a narrow new feature from the backlog, scoped to one self-contained slice
 
 That order keeps the roadmap trustworthy and uses the next code change to close a
 real remaining gap instead of starting yet another side branch of functionality.
