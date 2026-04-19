@@ -410,7 +410,7 @@ Notes:
 - both helpers preserve audit history by superseding reusable outputs instead of deleting historical versions
 - the replaced root cannot currently be `:running`; mutation is only legal between runner invocations
 - `cause:` accepts any Hash merged into the stored transition cause, but `replaced_from` is reserved and always set from `root_node`
-- see `examples/immutable_subtree_replacement.rb` for definition mutation and `examples/subtree_replacement_impact.rb` for runnable persisted-state impact planning/application
+- see `examples/immutable_subtree_replacement.rb` for definition mutation, `examples/subtree_replacement_impact.rb` for persisted-state impact planning/application, and `examples/subtree_replacement_file_store.rb` for the same rerun flow across fresh `FileStore` instances
 
 ### Waiting and not_before scheduling
 
