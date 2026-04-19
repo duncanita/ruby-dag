@@ -13,6 +13,7 @@ module DAG
 
     class Runner
       DEFAULT_MAX_PARALLELISM = [Etc.nprocessors, 8].min
+      DEFAULT_MAX_SUB_WORKFLOW_DEPTH = 10
 
       # Accepts either a Definition (the common case after Loader) or a
       # `(graph, registry)` pair for code that built the pieces by hand.
@@ -41,6 +42,7 @@ module DAG
         cross_workflow_resolver: nil,
         node_path_prefix: [],
         root_input: {},
+        max_sub_workflow_depth: DEFAULT_MAX_SUB_WORKFLOW_DEPTH,
         clear_on_completion: false,
         register_execution_store: true,
         on_step_start: nil, on_step_finish: nil)
@@ -58,6 +60,7 @@ module DAG
         @event_bus = event_bus
         @cross_workflow_resolver = cross_workflow_resolver
         @node_path_prefix = Array(node_path_prefix).map(&:to_sym).freeze
+        @max_sub_workflow_depth = max_sub_workflow_depth
         @execution_persistence = ExecutionPersistence.new(
           execution_store: @execution_store,
           workflow_id: @workflow_id,
@@ -338,6 +341,8 @@ module DAG
       end
 
       def build_step_execution(name, current_attempt:, deadline:)
+        step = @registry[name]
+        effective_max = step.config[:max_sub_workflow_depth] || @max_sub_workflow_depth
         StepExecution.new(
           workflow_id: @workflow_id,
           node_path: node_path_for(name),
@@ -346,7 +351,8 @@ module DAG
           depth: @node_path_prefix.length,
           parallel: @strategy.name,
           execution_store: @execution_store,
-          event_bus: @event_bus
+          event_bus: @event_bus,
+          effective_max_sub_workflow_depth: effective_max
         )
       end
 
@@ -393,11 +399,21 @@ module DAG
       end
 
       def run_sub_workflow_step(step, input, context:, execution:)
+        max_depth = execution.effective_max_sub_workflow_depth
+        if max_depth && execution.node_path.size >= max_depth
+          return Failure.new(error: {
+            code: :sub_workflow_depth_exceeded,
+            message: "sub_workflow step #{step.name} exceeded max depth of #{max_depth} (at path #{execution.node_path.join(" -> ")})"
+          })
+        end
+
         definition_result = resolve_sub_workflow_definition(step)
         return definition_result if definition_result.is_a?(Failure)
 
         definition = definition_result.value
         mapped_input = map_sub_workflow_input(step, input)
+        return mapped_input if mapped_input.is_a?(Failure)
+
         register_child_node_paths(definition, execution)
 
         child_result = Runner.new(definition,
@@ -413,7 +429,8 @@ module DAG
           cross_workflow_resolver: @cross_workflow_resolver,
           node_path_prefix: execution.node_path,
           root_input: mapped_input,
-          register_execution_store: false).call
+          register_execution_store: false,
+          max_sub_workflow_depth: execution.effective_max_sub_workflow_depth).call
 
         if child_result.failure?
           return Failure.new(error: {
@@ -461,7 +478,7 @@ module DAG
 
       def resolve_sub_workflow_definition(step)
         Success.new(value: SubWorkflowSupport.resolve_definition(step, source_path: @definition_source_path))
-      rescue ArgumentError, ValidationError => e
+      rescue => e
         Failure.new(error: {
           code: :sub_workflow_invalid_definition,
           message: e.message
@@ -479,9 +496,18 @@ module DAG
         mapping = step.config[:input_mapping]
         return input unless mapping
 
-        mapping.each_with_object({}) do |(from, to), mapped|
-          mapped[to.to_sym] = input.fetch(from.to_sym)
+        mapped = {}
+        mapping.each do |from, to|
+          unless input.key?(from.to_sym)
+            return Failure.new(error: {
+              code: :sub_workflow_input_missing,
+              message: "sub_workflow step #{step.name} input_mapping references '#{from}' which was not produced"
+            })
+          end
+
+          mapped[to.to_sym] = input[from.to_sym]
         end
+        mapped
       end
 
       def select_sub_workflow_output(step, definition, outputs)
