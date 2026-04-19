@@ -594,12 +594,14 @@ nodes:
 - Child persistence uses the same logical `workflow_id` as the parent run.
 - Inline `definition:` is rejected by YAML dumper.
 
-**Status:** `partial` | **Priority:** high
+**Status:** `implemented` | **Priority:** high
 
-Current repo reality: sub-workflows are real and heavily exercised, including
-durable namespaced node paths and `definition_path:` support. This remains
-`partial` because it still needs a final contract-closing pass around depth /
-boundary hardening and clearer documentation of the supported semantics.
+All acceptance criteria are now satisfied in shipped code and tests:
+- `definition:` vs `definition_path:` validation and YAML-safe resolution are covered in `spec/sub_workflow_test.rb` and `spec/sub_workflow_support_test.rb`
+- namespaced trace and durable child node-path behavior are exercised in `spec/sub_workflow_test.rb`
+- deadline inheritance remains enforced through `remaining_timeout_for(execution.deadline)` in `Runner#run_sub_workflow_step`
+- nesting/depth behavior is explicitly enforced via `max_sub_workflow_depth:` (default 10) and covered in `spec/sub_workflow_test.rb:test_sub_workflow_depth_limit_enforced`
+- edge-case failures for invalid definitions and missing `input_mapping` inputs now resolve to structured failures and are covered in `spec/sub_workflow_test.rb`
 
 ---
 
@@ -1133,7 +1135,7 @@ one isolated milestone PR.
 |---|---------|----------|--------|------------|
 | 1 | Step retry with backoff | high | `implemented` | small |
 | 2 | Checkpointing and resume | high | `implemented` | medium |
-| 3 | Sub-workflow composition | high | `partial` | medium |
+| 3 | Sub-workflow composition | high | `implemented` | medium |
 | 4 | Runner context injection | high | `implemented` | small |
 | 5 | Node scheduling constraints | medium | `implemented` | medium |
 | 6 | Versioned step outputs | medium | `implemented` | medium |
@@ -1187,11 +1189,7 @@ From here, the goal is to close the partials in a deliberate order.
 
 ### Phase B: close the highest-value partials
 
-1. Feature 3: sub-workflow composition
-   - enforce and document any remaining nesting/depth limits
-   - re-check deadline inheritance and edge-case validation coverage
-   - make the supported contract explicit instead of implied by tests
-2. Feature 8: dynamic graph mutation
+1. Feature 8: dynamic graph mutation
    - document that the implemented slice is subtree replacement between invocations
    - decide whether the roadmap should stop there for v1 or grow beyond it in a later phase
 
