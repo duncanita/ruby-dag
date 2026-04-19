@@ -498,4 +498,70 @@ class SubWorkflowTest < Minitest::Test
     assert_equal :success, result.trace.find { |entry| entry.name == :process }.status
     assert_equal :success, result.trace.find { |entry| entry.name == :downstream }.status
   end
+
+  def test_sub_workflow_depth_limit_enforced
+    max_depth = 3
+
+    inner_def = DAG::Workflow::Loader.from_hash(
+      deep: {type: :exec, command: "printf ok"}
+    )
+
+    # Build a chain that exceeds max_depth
+    current_def = inner_def
+    (max_depth + 2).times do
+      child = DAG::Workflow::Loader.from_hash(
+        level: {type: :sub_workflow, definition: current_def}
+      )
+      current_def = child
+    end
+
+    outer_def = DAG::Workflow::Loader.from_hash(
+      top: {type: :sub_workflow, definition: current_def, max_sub_workflow_depth: max_depth}
+    )
+
+    result = DAG::Workflow::Runner.new(outer_def, parallel: false).call
+
+    assert_equal :failed, result.status
+    assert_equal :top, result.error[:failed_node]
+    # The depth-exceeded Failure is wrapped by each parent sub_workflow step:
+    # depth-limit at innermost level -> sub_workflow_failed (level) -> sub_workflow_failed (top)
+    assert_equal :sub_workflow_failed, result.error[:step_error][:code]
+    assert_equal :sub_workflow_failed, result.error[:step_error][:child_error][:step_error][:code]
+    assert_equal :sub_workflow_depth_exceeded,
+      result.error[:step_error][:child_error][:step_error][:child_error][:step_error][:code]
+    assert_match(/exceeded/,
+      result.error[:step_error][:child_error][:step_error][:child_error][:step_error][:message])
+  end
+
+  def test_sub_workflow_resolve_definition_catches_load_errors
+    parent_def = DAG::Workflow::Loader.from_hash(
+      process: {type: :sub_workflow, definition_path: "/nonexistent/path/does/not/exist.yml"}
+    )
+
+    result = DAG::Workflow::Runner.new(parent_def, parallel: false).call
+
+    assert_equal :failed, result.status
+    assert_equal :process, result.error[:failed_node]
+    assert_equal :sub_workflow_invalid_definition, result.error[:step_error][:code]
+  end
+
+  def test_sub_workflow_input_mapping_missing_key_returns_failure
+    child = DAG::Workflow::Loader.from_hash(
+      analyze: {type: :exec, command: "printf ok"}
+    )
+
+    parent_def = DAG::Workflow::Loader.from_hash(
+      process: {
+        type: :sub_workflow,
+        definition: child,
+        input_mapping: {nonexistent_key: :raw}
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(parent_def, parallel: false).call
+
+    assert_equal :failed, result.status
+    assert_equal :process, result.error[:failed_node]
+    assert_equal :sub_workflow_input_missing, result.error[:step_error][:code]
+  end
 end
