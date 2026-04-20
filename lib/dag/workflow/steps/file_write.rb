@@ -18,18 +18,18 @@ module DAG
             })
           end
 
-          mode = step.config.fetch(:mode, "w")
-          unless VALID_MODES.include?(mode)
+          mode_str = step.config.fetch(:mode, "w").to_s
+          unless VALID_MODES.include?(mode_str)
             return Failure.new(error: {
               code: :file_write_invalid_mode,
-              message: "file_write step #{step.name}: invalid mode '#{mode}' (valid: #{VALID_MODES.join(", ")})",
-              mode: mode,
+              message: "file_write step #{step.name}: invalid mode '#{mode_str}' (valid: #{VALID_MODES.join(", ")})",
+              mode: mode_str,
               valid_modes: VALID_MODES
             })
           end
 
           resolve_content(step, input).and_then do |content|
-            File.open(path, mode) { |f| f.write(content) }
+            File.open(path, mode_str) { |f| f.write(content) }
             Success.new(value: path)
           end
         rescue SystemCallError, IOError => e

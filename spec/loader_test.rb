@@ -3,6 +3,8 @@
 require_relative "test_helper"
 
 class LoaderTest < Minitest::Test
+  include TestHelpers
+
   def test_loads_simple_workflow
     defn = load_yaml(<<~YAML)
       name: test
@@ -663,6 +665,36 @@ class LoaderTest < Minitest::Test
 
     assert_equal 60, defn.step(:task).config[:timeout]
     assert_equal "custom_value", defn.step(:task).config[:custom_key]
+  end
+
+  def test_file_write_mode_symbol_round_trips_through_yaml_and_runs
+    # Regression: mode: :w and mode: :a (symbols from YAML safe_load) must
+    # not fail with :file_write_invalid_mode. The runtime must accept both
+    # "w"/"a" (strings) and :w/:a (symbols) as valid modes.
+    path_w = temp_path(prefix: "fw_w", suffix: ".txt")
+    path_a = temp_path(prefix: "fw_a", suffix: ".txt")
+
+    defn = load_yaml(<<~YAML)
+      name: symbol_mode_test
+      nodes:
+        write_w:
+          type: file_write
+          path: "#{path_w}"
+          content: "mode w"
+          mode: :w
+        write_a:
+          type: file_write
+          path: "#{path_a}"
+          content: "mode a"
+          mode: :a
+    YAML
+
+    runner = DAG::Workflow::Runner.new(defn.graph, defn.registry)
+    result = runner.call
+
+    assert result.success?, "file_write with mode: :w and mode: :a must succeed"
+    assert_equal "mode w", File.read(path_w)
+    assert_equal "mode a", File.read(path_a)
   end
 
   private
