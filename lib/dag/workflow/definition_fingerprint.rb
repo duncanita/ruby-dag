@@ -7,7 +7,7 @@ module DAG
   module Workflow
     class DefinitionFingerprint
       class << self
-        def for(definition)
+        def for(definition, root_input: {})
           data = {
             graph: definition.graph.to_h,
             steps: definition.graph.topological_sort.map do |name|
@@ -17,10 +17,15 @@ module DAG
                 type: step.type,
                 fingerprint: fingerprint_step(step, source_path: definition.source_path)
               }
-            end
+            end,
+            root_input: root_input.empty? ? nil : normalize_root_input(root_input)
           }
 
           Digest::SHA256.hexdigest(YAML.dump(data))
+        end
+
+        def normalize_root_input(root_input)
+          root_input.transform_values { |v| normalize(v) }.sort_by { |k, _| k.to_s }.to_h
         end
 
         private

@@ -157,6 +157,46 @@ class RunnerTest < Minitest::Test
     assert_equal :completed, store.load_node(workflow_id: "wf-stale-rerun", node_path: [:transform])[:state]
   end
 
+  def test_runner_does_not_silently_reuse_stale_output_when_root_input_changes
+    store = build_memory_store
+    step_calls = 0
+
+    definition = build_test_workflow(
+      read_seed: {
+        type: :ruby,
+        resume_key: "read-seed-v1",
+        callable: ->(input) do
+          step_calls += 1
+          DAG::Success.new(value: "value=#{input[:seed]}")
+        end
+      }
+    )
+
+    # First run with seed=1
+    first_run = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      execution_store: store,
+      workflow_id: "wf-root-input",
+      root_input: {seed: 1}).call
+
+    assert_equal 1, step_calls
+    assert_equal "value=1", first_run.outputs[:read_seed].value
+
+    # Second run with same workflow_id but different root_input must not silently
+    # reuse the persisted output — the fingerprint check in prepare_execution_store!
+    # detects the changed root_input and raises rather than returning stale data.
+    error = assert_raises(DAG::ValidationError) do
+      DAG::Workflow::Runner.new(definition,
+        parallel: false,
+        execution_store: store,
+        workflow_id: "wf-root-input",
+        root_input: {seed: 2}).call
+    end
+
+    assert_match(/fingerprint.*does not match/, error.message)
+    assert_equal 1, step_calls # step ran only once — no silent stale reuse
+  end
+
   def test_runner_reexecutes_nested_subworkflow_branch_after_nested_invalidation
     store = build_memory_store
     transform_calls = 0

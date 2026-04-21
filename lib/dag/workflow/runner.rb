@@ -100,7 +100,7 @@ module DAG
         validate_coverage!(graph, registry)
         validate_workflow!(graph, registry)
         validate_durable_execution!
-        @definition_fingerprint = @execution_store ? DefinitionFingerprint.for(Definition.new(graph: @graph, registry: @registry, source_path: @definition_source_path)) : nil
+        @definition_fingerprint = @execution_store ? DefinitionFingerprint.for(Definition.new(graph: @graph, registry: @registry, source_path: @definition_source_path), root_input: @root_input) : nil
       end
 
       def call
