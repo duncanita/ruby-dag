@@ -86,6 +86,67 @@ class LayerAdmitterTest < Minitest::Test
     assert_equal :failed, store.load_run("wf-layer-admitter")[:nodes][[:expired]][:state]
   end
 
+  def test_call_rejects_impossible_schedule_window_as_failure_not_waiting
+    # Regression: not_before > not_after must not park in :waiting state.
+    # It should immediately fail with :invalid_schedule_window.
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
+    store = build_memory_store
+    definition = build_test_workflow(
+      impossible: {
+        type: :ruby,
+        schedule: {
+          not_before: Time.utc(2026, 4, 15, 10, 0, 0), # > not_after
+          not_after: Time.utc(2026, 4, 15, 8, 0, 0)   # < not_before
+        },
+        callable: ->(_input) { DAG::Success.new(value: "never") }
+      }
+    )
+
+    store.begin_run(
+      workflow_id: "wf-impossible-window",
+      definition_fingerprint: "fp-impossible-window",
+      node_paths: [[:impossible]]
+    )
+
+    persistence = DAG::Workflow::ExecutionPersistence.new(
+      execution_store: store,
+      workflow_id: "wf-impossible-window",
+      registry: definition.registry,
+      clock: clock
+    )
+    resolver = DAG::Workflow::DependencyInputResolver.new(
+      graph: definition.graph,
+      execution_store: store,
+      workflow_id: "wf-impossible-window"
+    )
+
+    admitter = DAG::Workflow::LayerAdmitter.new(
+      graph: definition.graph,
+      registry: definition.registry,
+      clock: clock,
+      execution_persistence: persistence,
+      dependency_input_resolver: resolver,
+      root_input: {},
+      task_builder: ->(**_kwargs) { flunk "task_builder should not be called for impossible window" }
+    )
+
+    partition = admitter.call(layer: [:impossible], previous_outputs: {}, statuses: {}, deadline: nil)
+
+    # The step must not be put in waiting_nodes.
+    assert_empty partition.waiting_nodes, "impossible window must not enter :waiting state"
+    # Must appear in immediate_results as a failure.
+    assert_equal [:impossible], partition.immediate_results.map(&:name)
+    assert_equal [:failure], partition.immediate_results.map(&:status)
+    # The stored error must have the correct code.
+    error = partition.immediate_results.first.result.error
+    assert_equal :invalid_schedule_window, error[:code]
+    assert_match(/not_before.*after.*not_after/, error[:message])
+    # The execution store must have recorded :failed state, not :waiting.
+    run_record = store.load_run("wf-impossible-window")
+    assert_equal :failed, run_record[:nodes][[:impossible]][:state]
+    assert_equal :invalid_schedule_window, run_record[:nodes][[:impossible]][:reason][:code]
+  end
+
   def test_call_translates_missing_execution_store_into_immediate_failure
     definition = build_test_workflow(
       source: {
