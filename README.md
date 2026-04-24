@@ -295,6 +295,7 @@ Notes:
 - durable execution currently requires `workflow_id:`
 - `:ruby` steps must declare a deterministic `resume_key:` when durable execution is enabled
 - changing the workflow fingerprint for an existing `workflow_id` raises `DAG::ValidationError` before any step runs
+- non-empty `root_input:` participates in the durable fingerprint; clear existing durable runs before reusing a `workflow_id` created by an older build that did not include root input in fingerprints
 - see `examples/checkpoint_resume.rb` for a runnable end-to-end example that is exercised in the test suite
 
 ### Versioned dependency inputs
@@ -407,6 +408,7 @@ Notes:
 - completed downstream descendants reachable from the replaced root are included in `stale_nodes`
 - `apply_subtree_replacement_impact` marks obsolete roots with `obsolete_cause` and stale descendants with `stale_cause`
 - pass `new_definition:` when you want the persisted run fingerprint and known node paths updated for the next runner invocation against the mutated workflow
+- when updating a durable run that used `root_input:`, pass the same `root_input:` to `apply_subtree_replacement_impact`
 - both helpers preserve audit history by superseding reusable outputs instead of deleting historical versions
 - the replaced root cannot currently be `:running`; mutation is only legal between runner invocations
 - `cause:` accepts any Hash merged into the stored transition cause, but `replaced_from` is reserved and always set from `root_node`
