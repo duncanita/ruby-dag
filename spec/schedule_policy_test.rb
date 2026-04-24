@@ -16,6 +16,24 @@ class SchedulePolicyTest < Minitest::Test
     assert_equal Time.utc(2026, 4, 15, 10, 0, 0), policy.not_before
   end
 
+  def test_contradictory_not_before_greater_than_not_after_is_never_waiting
+    # When not_before > not_after the window is impossible.
+    # The step must NOT enter a long-lived :waiting state —
+    # it should fail immediately with :invalid_schedule_window.
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
+    step = build_step(schedule: {
+      not_before: Time.utc(2026, 4, 15, 10, 0, 0), # > not_after
+      not_after: Time.utc(2026, 4, 15, 8, 0, 0)   # < not_before
+    })
+
+    policy = DAG::Workflow::SchedulePolicy.new(step, clock: clock)
+
+    # The policy must expose the contradiction so LayerAdmitter can reject it.
+    # This is the contract: impossible windows are never waiting.
+    refute policy.waiting?, "not_before > not_after must not return waiting? = true"
+    assert policy.impossible_window?, "impossible_window? must be true when not_before > not_after"
+  end
+
   def test_expired_when_wall_clock_is_after_not_after
     clock = build_clock(wall_time: Time.utc(2026, 4, 15, 10, 0, 1))
     step = build_step(schedule: {not_after: Time.utc(2026, 4, 15, 10, 0, 0)})

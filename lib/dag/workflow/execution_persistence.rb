@@ -65,6 +65,18 @@ module DAG
         )
       end
 
+      def persist_impossible_schedule_window(name, error)
+        return unless enabled?
+
+        @execution_store.set_node_state(
+          workflow_id: @workflow_id,
+          node_path: node_path_for(name),
+          state: :failed,
+          reason: error,
+          metadata: {}
+        )
+      end
+
       def load_reusable_result(name, schedule_policy: nil)
         return nil unless enabled?
 

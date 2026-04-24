@@ -27,7 +27,11 @@ module DAG
           begin
             input_keys = @dependency_input_resolver.input_keys_for(name: name, step: step)
 
-            if schedule_policy.waiting?
+            if schedule_policy.impossible_window?
+              result = schedule_policy.impossible_window_result(name)
+              @execution_persistence.persist_impossible_schedule_window(name, result.error)
+              immediate_results << ImmediateResult.new(name: name, result: result, input_keys: input_keys, status: :failure)
+            elsif schedule_policy.waiting?
               waiting_nodes << @execution_persistence.node_path_for(name)
               @execution_persistence.persist_waiting_node(name)
             elsif schedule_policy.expired?

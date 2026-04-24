@@ -29,6 +29,7 @@ module DAG
       end
 
       def waiting?
+        return false if impossible_window?
         not_before && @clock.wall_now < not_before
       end
 
@@ -36,10 +37,23 @@ module DAG
         not_after && @clock.wall_now > not_after
       end
 
+      def impossible_window?
+        not_before && not_after && not_before > not_after
+      end
+
       def deadline_exceeded_result(name)
         Failure.new(error: {
           code: :deadline_exceeded,
           message: "step #{name} missed schedule.not_after #{not_after.utc.iso8601}",
+          not_after: not_after.utc.iso8601
+        })
+      end
+
+      def impossible_window_result(name)
+        Failure.new(error: {
+          code: :invalid_schedule_window,
+          message: "step #{name} has schedule.not_before #{not_before.utc.iso8601} after schedule.not_after #{not_after.utc.iso8601}: impossible window",
+          not_before: not_before.utc.iso8601,
           not_after: not_after.utc.iso8601
         })
       end
