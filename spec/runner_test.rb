@@ -183,7 +183,7 @@ class RunnerTest < Minitest::Test
     assert_equal "value=1", first_run.outputs[:read_seed].value
 
     # Second run with same workflow_id but different root_input must not silently
-    # reuse the persisted output — the fingerprint check in prepare_execution_store!
+    # reuse the persisted output; the fingerprint check in prepare_execution_store!
     # detects the changed root_input and raises rather than returning stale data.
     error = assert_raises(DAG::ValidationError) do
       DAG::Workflow::Runner.new(definition,
@@ -193,8 +193,112 @@ class RunnerTest < Minitest::Test
         root_input: {seed: 2}).call
     end
 
-    assert_match(/fingerprint.*does not match/, error.message)
-    assert_equal 1, step_calls # step ran only once — no silent stale reuse
+    assert_includes error.message, "does not match"
+    assert_equal 1, step_calls # step ran only once; no silent stale reuse
+  end
+
+  def test_runner_resumes_when_root_input_is_unchanged
+    store = build_memory_store
+    step_calls = 0
+
+    definition = build_test_workflow(
+      read_seed: {
+        type: :ruby,
+        resume_key: "read-seed-v1",
+        callable: ->(input) do
+          step_calls += 1
+          DAG::Success.new(value: "value=#{input[:seed]}")
+        end
+      }
+    )
+
+    first_run = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      execution_store: store,
+      workflow_id: "wf-root-input-same",
+      root_input: {seed: 1}).call
+
+    second_run = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      execution_store: store,
+      workflow_id: "wf-root-input-same",
+      root_input: {seed: 1}).call
+
+    assert first_run.success?
+    assert second_run.success?
+    assert_equal 1, step_calls
+    assert_equal "value=1", second_run.outputs[:read_seed].value
+  end
+
+  def test_empty_root_input_matches_omitted_root_input_fingerprint
+    definition = build_test_workflow(
+      read: {
+        type: :ruby,
+        resume_key: "read-v1",
+        callable: ->(_input) { DAG::Success.new(value: "ok") }
+      }
+    )
+    omitted_store = build_memory_store
+    empty_store = build_memory_store
+
+    DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      execution_store: omitted_store,
+      workflow_id: "wf-root-input-omitted").call
+
+    DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      execution_store: empty_store,
+      workflow_id: "wf-root-input-empty",
+      root_input: {}).call
+
+    omitted_fingerprint = omitted_store.load_run("wf-root-input-omitted")[:definition_fingerprint]
+    empty_fingerprint = empty_store.load_run("wf-root-input-empty")[:definition_fingerprint]
+
+    assert_equal omitted_fingerprint, empty_fingerprint
+  end
+
+  def test_nested_root_input_string_and_symbol_keys_fingerprint_differently
+    definition = build_test_workflow(
+      read: {
+        type: :ruby,
+        resume_key: "read-v1",
+        callable: ->(_input) { DAG::Success.new(value: "ok") }
+      }
+    )
+
+    string_key_fingerprint = DAG::Workflow::DefinitionFingerprint.for(
+      definition,
+      root_input: {payload: {"x" => 1}}
+    )
+    symbol_key_fingerprint = DAG::Workflow::DefinitionFingerprint.for(
+      definition,
+      root_input: {payload: {x: 1}}
+    )
+
+    refute_equal string_key_fingerprint, symbol_key_fingerprint
+  end
+
+  def test_nested_root_input_non_symbol_keys_do_not_break_durable_runner
+    nested_key = 1
+    store = build_memory_store
+
+    definition = build_test_workflow(
+      read: {
+        type: :ruby,
+        resume_key: "read-v1",
+        callable: ->(input) { DAG::Success.new(value: input[:payload][nested_key]) }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(definition,
+      parallel: false,
+      execution_store: store,
+      workflow_id: "wf-root-input-nested-non-symbol-key",
+      root_input: {payload: {nested_key => "ok"}}).call
+
+    assert result.success?
+    assert_equal "ok", result.outputs[:read].value
   end
 
   def test_runner_reexecutes_nested_subworkflow_branch_after_nested_invalidation

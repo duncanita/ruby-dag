@@ -264,6 +264,99 @@ class MutationImpactTest < Minitest::Test
     assert_equal [true, false], report_history.map { |entry| entry[:superseded] }
   end
 
+  def test_apply_subtree_replacement_impact_threads_root_input_into_mutated_fingerprint
+    source_calls = 0
+    normalize_calls = 0
+    summarize_calls = 0
+    report_calls = 0
+    store = build_memory_store
+    root_input = {seed: 1}
+
+    original = build_test_workflow(
+      source: {
+        type: :ruby,
+        resume_key: "source-v1",
+        callable: ->(input) do
+          source_calls += 1
+          DAG::Success.new(value: "seed-#{input[:seed]}")
+        end
+      },
+      process: {
+        type: :ruby,
+        depends_on: [:source],
+        resume_key: "process-v1",
+        callable: ->(input) { DAG::Success.new(value: input[:source].upcase) }
+      },
+      report: {
+        type: :ruby,
+        depends_on: [:process],
+        resume_key: "report-v1",
+        callable: ->(input) do
+          report_calls += 1
+          DAG::Success.new(value: "#{input[:process]}:report-#{report_calls}")
+        end
+      }
+    )
+
+    initial = DAG::Workflow::Runner.new(original,
+      parallel: false,
+      workflow_id: "wf-rerun-impact-root-input",
+      execution_store: store,
+      root_input: root_input).call
+
+    replacement = build_test_workflow(
+      normalize: {
+        type: :ruby,
+        resume_key: "normalize-v1",
+        callable: ->(input) do
+          normalize_calls += 1
+          DAG::Success.new(value: "#{input[:source]}-normalized")
+        end
+      },
+      summarize: {
+        type: :ruby,
+        depends_on: [:normalize],
+        resume_key: "summarize-v1",
+        callable: ->(input) do
+          summarize_calls += 1
+          DAG::Success.new(value: input[:normalize].upcase)
+        end
+      }
+    )
+
+    mutated = DAG::Workflow.replace_subtree(
+      original,
+      root_node: :process,
+      replacement: replacement,
+      reconnect: [{from: :summarize, to: :report, metadata: {as: :process}}]
+    )
+
+    impact = DAG::Workflow.apply_subtree_replacement_impact(
+      workflow_id: "wf-rerun-impact-root-input",
+      definition: original,
+      root_node: :process,
+      execution_store: store,
+      new_definition: mutated,
+      root_input: root_input
+    )
+
+    rerun = DAG::Workflow::Runner.new(mutated,
+      parallel: false,
+      workflow_id: "wf-rerun-impact-root-input",
+      execution_store: store,
+      root_input: root_input).call
+
+    assert initial.success?
+    assert rerun.success?
+    assert_equal [[:process]], impact[:obsolete_nodes]
+    assert_equal [[:report]], impact[:stale_nodes]
+    assert_equal 1, source_calls
+    assert_equal 1, normalize_calls
+    assert_equal 1, summarize_calls
+    assert_equal 2, report_calls
+    assert_equal "SEED-1-NORMALIZED:report-2", rerun.outputs[:report].value
+  end
+
   def test_apply_subtree_replacement_impact_rejects_non_definition_new_definition
     definition = build_test_workflow(
       process: {type: :ruby, callable: ->(_) { DAG::Success.new(value: :process) }}

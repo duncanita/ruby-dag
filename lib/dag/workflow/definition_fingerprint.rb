@@ -17,18 +17,37 @@ module DAG
                 type: step.type,
                 fingerprint: fingerprint_step(step, source_path: definition.source_path)
               }
-            end,
-            root_input: root_input.empty? ? nil : normalize_root_input(root_input)
+            end
           }
+          data[:root_input] = normalize_root_input(root_input) unless root_input.empty?
 
           Digest::SHA256.hexdigest(YAML.dump(data))
         end
 
+        private
+
         def normalize_root_input(root_input)
-          root_input.transform_values { |v| normalize(v) }.sort_by { |k, _| k.to_s }.to_h
+          root_input.each_with_object({}) do |(key, nested), hash|
+            hash[key.to_sym] = normalize_root_input_value(nested)
+          end.sort_by { |key, _| key.to_s }.to_h
         end
 
-        private
+        def normalize_root_input_value(value)
+          case value
+          when Hash
+            value.each_with_object({}) do |(key, nested), hash|
+              hash[key] = normalize_root_input_value(nested)
+            end.sort_by { |key, _| root_input_key_sort_token(key) }.to_h
+          when Array
+            value.map { |nested| normalize_root_input_value(nested) }
+          else
+            value
+          end
+        end
+
+        def root_input_key_sort_token(key)
+          [key.class.name, key.inspect]
+        end
 
         def fingerprint_step(step, source_path: nil)
           if step.type == :sub_workflow
