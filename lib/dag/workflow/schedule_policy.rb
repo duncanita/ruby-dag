@@ -34,6 +34,7 @@ module DAG
       end
 
       def expired?
+        return false if impossible_window?
         not_after && @clock.wall_now > not_after
       end
 
