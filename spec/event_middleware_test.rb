@@ -211,6 +211,20 @@ class EventMiddlewareTest < Minitest::Test
     assert_empty bus.events
   end
 
+  def test_skips_emission_for_sub_workflow_paused_payload
+    bus = MemoryEventBus.new
+    middleware = DAG::Workflow::EventMiddleware.new(event_bus: bus, clock: build_clock)
+
+    result = middleware.call(build_step(emit_events: [
+      {name: :sub_workflow_done}
+    ]), {}, context: nil, execution: build_execution, next_step: lambda do |_step, _input, context:, execution:|
+      DAG::Success.new(value: {__sub_workflow_status__: :paused, __sub_workflow_trace__: []})
+    end)
+
+    assert result.success?
+    assert_empty bus.events
+  end
+
   def test_emits_for_unrecognized_sub_workflow_status
     bus = MemoryEventBus.new
     middleware = DAG::Workflow::EventMiddleware.new(event_bus: bus, clock: build_clock)
