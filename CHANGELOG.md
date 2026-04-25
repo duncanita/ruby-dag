@@ -21,6 +21,26 @@
 
 ### Fixed
 
+- **Sub_workflow paused/waiting silently dropped downstream nodes**
+  (issue #75). When a sub_workflow returned `:paused` or `:waiting`,
+  `TaskCompletionHandler` skipped writing both `results[name]` and
+  `statuses[name]`. The next layer's `LayerAdmitter#dependency_outputs_ready?`
+  then quietly `next`'d any descendant whose dependency was missing — no
+  trace entry, no error. Fixed by:
+  - `TaskCompletionHandler` now writes `statuses[name]` (`:waiting` /
+    `:paused`) and persists the node state on lifecycle outcomes.
+  - `LayerAdmitter` uses a tri-state `predecessor_admission_status`
+    predicate. Predecessors in `:waiting`, `:paused`, or `:blocked_upstream`
+    block downstream admission and emit a `BlockedResult` that the
+    `TraceRecorder` materializes as a `:blocked_upstream` `TraceEntry`.
+  - `:blocked_upstream` propagates transitively through `statuses`, so
+    chains and diamond joins are recorded explicitly without
+    interrupting independent parallel branches.
+  - The same status-aware admission also closes the analogous
+    silent-drop for `SchedulePolicy.waiting?` and
+    `DependencyInputResolver::WaitingForDependencyError`.
+  - New `ExecutionPersistence#persist_paused_node` mirrors
+    `persist_waiting_node` for paused lifecycle outcomes.
 - **EINTR in `Steps::Exec#drain_pipes`**: `read_nonblock(exception: false)`
   does not suppress `Errno::EINTR`. Under the `Threads` strategy with
   concurrent `:exec` steps, SIGCHLD from a sibling child could crash a

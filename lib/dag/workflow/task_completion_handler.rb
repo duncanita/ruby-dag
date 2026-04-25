@@ -26,6 +26,8 @@ module DAG
         @execution_persistence.persist_step_result(task, result, entries, skip_result: !lifecycle_payload.nil?)
 
         if lifecycle_payload
+          statuses[task.name] = lifecycle_payload[:status]
+          persist_lifecycle_node(task.name, lifecycle_payload[:status])
           @callbacks.finish(task.name, @lifecycle_callback_result.call(lifecycle_payload))
           return TaskCompletionOutcome.new(
             waiting_nodes: (lifecycle_payload[:status] == :waiting) ? lifecycle_payload[:waiting_nodes] : [],
@@ -38,6 +40,15 @@ module DAG
         results[task.name] = result
 
         TaskCompletionOutcome.new(waiting_nodes: [], paused: false)
+      end
+
+      private
+
+      def persist_lifecycle_node(name, status)
+        case status
+        when :waiting then @execution_persistence.persist_waiting_node(name)
+        when :paused then @execution_persistence.persist_paused_node(name)
+        end
       end
     end
   end
