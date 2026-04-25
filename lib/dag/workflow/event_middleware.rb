@@ -58,9 +58,8 @@ module DAG
         metadata_builder.call(result)
       end
 
-      # Sub_workflow paused/waiting results carry magic-key payloads that
-      # are Runner's internal protocol, not user-facing values. Mirrors
-      # AttemptTraceMiddleware#lifecycle_payload?.
+      # Sub_workflow paused/waiting payloads are Runner's internal
+      # protocol, not user-facing values — never publish them as events.
       def lifecycle_payload?(result)
         return false unless result.success? && result.value.is_a?(Hash)
 
