@@ -263,4 +263,74 @@ class ExecutionStoreTest < Minitest::Test
       assert_equal({payload: ["a"]}, reopened.load_output(workflow_id: "wf-file", node_path: [:fetch])[:result].value)
     end
   end
+
+  def test_file_store_concurrent_append_trace_does_not_drop_entries
+    Dir.mktmpdir("dag-file-store-concurrent-trace") do |dir|
+      store = DAG::Workflow::ExecutionStore::FileStore.new(dir: dir)
+      store.begin_run(workflow_id: "wf-file-concurrent", definition_fingerprint: "fp-1", node_paths: [[:fetch]])
+
+      threads = 8.times.map do |thread_index|
+        Thread.new do
+          50.times do |entry_index|
+            store.append_trace(
+              workflow_id: "wf-file-concurrent",
+              entry: build_trace_entry(:"fetch_#{thread_index}_#{entry_index}")
+            )
+          end
+        end
+      end
+      threads.each(&:join)
+
+      run = store.load_run("wf-file-concurrent")
+      reopened = DAG::Workflow::ExecutionStore::FileStore.new(dir: dir)
+
+      assert_equal 400, run[:trace].size
+      assert_equal 400, run[:trace].map(&:name).uniq.size
+      assert_equal 400, reopened.load_run("wf-file-concurrent")[:trace].size
+    end
+  end
+
+  def test_file_store_clear_run_clears_cached_run
+    Dir.mktmpdir("dag-file-store-clear-cache") do |dir|
+      store = DAG::Workflow::ExecutionStore::FileStore.new(dir: dir)
+      store.begin_run(workflow_id: "wf-file-clear", definition_fingerprint: "fp-1", node_paths: [[:fetch]])
+      store.load_run("wf-file-clear")
+
+      store.clear_run(workflow_id: "wf-file-clear")
+
+      assert_nil store.load_run("wf-file-clear")
+      assert_nil DAG::Workflow::ExecutionStore::FileStore.new(dir: dir).load_run("wf-file-clear")
+    end
+  end
+
+  def test_file_store_cached_trace_entries_are_isolated_from_caller_mutation
+    Dir.mktmpdir("dag-file-store-trace-isolation") do |dir|
+      store = DAG::Workflow::ExecutionStore::FileStore.new(dir: dir)
+      store.begin_run(workflow_id: "wf-file-trace-isolation", definition_fingerprint: "fp-1", node_paths: [[:fetch]])
+      entry = build_trace_entry(:fetch, input_keys: [:source])
+
+      store.append_trace(workflow_id: "wf-file-trace-isolation", entry: entry)
+      entry.input_keys << :mutated
+
+      run = store.load_run("wf-file-trace-isolation")
+
+      assert_equal [:source], run[:trace].first.input_keys
+    end
+  end
+
+  private
+
+  def build_trace_entry(name, input_keys: [])
+    DAG::Workflow::TraceEntry.new(
+      name: name,
+      layer: 0,
+      started_at: 1.0,
+      finished_at: 2.0,
+      duration_ms: 1000.0,
+      status: :success,
+      input_keys: input_keys,
+      attempt: 1,
+      retried: false
+    )
+  end
 end

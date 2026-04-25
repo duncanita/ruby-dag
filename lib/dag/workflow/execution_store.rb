@@ -9,100 +9,111 @@ module DAG
       class FileStore
         def initialize(dir:)
           @dir = File.expand_path(dir)
+          @runs = {}
+          @mutex = Mutex.new
           FileUtils.mkdir_p(@dir)
         end
 
         def begin_run(workflow_id:, definition_fingerprint:, node_paths:)
-          run = load_run(workflow_id)
-          if run
-            run[:node_paths] |= normalized_node_paths(node_paths)
-          else
-            run = {
-              workflow_id: workflow_id,
-              definition_fingerprint: definition_fingerprint,
-              node_paths: normalized_node_paths(node_paths),
-              workflow_status: nil,
-              waiting_nodes: [],
-              paused: false,
-              trace: [],
-              nodes: {}
-            }
+          @mutex.synchronize do
+            run = cached_run(workflow_id)
+            if run
+              run[:node_paths] |= normalized_node_paths(node_paths)
+            else
+              run = {
+                workflow_id: workflow_id,
+                definition_fingerprint: definition_fingerprint,
+                node_paths: normalized_node_paths(node_paths),
+                workflow_status: nil,
+                waiting_nodes: [],
+                paused: false,
+                trace: [],
+                nodes: {}
+              }
+              @runs[cache_key(workflow_id)] = run
+            end
+            write_run(run)
+            deep_copy(run)
           end
-          write_run(run)
-          deep_copy(run)
         end
 
         def load_run(workflow_id)
-          path = run_path(workflow_id)
-          return nil unless File.exist?(path)
-
-          Marshal.load(File.binread(path))
+          @mutex.synchronize do
+            run = cached_run(workflow_id)
+            run ? deep_copy(run) : nil
+          end
         end
 
         def paused?(workflow_id)
-          load_run(workflow_id)&.fetch(:paused, false) || false
+          @mutex.synchronize do
+            cached_run(workflow_id)&.fetch(:paused, false) || false
+          end
         end
 
         def next_output_version(workflow_id:, node_path:)
-          node = fetch_node(load_run(workflow_id), node_path)
-          outputs = node ? Array(node[:outputs]) : []
-          (outputs.map { |entry| entry[:version] }.max || 0) + 1
+          @mutex.synchronize do
+            node = fetch_node(cached_run(workflow_id), node_path)
+            outputs = node ? Array(node[:outputs]) : []
+            (outputs.map { |entry| entry[:version] }.max || 0) + 1
+          end
         end
 
         def load_node(workflow_id:, node_path:)
-          node = fetch_node(load_run(workflow_id), node_path)
-          node ? deep_copy(node) : nil
+          @mutex.synchronize do
+            node = fetch_node(cached_run(workflow_id), node_path)
+            node ? deep_copy(node) : nil
+          end
         end
 
         def set_node_state(workflow_id:, node_path:, state:, reason: nil, metadata: {})
-          run = ensure_run(workflow_id)
-          node = ensure_node(run, node_path)
-          node[:state] = state
-          node[:reason] = reason
-          node[:metadata] = deep_copy(metadata)
-          write_run(run)
+          mutate_run(workflow_id) do |run|
+            node = ensure_node(run, node_path)
+            node[:state] = state
+            node[:reason] = reason
+            node[:metadata] = deep_copy(metadata)
+          end
           nil
         end
 
         def append_trace(workflow_id:, entry:)
-          run = ensure_run(workflow_id)
-          run[:trace] << entry
-          write_run(run)
+          mutate_run(workflow_id) { |run| run[:trace] << deep_copy(entry) }
           nil
         end
 
         def save_output(workflow_id:, node_path:, version:, result:, reusable:, superseded:, saved_at: Time.now.utc)
-          run = ensure_run(workflow_id)
-          node = ensure_node(run, node_path)
-          node[:outputs] ||= []
-          node[:outputs] << {
-            version: version,
-            result: result,
-            reusable: reusable,
-            superseded: superseded,
-            saved_at: saved_at
-          }
-          write_run(run)
+          mutate_run(workflow_id) do |run|
+            node = ensure_node(run, node_path)
+            node[:outputs] ||= []
+            node[:outputs] << {
+              version: version,
+              result: deep_copy(result),
+              reusable: reusable,
+              superseded: superseded,
+              saved_at: saved_at
+            }
+          end
           nil
         end
 
         def load_output(workflow_id:, node_path:, version: :latest)
-          node = fetch_node(ensure_run(workflow_id), node_path)
-          return nil unless node
+          @mutex.synchronize do
+            node = fetch_node(ensure_run(workflow_id), node_path)
+            return nil unless node
 
-          outputs = Array(node[:outputs])
-          active_outputs = outputs.reject { |entry| entry[:superseded] }
-          case version
-          when :latest
-            # standard:disable Style/ReverseFind -- Array#rfind is unavailable on Ruby 3.2, which this gem still tests against.
-            output = active_outputs.reverse_each.find { |entry| entry[:reusable] }
-            # standard:enable Style/ReverseFind
-            output ? deep_copy(output) : nil
-          when :all
-            deep_copy(outputs.sort_by { |entry| entry[:version] })
-          else
-            output = outputs.find { |entry| entry[:version] == version }
-            output ? deep_copy(output) : nil
+            outputs = Array(node[:outputs])
+            active_outputs = outputs.reject { |entry| entry[:superseded] }
+            case version
+            when :latest
+              # standard:disable Style/ReverseFind -- Array#rfind is unavailable on Ruby 3.2, which this gem still tests against.
+              output = active_outputs.reverse_each.find { |entry| entry[:reusable] }
+              # standard:enable Style/ReverseFind
+              output ? deep_copy(output) : nil
+            when :all
+              deep_copy(outputs.sort_by { |entry| entry[:version] })
+            else
+              output = outputs.find { |entry| entry[:version] == version }
+              output ? deep_copy(output) : nil
+            end
           end
         end
 
@@ -127,52 +138,75 @@ module DAG
         end
 
         def set_workflow_status(workflow_id:, status:, waiting_nodes: [])
-          run = ensure_run(workflow_id)
-          run[:workflow_status] = status
-          run[:waiting_nodes] = normalized_node_paths(waiting_nodes)
-          write_run(run)
+          mutate_run(workflow_id) do |run|
+            run[:workflow_status] = status
+            run[:waiting_nodes] = normalized_node_paths(waiting_nodes)
+          end
           nil
         end
 
         def update_definition(workflow_id:, definition_fingerprint:, node_paths:)
-          run = ensure_run(workflow_id)
-          run[:definition_fingerprint] = definition_fingerprint
-          run[:node_paths] |= normalized_node_paths(node_paths)
-          write_run(run)
+          mutate_run(workflow_id) do |run|
+            run[:definition_fingerprint] = definition_fingerprint
+            run[:node_paths] |= normalized_node_paths(node_paths)
+          end
           nil
         end
 
         def set_pause_flag(workflow_id:, paused:)
-          run = ensure_run(workflow_id)
-          run[:paused] = paused
-          write_run(run)
+          mutate_run(workflow_id) { |run| run[:paused] = paused }
           nil
         end
 
         def clear_run(workflow_id:)
-          path = run_path(workflow_id)
-          File.delete(path) if File.exist?(path)
+          @mutex.synchronize do
+            @runs.delete(cache_key(workflow_id))
+            path = run_path(workflow_id)
+            File.delete(path) if File.exist?(path)
+          end
           nil
         end
 
         private
 
         def mark_nodes(workflow_id:, node_paths:, state:, cause_key:, cause:)
-          run = ensure_run(workflow_id)
-          Array(node_paths).each do |node_path|
-            node = ensure_node(run, node_path)
-            node[:state] = state
-            node[cause_key] = deep_copy(cause)
-            Array(node[:outputs]).each do |output|
-              output[:superseded] = true if output[:reusable]
+          mutate_run(workflow_id) do |run|
+            Array(node_paths).each do |node_path|
+              node = ensure_node(run, node_path)
+              node[:state] = state
+              node[cause_key] = deep_copy(cause)
+              Array(node[:outputs]).each do |output|
+                output[:superseded] = true if output[:reusable]
+              end
             end
           end
-          write_run(run)
           nil
         end
 
+        def mutate_run(workflow_id)
+          @mutex.synchronize do
+            run = ensure_run(workflow_id)
+            yield run
+            write_run(run)
+          end
+        end
+
         def ensure_run(workflow_id)
-          load_run(workflow_id) || raise(ArgumentError, "unknown workflow_id: #{workflow_id.inspect}")
+          cached_run(workflow_id) || raise(ArgumentError, "unknown workflow_id: #{workflow_id.inspect}")
+        end
+
+        def cached_run(workflow_id)
+          key = cache_key(workflow_id)
+          return @runs[key] if @runs.key?(key)
+
+          path = run_path(workflow_id)
+          return nil unless File.exist?(path)
+
+          @runs[key] = Marshal.load(File.binread(path))
+        end
+
+        def cache_key(workflow_id)
+          workflow_id.to_s
         end
 
         def ensure_node(run, node_path)
