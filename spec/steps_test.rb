@@ -2,6 +2,7 @@
 
 require_relative "test_helper"
 require "tmpdir"
+require "minitest/mock"
 
 class StepsTest < Minitest::Test
   include TestHelpers
@@ -77,6 +78,24 @@ class StepsTest < Minitest::Test
     end
   ensure
     File.delete(pidfile) if pidfile && File.exist?(pidfile)
+  end
+
+  def test_exec_returns_failure_when_child_reaped_externally
+    # Simulate a host SIGCHLD reaper (Puma/Sidekiq) by stubbing waitpid2
+    # to raise ECHILD. stdout/stderr have already been drained.
+    Process.stub(:waitpid2, ->(_pid) { raise Errno::ECHILD }) do
+      result = run_step(:exec, command: "echo hello")
+      assert result.failure?
+      assert_equal :exec_status_unavailable, result.error[:code]
+      assert_equal "echo hello", result.error[:command]
+      assert_equal "hello", result.error[:stdout]
+    end
+  ensure
+    begin
+      Process.waitall
+    rescue
+      # nothing to reap
+    end
   end
 
   def test_exec_returns_failure_on_nil_command
