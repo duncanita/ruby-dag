@@ -126,7 +126,12 @@ module DAG
           raise_stale_run_if_reconnect_error!(target, root) if reconnects.empty?
           raise_ambiguous_run_if_reconnect_error!(target, root, reconnects) if reconnects.size > 1
 
-          rewritten = Condition.rename_from(run_if, root, reconnects.first.fetch(:from))
+          replacement_leaf = reconnects.first.fetch(:from)
+          if external_dependency_input_keys(step).include?(replacement_leaf)
+            raise_external_run_if_alias_collision_error!(target, root, replacement_leaf)
+          end
+
+          rewritten = Condition.rename_from(run_if, root, replacement_leaf)
           registry.replace(Step.new(name: step.name, type: step.type, **step.config.merge(run_if: rewritten)))
         end
       end
@@ -142,6 +147,20 @@ module DAG
         raise ArgumentError,
           "ambiguous run_if rewrite for node #{target}: removed node #{root} reconnects through " \
           "multiple replacement leaves #{leaves.inspect}"
+      end
+
+      def raise_external_run_if_alias_collision_error!(target, root, replacement_leaf)
+        raise ArgumentError,
+          "ambiguous run_if rewrite for node #{target}: removed node #{root} reconnects through " \
+          "replacement leaf #{replacement_leaf}, which collides with an external dependency alias on #{target}"
+      end
+
+      def external_dependency_input_keys(step)
+        Array(step.config[:external_dependencies]).filter_map do |dependency|
+          normalized = dependency.transform_keys(&:to_sym)
+          key = normalized[:as] || normalized[:node]
+          key&.to_sym
+        end
       end
 
       def normalize_reconnect_alias_entry(descriptor, graph:, root:)

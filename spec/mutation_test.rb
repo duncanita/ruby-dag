@@ -196,6 +196,51 @@ class MutationTest < Minitest::Test
     assert_equal "PAYLOAD|enabled", result.outputs[:report].value
   end
 
+  def test_workflow_replace_subtree_rejects_run_if_rewrite_that_collides_with_external_dependency_alias
+    definition = build_test_workflow(
+      source: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "payload") }
+      },
+      process: {
+        type: :ruby,
+        depends_on: [:source],
+        callable: ->(input) { DAG::Success.new(value: input[:source].upcase) }
+      },
+      report: {
+        type: :ruby,
+        depends_on: [
+          {from: :process, as: :summary},
+          {workflow: "pipeline-a", node: :validated_output, as: :summarize}
+        ],
+        run_if: {from: :process, value: {equals: "PAYLOAD"}},
+        callable: ->(input) { DAG::Success.new(value: "report:#{input[:summary]}") }
+      }
+    )
+
+    replacement = build_test_workflow(
+      summarize: {
+        type: :ruby,
+        callable: ->(input) { DAG::Success.new(value: input[:source].upcase) }
+      }
+    )
+
+    error = assert_raises(ArgumentError) do
+      DAG::Workflow.replace_subtree(
+        definition,
+        root_node: :process,
+        replacement: replacement,
+        reconnect: [{from: :summarize, to: :report}]
+      )
+    end
+
+    assert_includes error.message, "ambiguous run_if rewrite"
+    assert_includes error.message, "external dependency alias"
+    assert_includes error.message, "report"
+    assert_includes error.message, "process"
+    assert_includes error.message, "summarize"
+  end
+
   def test_workflow_replace_subtree_rejects_ambiguous_downstream_run_if_rewrite
     definition = build_test_workflow(
       source: {type: :ruby, callable: ->(_) { DAG::Success.new(value: "payload") }},
