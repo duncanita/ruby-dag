@@ -120,8 +120,11 @@ module DAG
 
           step = registry[target]
           run_if = step.config[:run_if]
+          referenced = Condition.referenced_from_keys(run_if)
+          next if referenced.empty?
+
           old_input_key = effective_input_key(root, graph.edge_metadata(root, target))
-          next unless Condition.referenced_from_keys(run_if).include?(old_input_key)
+          next unless referenced.include?(old_input_key)
 
           reconnects = reconnects_by_target.fetch(target, [])
           raise_stale_run_if_reconnect_error!(target, root) if reconnects.empty?

@@ -131,25 +131,21 @@ module DAG
 
       def self.allowed_condition_inputs(graph, step, node_name:)
         local_keys = graph.each_predecessor(node_name).map do |dependency_name|
-          metadata = graph.edge_metadata(dependency_name, node_name)
-          (metadata[:as] || dependency_name).to_sym
+          local_effective_input_key(graph, dependency_name, node_name)
         end
         external_keys = Array(step.config[:external_dependencies]).map do |dependency|
-          (dependency[:as] || dependency[:node]).to_sym
+          external_effective_input_key(dependency)
         end
         local_keys + external_keys
       end
 
       def self.duplicate_effective_input_key_errors(graph, step, node_name:)
         keys = graph.each_predecessor(node_name).each_with_object(Hash.new { |hash, key| hash[key] = [] }) do |dependency_name, memo|
-          metadata = graph.edge_metadata(dependency_name, node_name)
-          key = (metadata[:as] || dependency_name).to_sym
-          memo[key] << dependency_name
+          memo[local_effective_input_key(graph, dependency_name, node_name)] << dependency_name
         end
 
         Array(step.config[:external_dependencies]).each do |dependency|
-          key = (dependency[:as] || dependency[:node]).to_sym
-          keys[key] << "#{dependency[:workflow_id]}.#{dependency[:node]}"
+          keys[external_effective_input_key(dependency)] << "#{dependency[:workflow_id]}.#{dependency[:node]}"
         end
 
         keys.filter_map do |key, dependencies|
@@ -157,6 +153,15 @@ module DAG
 
           "Node #{node_name} has duplicate effective input key #{key.inspect} from dependencies #{dependencies.sort_by(&:to_s).inspect}"
         end
+      end
+
+      def self.local_effective_input_key(graph, dependency_name, node_name)
+        metadata = graph.edge_metadata(dependency_name, node_name)
+        (metadata[:as] || dependency_name).to_sym
+      end
+
+      def self.external_effective_input_key(dependency)
+        (dependency[:as] || dependency[:node]).to_sym
       end
 
       def self.validate_retry_max_attempts(value, node_name:, errors:)
