@@ -172,4 +172,40 @@ class ValidatorTest < Minitest::Test
     report = ValidationReport.new(errors: ["err"])
     assert report.errors.frozen?
   end
+
+  def test_allows_declarative_run_if_to_reference_local_dependency_alias
+    defn = build_test_workflow(
+      source: {},
+      consumer: {
+        type: :ruby,
+        depends_on: [{from: :source, as: :first}],
+        run_if: {from: :first, value: {equals: "ready"}},
+        callable: ->(input) { DAG::Success.new(value: input[:first]) }
+      }
+    )
+
+    report = Validator.validate(defn.graph, defn.registry)
+
+    assert report.valid?
+    assert_empty report.errors
+  end
+
+  def test_rejects_declarative_run_if_referencing_local_dependency_raw_name_when_aliased
+    defn = build_test_workflow(
+      source: {},
+      consumer: {
+        type: :ruby,
+        depends_on: [{from: :source, as: :first}],
+        run_if: {from: :source, value: {equals: "ready"}},
+        callable: ->(input) { DAG::Success.new(value: input[:first]) }
+      }
+    )
+
+    report = Validator.validate(defn.graph, defn.registry)
+
+    refute report.valid?
+    assert_equal 1, report.errors.size
+    assert_match(/\bsource\b/, report.errors.first)
+    assert_match(/\bfirst\b/, report.errors.first)
+  end
 end

@@ -1055,6 +1055,42 @@ class RunnerTest < Minitest::Test
     assert result.trace.any? { |e| e.status == :skipped }
   end
 
+  def test_callable_run_if_uses_input_key_for_local_aliased_dep
+    graph = DAG::Graph.new.add_node(:source).add_node(:consumer)
+    graph.add_edge(:source, :consumer, as: :first)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :source, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: 1) }))
+    registry.register(DAG::Workflow::Step.new(name: :consumer, type: :ruby,
+      callable: ->(input) { DAG::Success.new(value: input[:first]) },
+      run_if: ->(input) { input[:first] == 1 }))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
+
+    assert result.success?
+    assert_equal 1, result.outputs[:consumer].value
+    consumer_entry = result.trace.find { |entry| entry.name == :consumer }
+    assert_equal :success, consumer_entry.status
+  end
+
+  def test_declarative_run_if_uses_input_key_for_local_aliased_dep
+    graph = DAG::Graph.new.add_node(:source).add_node(:consumer)
+    graph.add_edge(:source, :consumer, as: :first)
+    registry = DAG::Workflow::Registry.new
+    registry.register(DAG::Workflow::Step.new(name: :source, type: :ruby,
+      callable: ->(_) { DAG::Success.new(value: 1) }))
+    registry.register(DAG::Workflow::Step.new(name: :consumer, type: :ruby,
+      callable: ->(input) { DAG::Success.new(value: input[:first]) },
+      run_if: {from: :first, value: {equals: 1}}))
+
+    result = DAG::Workflow::Runner.new(graph, registry, parallel: false).call
+
+    assert result.success?
+    assert_equal 1, result.outputs[:consumer].value
+    consumer_entry = result.trace.find { |entry| entry.name == :consumer }
+    assert_equal :success, consumer_entry.status
+  end
+
   def test_declarative_run_if_selects_branch_by_value
     graph = DAG::Graph.new.add_node(:decide).add_node(:prod).add_node(:noop)
     graph.add_edge(:decide, :prod)

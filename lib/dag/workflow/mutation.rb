@@ -120,18 +120,22 @@ module DAG
 
           step = registry[target]
           run_if = step.config[:run_if]
-          next unless Condition.referenced_from_keys(run_if).include?(root)
+          referenced = Condition.referenced_from_keys(run_if)
+          next if referenced.empty?
+
+          old_input_key = effective_input_key(root, graph.edge_metadata(root, target))
+          next unless referenced.include?(old_input_key)
 
           reconnects = reconnects_by_target.fetch(target, [])
           raise_stale_run_if_reconnect_error!(target, root) if reconnects.empty?
           raise_ambiguous_run_if_reconnect_error!(target, root, reconnects) if reconnects.size > 1
 
-          replacement_leaf = reconnects.first.fetch(:from)
-          if external_dependency_input_keys(step).include?(replacement_leaf)
-            raise_external_run_if_alias_collision_error!(target, root, replacement_leaf)
+          new_input_key = effective_input_key(reconnects.first.fetch(:from), reconnects.first.fetch(:metadata))
+          if external_dependency_input_keys(step).include?(new_input_key)
+            raise_external_run_if_alias_collision_error!(target, root, new_input_key)
           end
 
-          rewritten = Condition.rename_from(run_if, root, replacement_leaf)
+          rewritten = Condition.rename_from(run_if, old_input_key, new_input_key)
           registry.replace(Step.new(name: step.name, type: step.type, **step.config.merge(run_if: rewritten)))
         end
       end

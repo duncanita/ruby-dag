@@ -187,7 +187,7 @@ class MutationTest < Minitest::Test
     )
 
     run_if = mutated.step(:report).config[:run_if]
-    assert_equal :summarize, run_if[:all][0][:from]
+    assert_equal :summary, run_if[:all][0][:from]
     assert_equal :config, run_if[:all][1][:not][:from]
 
     result = DAG::Workflow::Runner.new(mutated, parallel: false).call
@@ -210,11 +210,11 @@ class MutationTest < Minitest::Test
       report: {
         type: :ruby,
         depends_on: [
-          {from: :process, as: :summary},
+          :process,
           {workflow: "pipeline-a", node: :validated_output, as: :summarize}
         ],
         run_if: {from: :process, value: {equals: "PAYLOAD"}},
-        callable: ->(input) { DAG::Success.new(value: "report:#{input[:summary]}") }
+        callable: ->(input) { DAG::Success.new(value: "report:#{input[:process]}") }
       }
     )
 
