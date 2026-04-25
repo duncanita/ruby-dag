@@ -69,7 +69,10 @@ module DAG
               pipes.delete(rd)
               rd.close
               status = blocking_waitpid(pid)
-              yield(*decode_payload(task, info[:buffer], status))
+              name, result, started_at, finished_at, duration_ms, child_attempt_log =
+                decode_payload(task, info[:buffer], status)
+              task.attempt_log.concat(child_attempt_log) if child_attempt_log&.any?
+              yield name, result, started_at, finished_at, duration_ms
               completed += 1
             end
           end
@@ -118,7 +121,12 @@ module DAG
         # tracking is lost when `exit!` skips SimpleCov's flush. Tested via
         # integration through Processes#execute.
         def run_in_child(task, wr)
-          wr.write(marshal_tuple(run_task(task)))
+          # task.attempt_log is mutated by the AttemptTraceMiddleware (and
+          # sub_workflow passthrough) inside run_task. After fork() that
+          # array lives only in the child, so we ship its post-run state
+          # alongside the timing tuple — the parent concats it back onto
+          # the original Task before recording the trace.
+          wr.write(marshal_tuple(run_task(task), task.attempt_log))
           wr.close
           exit!(0)
         rescue => e
@@ -129,7 +137,7 @@ module DAG
             crash = Result.exception_failure(:child_crashed, e,
               message: "child for #{task.name} crashed: #{e.message}",
               strategy: STRATEGY_SYM)
-            wr.write(Marshal.dump([task.name, crash, 0.0, 0.0, 0.0]))
+            wr.write(Marshal.dump([task.name, crash, 0.0, 0.0, 0.0, task.attempt_log]))
             wr.close
           rescue
             # ignore — parent will handle empty payload
@@ -140,8 +148,8 @@ module DAG
         # On a non-marshalable step return, the fallback Failure carries
         # the original timing — the step really did run for that long, the
         # only thing that failed was shipping the value back to the parent.
-        def marshal_tuple(tuple)
-          Marshal.dump(tuple)
+        def marshal_tuple(tuple, attempt_log)
+          Marshal.dump(tuple + [attempt_log])
         rescue TypeError => e
           name, _, started_at, finished_at, duration_ms = tuple
           fallback = Failure.new(error: {
@@ -149,7 +157,7 @@ module DAG
             message: "step #{name} returned a non-marshalable value: #{e.message}",
             strategy: STRATEGY_SYM
           })
-          Marshal.dump([name, fallback, started_at, finished_at, duration_ms])
+          Marshal.dump([name, fallback, started_at, finished_at, duration_ms, attempt_log])
         end
         # :nocov:
 
@@ -175,7 +183,7 @@ module DAG
               message: "child for #{task.name} exited without writing a payload (#{detail})",
               strategy: STRATEGY_SYM
             })
-            return [task.name, result, now, now, 0.0]
+            return [task.name, result, now, now, 0.0, []]
           end
 
           Marshal.load(payload)
@@ -184,7 +192,7 @@ module DAG
           result = Result.exception_failure(:decode_failed, e,
             message: "failed to decode payload from #{task.name}: #{e.message}",
             strategy: STRATEGY_SYM)
-          [task.name, result, now, now, 0.0]
+          [task.name, result, now, now, 0.0, []]
         end
 
         # Concurrent TERM -> grace -> KILL -> grace ladder. Signals go

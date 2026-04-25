@@ -506,11 +506,12 @@ class ParallelTest < Minitest::Test
   def test_processes_decode_payload_handles_corrupt_marshal_data
     strategy = DAG::Workflow::Parallel::Processes.new(max_parallelism: 1)
     fake_task = Struct.new(:name).new(:bad)
-    name, result, _started, _finished, _duration =
+    name, result, _started, _finished, _duration, child_attempt_log =
       strategy.send(:decode_payload, fake_task, "definitely not marshal data")
     assert_equal :bad, name
     assert result.failure?
     assert_equal :decode_failed, result.error[:code]
+    assert_equal [], child_attempt_log
   end
 
   def test_processes_waitpid_nohang_returns_true_for_already_reaped_pid
@@ -532,6 +533,71 @@ class ParallelTest < Minitest::Test
     step_error = result.error[:step_error]
     assert_equal :empty_child_payload, step_error[:code]
     assert_match(/exited without writing/, step_error[:message])
+  end
+
+  # Regression for #76: the AttemptTraceMiddleware mutates task.attempt_log
+  # to record one entry per retry. Under :threads/:sequential the array is
+  # shared with the parent; under :processes it lives in the forked child's
+  # memory and must travel back over the pipe. Without the roundtrip the
+  # parent's TraceRecorder collapses every retried step to a single entry.
+  def test_processes_strategy_preserves_attempt_log_under_retry
+    counter = temp_path(prefix: "dag_processes_retry_counter", suffix: ".txt")
+    script = temp_path(prefix: "dag_processes_retry_script", suffix: ".sh")
+    File.write(counter, "0")
+    File.write(script, <<~SH)
+      #!/bin/sh
+      n=$(cat #{counter})
+      n=$((n+1))
+      echo $n > #{counter}
+      if [ "$n" -lt 3 ]; then exit 1; fi
+      echo "ok after $n"
+    SH
+    File.chmod(0o755, script)
+
+    defn = build_test_workflow(
+      flaky: {
+        type: :exec,
+        command: script,
+        retry: {max_attempts: 3, base_delay: 0.0}
+      }
+    )
+    middleware = DAG::Workflow::RetryMiddleware.new(sleeper: ->(_) {})
+
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry,
+      parallel: :processes, middleware: [middleware]).call
+
+    assert result.success?, "expected success after retries (got #{result.error.inspect})"
+    flaky = result.trace.select { |entry| entry.name == :flaky }
+    assert_equal 3, flaky.size, "expected one trace entry per attempt under :processes"
+    assert_equal [1, 2, 3], flaky.map(&:attempt)
+    assert_equal [:failure, :failure, :success], flaky.map(&:status)
+    assert_equal [true, true, false], flaky.map(&:retried)
+  ensure
+    File.unlink(counter) if counter && File.exist?(counter)
+    File.unlink(script) if script && File.exist?(script)
+  end
+
+  # Regression for #76: sub_workflow's child trace is concat'd into the parent
+  # task's attempt_log via core_step_invoker. Under :processes that concat
+  # happens in the forked child's memory, so the namespaced child entries must
+  # ride back on the same pipe roundtrip the retry test exercises.
+  def test_processes_strategy_preserves_sub_workflow_passthrough_trace
+    child = DAG::Workflow::Loader.from_hash(
+      analyze: {type: :exec, command: "echo analyzed"},
+      summarize: {type: :exec, command: "echo summarized", depends_on: [:analyze]}
+    )
+
+    parent = DAG::Workflow::Loader.from_hash(
+      fetch: {type: :exec, command: "echo hello"},
+      process: {type: :sub_workflow, definition: child, depends_on: [:fetch]}
+    )
+
+    result = DAG::Workflow::Runner.new(parent, parallel: :processes).call
+
+    assert result.success?, "expected success (got #{result.error.inspect})"
+    names = result.trace.map(&:name)
+    assert_includes names, :"process.analyze"
+    assert_includes names, :"process.summarize"
   end
 
   private
