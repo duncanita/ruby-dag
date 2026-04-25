@@ -116,3 +116,15 @@ Adding a duplicate edge is **not** an error — `add_edge` is idempotent and ret
 ## Dumper round-trip property
 
 `Loader.from_yaml(Dumper.to_yaml(definition))` produces an equivalent Definition for all serializable step types. This includes edge metadata via expanded `depends_on` format. Tested against every example YAML.
+
+## Roadmap board hygiene
+
+Issues for this repo are tracked on GitHub Project #2 (`ruby-dag Roadmap v3.4`, project_id `PVT_kwHOAAsSz84BVsbw`). The board has a `Roadmap Status` field with options `Backlog | Ready | In Progress | Blocked | Done` (field_id `PVTSSF_lAHOAAsSz84BVsbwzhRGfOs`). **Keep this field current at every transition** — it is the source of truth for "what is in progress, what is ready to pick up, what is blocked, what is done".
+
+- New issues triaged but not scheduled → `Backlog` (`92bab679`).
+- Issue reviewed and a plan written → `Ready` (`cbe5fa16`).
+- PR opened or work actively in progress → `In Progress` (`17602557`).
+- Work paused on an external dependency or another issue → `Blocked` (`77d114c8`); also fill the `Blocked By` field.
+- PR merged → `Done` (`0372fd32`) (also set `Status = Done`).
+
+Update via `gh project item-edit --id <ITEM_ID> --field-id PVTSSF_lAHOAAsSz84BVsbwzhRGfOs --project-id PVT_kwHOAAsSz84BVsbw --single-select-option-id <OPT_ID>`. Look up `ITEM_ID` with `gh project item-list 2 --owner duncanita --format json | jq '.items[] | select(.content.number == <N>) | .id'`.

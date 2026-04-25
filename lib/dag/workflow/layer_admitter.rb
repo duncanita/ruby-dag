@@ -3,6 +3,8 @@
 module DAG
   module Workflow
     class LayerAdmitter
+      PREDECESSOR_BLOCKING_STATUSES = %i[waiting paused blocked_upstream].freeze
+
       def initialize(graph:, registry:, clock:, execution_persistence:, dependency_input_resolver:, root_input:, task_builder:)
         @graph = graph
         @registry = registry
@@ -17,9 +19,21 @@ module DAG
         runnable = []
         immediate_results = []
         waiting_nodes = []
+        blocked_results = []
 
         layer.each do |name|
-          next unless dependency_outputs_ready?(name, previous_outputs)
+          admission, blocked_by = predecessor_admission_status(name, previous_outputs, statuses)
+          if admission == :blocked_upstream
+            blocked_results << BlockedResult.new(
+              name: name,
+              predecessor: blocked_by[0],
+              predecessor_status: blocked_by[1],
+              input_keys: @dependency_input_resolver.input_keys_for(name: name, step: @registry[name])
+            )
+            statuses[name] = :blocked_upstream
+            next
+          end
+          next unless admission == :ready
 
           step = @registry[name]
           schedule_policy = SchedulePolicy.new(step, clock: @clock)
@@ -34,6 +48,7 @@ module DAG
             elsif schedule_policy.waiting?
               waiting_nodes << @execution_persistence.node_path_for(name)
               @execution_persistence.persist_waiting_node(name)
+              statuses[name] = :waiting
             elsif schedule_policy.expired?
               result = schedule_policy.deadline_exceeded_result(name)
               @execution_persistence.persist_expired_schedule_node(name, result.error)
@@ -60,6 +75,7 @@ module DAG
           rescue DependencyInputResolver::WaitingForDependencyError
             waiting_nodes << @execution_persistence.node_path_for(name)
             @execution_persistence.persist_waiting_node(name)
+            statuses[name] = :waiting
           rescue DependencyInputResolver::ResolverError => e
             immediate_results << failure_result(name, :cross_workflow_resolution_failed, e.message,
               workflow_id: e.workflow_id, node_name: e.node_name, version: e.version)
@@ -74,7 +90,12 @@ module DAG
           end
         end
 
-        LayerPartition.new(runnable: runnable, immediate_results: immediate_results, waiting_nodes: waiting_nodes)
+        LayerPartition.new(
+          runnable: runnable,
+          immediate_results: immediate_results,
+          waiting_nodes: waiting_nodes,
+          blocked_results: blocked_results
+        )
       end
 
       private
@@ -97,8 +118,23 @@ module DAG
 
       def record_skip_result = Success.new(value: nil)
 
-      def dependency_outputs_ready?(name, outputs)
-        @graph.each_predecessor(name).all? { |dep| outputs.key?(dep) }
+      def predecessor_admission_status(name, outputs, statuses)
+        blocked_by = nil
+        not_ready = false
+        @graph.each_predecessor(name) do |dep|
+          next if outputs.key?(dep)
+
+          dep_status = statuses[dep]
+          if PREDECESSOR_BLOCKING_STATUSES.include?(dep_status)
+            blocked_by ||= [dep, dep_status]
+          else
+            not_ready = true
+          end
+        end
+        return [:blocked_upstream, blocked_by] if blocked_by
+        return [:not_ready_yet, nil] if not_ready
+
+        [:ready, nil]
       end
 
       def build_condition_context(name, step, outputs, statuses)

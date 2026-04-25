@@ -26,6 +26,22 @@ module DAG
         end
       end
 
+      def record_blocked_results(entries:, layer_index:, trace:, node_path_for:)
+        entries.each do |entry|
+          trace << TraceEntry.new(
+            name: trace_name_for(node_path_for.call(entry.name)),
+            layer: layer_index,
+            started_at: nil,
+            finished_at: nil,
+            duration_ms: 0,
+            status: :blocked_upstream,
+            input_keys: entry.input_keys,
+            attempt: 1,
+            retried: false
+          )
+        end
+      end
+
       def build_trace_entries_for_task(task:, layer_index:, result:, started_at:, finished_at:, duration_ms:, lifecycle_payload:)
         if task.attempt_log.empty?
           return [] if lifecycle_payload

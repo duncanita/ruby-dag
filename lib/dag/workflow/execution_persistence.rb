@@ -53,6 +53,17 @@ module DAG
         )
       end
 
+      def persist_paused_node(name)
+        return unless enabled?
+
+        @execution_store.set_node_state(
+          workflow_id: @workflow_id,
+          node_path: node_path_for(name),
+          state: :paused,
+          metadata: {}
+        )
+      end
+
       def persist_expired_schedule_node(name, error)
         persist_failed_schedule_node(name, error)
       end

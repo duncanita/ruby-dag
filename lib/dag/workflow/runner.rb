@@ -293,6 +293,12 @@ module DAG
           trace: trace,
           node_path_for: method(:node_path_for)
         )
+        @trace_recorder.record_blocked_results(
+          entries: partition.blocked_results,
+          layer_index: layer_index,
+          trace: trace,
+          node_path_for: method(:node_path_for)
+        )
         task_waiting_nodes, paused = run_tasks(partition.runnable, layer_index, trace, results, statuses)
         waiting_nodes = partition.waiting_nodes + task_waiting_nodes
 

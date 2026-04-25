@@ -564,4 +564,179 @@ class SubWorkflowTest < Minitest::Test
     assert_equal :process, result.error[:failed_node]
     assert_equal :sub_workflow_input_missing, result.error[:step_error][:code]
   end
+
+  def test_sub_workflow_waiting_records_blocked_upstream_for_single_downstream
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
+
+    parent = parent_with_waiting_child_and(downstream: {
+      finalize: {
+        type: :ruby,
+        depends_on: [:process],
+        callable: ->(input) { DAG::Success.new(value: "finalized:#{input[:process]}") }
+      }
+    })
+
+    result = DAG::Workflow::Runner.new(parent, parallel: false, clock: clock).call
+
+    assert_equal :waiting, result.status
+    refute result.outputs.key?(:process)
+    refute result.outputs.key?(:finalize)
+
+    finalize_entry = result.trace.find { |e| e.name == :finalize }
+    refute_nil finalize_entry, "expected blocked_upstream trace entry for :finalize"
+    assert_equal :blocked_upstream, finalize_entry.status
+  end
+
+  def test_sub_workflow_waiting_propagates_blocked_upstream_transitively
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
+
+    parent = parent_with_waiting_child_and(downstream: {
+      middle: {
+        type: :ruby,
+        depends_on: [:process],
+        callable: ->(input) { DAG::Success.new(value: input[:process]) }
+      },
+      tail: {
+        type: :ruby,
+        depends_on: [:middle],
+        callable: ->(input) { DAG::Success.new(value: input[:middle]) }
+      }
+    })
+
+    result = DAG::Workflow::Runner.new(parent, parallel: false, clock: clock).call
+
+    assert_equal :waiting, result.status
+    refute result.outputs.key?(:middle)
+    refute result.outputs.key?(:tail)
+
+    statuses = result.trace.to_h { |e| [e.name, e.status] }
+    assert_equal :blocked_upstream, statuses[:middle]
+    assert_equal :blocked_upstream, statuses[:tail]
+  end
+
+  def test_sub_workflow_waiting_blocks_only_dependent_branch
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
+
+    parent = parent_with_waiting_child_and(downstream: {
+      blocked_branch: {
+        type: :ruby,
+        depends_on: [:process],
+        callable: ->(input) { DAG::Success.new(value: input[:process]) }
+      },
+      independent_root: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "indep") }
+      },
+      independent_leaf: {
+        type: :ruby,
+        depends_on: [:independent_root],
+        callable: ->(input) { DAG::Success.new(value: "leaf:#{input[:independent_root]}") }
+      }
+    })
+
+    result = DAG::Workflow::Runner.new(parent, parallel: false, clock: clock).call
+
+    assert_equal :waiting, result.status
+    assert_equal "indep", result.outputs[:independent_root].value
+    assert_equal "leaf:indep", result.outputs[:independent_leaf].value
+    refute result.outputs.key?(:blocked_branch)
+
+    blocked_entry = result.trace.find { |e| e.name == :blocked_branch }
+    refute_nil blocked_entry
+    assert_equal :blocked_upstream, blocked_entry.status
+  end
+
+  def test_sub_workflow_waiting_blocks_diamond_join_when_one_branch_waits
+    clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
+    future_time = Time.utc(2026, 4, 15, 10, 0, 0)
+
+    child = DAG::Workflow::Loader.from_hash(
+      gated: {
+        type: :ruby,
+        schedule: {not_before: future_time},
+        callable: ->(_input) { DAG::Success.new(value: "later") }
+      }
+    )
+
+    parent = DAG::Workflow::Loader.from_hash(
+      seed: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "seed") }
+      },
+      process: {
+        type: :sub_workflow,
+        definition: child,
+        depends_on: [:seed]
+      },
+      sibling: {
+        type: :ruby,
+        depends_on: [:seed],
+        callable: ->(input) { DAG::Success.new(value: "sibling:#{input[:seed]}") }
+      },
+      join: {
+        type: :ruby,
+        depends_on: [:process, :sibling],
+        callable: ->(input) { DAG::Success.new(value: "joined") }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(parent, parallel: false, clock: clock).call
+
+    assert_equal :waiting, result.status
+    assert_equal "seed", result.outputs[:seed].value
+    assert_equal "sibling:seed", result.outputs[:sibling].value
+    refute result.outputs.key?(:join)
+
+    join_entry = result.trace.find { |e| e.name == :join }
+    refute_nil join_entry
+    assert_equal :blocked_upstream, join_entry.status
+  end
+
+  def test_lifecycle_paused_blocks_downstream_when_pause_flag_not_set_externally
+    fake_paused = ->(_input) do
+      DAG::Success.new(value: {
+        __sub_workflow_status__: :paused,
+        __sub_workflow_trace__: []
+      })
+    end
+
+    parent = DAG::Workflow::Loader.from_hash(
+      process: {
+        type: :ruby,
+        callable: fake_paused
+      },
+      finalize: {
+        type: :ruby,
+        depends_on: [:process],
+        callable: ->(input) { DAG::Success.new(value: "finalized:#{input[:process]}") }
+      }
+    )
+
+    result = DAG::Workflow::Runner.new(parent, parallel: false).call
+
+    assert_equal :paused, result.status
+    refute result.outputs.key?(:process)
+    refute result.outputs.key?(:finalize)
+
+    finalize_entry = result.trace.find { |e| e.name == :finalize }
+    refute_nil finalize_entry, "expected blocked_upstream trace entry for :finalize"
+    assert_equal :blocked_upstream, finalize_entry.status
+  end
+
+  private
+
+  def parent_with_waiting_child_and(downstream:)
+    future_time = Time.utc(2026, 4, 15, 10, 0, 0)
+
+    child = DAG::Workflow::Loader.from_hash(
+      gated: {
+        type: :ruby,
+        schedule: {not_before: future_time},
+        callable: ->(_input) { DAG::Success.new(value: "later") }
+      }
+    )
+
+    nodes = {process: {type: :sub_workflow, definition: child}}.merge(downstream)
+    DAG::Workflow::Loader.from_hash(**nodes)
+  end
 end
