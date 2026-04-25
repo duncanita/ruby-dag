@@ -372,4 +372,53 @@ class DependencyInputResolverTest < Minitest::Test
     assert_equal "value-of-x", context[:x][:value]
     refute context.key?(:y)
   end
+
+  def test_callable_input_for_keys_local_aliased_dep_by_input_key
+    definition = build_test_workflow(
+      source: {type: :ruby, callable: ->(_input) { DAG::Success.new(value: "scan") }},
+      consumer: {
+        type: :ruby,
+        depends_on: [{from: :source, as: :first}],
+        callable: ->(input) { DAG::Success.new(value: input[:first]) }
+      }
+    )
+    resolver = DAG::Workflow::DependencyInputResolver.new(
+      graph: definition.graph, execution_store: nil, workflow_id: nil
+    )
+
+    lazy = resolver.callable_input_for(
+      name: :consumer,
+      step: definition.registry[:consumer],
+      outputs: {source: DAG::Success.new(value: "scan-1")},
+      statuses: {source: :success}
+    )
+
+    assert_equal "scan-1", lazy[:first]
+    assert lazy.key?(:first)
+    refute lazy.key?(:source)
+  end
+
+  def test_condition_context_for_keys_local_aliased_dep_by_input_key
+    definition = build_test_workflow(
+      source: {type: :ruby, callable: ->(_input) { DAG::Success.new(value: "scan") }},
+      consumer: {
+        type: :ruby,
+        depends_on: [{from: :source, as: :first}],
+        callable: ->(input) { DAG::Success.new(value: input[:first]) }
+      }
+    )
+    resolver = DAG::Workflow::DependencyInputResolver.new(
+      graph: definition.graph, execution_store: nil, workflow_id: nil
+    )
+
+    context = resolver.condition_context_for(
+      name: :consumer,
+      step: definition.registry[:consumer],
+      outputs: {source: DAG::Success.new(value: "scan-1")},
+      statuses: {source: :success}
+    )
+
+    assert_equal({value: "scan-1", status: :success}, context[:first])
+    refute context.key?(:source)
+  end
 end

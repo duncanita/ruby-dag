@@ -203,7 +203,7 @@ module DAG
       def local_condition_context(name, outputs, statuses)
         local_dependencies_for(name).to_h do |dependency|
           status = (dependency.version == :latest) ? statuses.fetch(dependency.name) : :success
-          [dependency.name, {
+          [dependency.input_key, {
             value: resolve_local_dependency_value(dependency, outputs),
             status: status
           }]

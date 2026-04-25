@@ -130,9 +130,14 @@ module DAG
       end
 
       def self.allowed_condition_inputs(graph, step, node_name:)
-        graph.predecessors(node_name) + Array(step.config[:external_dependencies]).map do |dependency|
+        local_keys = graph.each_predecessor(node_name).map do |dependency_name|
+          metadata = graph.edge_metadata(dependency_name, node_name)
+          (metadata[:as] || dependency_name).to_sym
+        end
+        external_keys = Array(step.config[:external_dependencies]).map do |dependency|
           (dependency[:as] || dependency[:node]).to_sym
         end
+        local_keys + external_keys
       end
 
       def self.duplicate_effective_input_key_errors(graph, step, node_name:)

@@ -358,7 +358,7 @@ class LayerAdmitterTest < Minitest::Test
         resume_key: "consumer-v1",
         schedule: {ttl: 1},
         depends_on: [{from: :source, version: 1, as: :historical}],
-        run_if: {from: :source, value: {equals: "scan-1"}},
+        run_if: {from: :historical, value: {equals: "scan-1"}},
         callable: ->(input) { DAG::Success.new(value: input[:historical]) }
       }
     )
@@ -408,7 +408,7 @@ class LayerAdmitterTest < Minitest::Test
         resume_key: "consumer-v1",
         schedule: {ttl: 1},
         depends_on: [{from: :source, version: 1, as: :historical}],
-        run_if: ->(input) { input[:source] == "scan-1" },
+        run_if: ->(input) { input[:historical] == "scan-1" },
         callable: ->(input) do
           consumer_calls += 1
           DAG::Success.new(value: input[:historical])
