@@ -6,12 +6,10 @@ module DAG
       # Abstract base for parallel-execution strategies.
       #
       # Subclasses must implement #execute(tasks) { |outcome| ... } where
-      # `outcome` is a `StepOutcome` carrying the task name, the
-      # DAG::Result the executor produced, and the wall-clock boundaries.
-      # The block is called once per task in **completion order**, not
-      # submission order. All five fields must be populated even on
-      # failure (use the wall-clock at failure time and duration_ms = 0
-      # if you don't have real timings).
+      # `outcome` is a `StepOutcome`. The block is called once per task in
+      # **completion order**, not submission order. On failure, populate
+      # started_at/finished_at with the wall-clock at failure time and
+      # duration_ms = 0.
       #
       # Subclasses MUST also declare a `STRATEGY_SYM` constant (`:threads` /
       # `:sequential` / `:processes`) so `run_task` can stamp it into error
