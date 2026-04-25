@@ -70,8 +70,8 @@ module DAG
               rd.close
               status = blocking_waitpid(pid)
               payload = decode_payload(task, info[:buffer], status)
-              task.attempt_log.concat(payload.attempt_log) unless payload.attempt_log.empty?
-              yield payload.name, payload.result, payload.started_at, payload.finished_at, payload.duration_ms
+              payload.merge_into(task)
+              yield(*payload.to_yield)
               completed += 1
             end
           end
