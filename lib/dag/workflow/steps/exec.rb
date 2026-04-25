@@ -58,7 +58,24 @@ module DAG
             })
           end
 
-          _, status = Process.waitpid2(pid)
+          # A host SIGCHLD handler (Puma, Sidekiq, etc.) can reap our child
+          # before we waitpid2 it. The exec body completed and we already
+          # drained stdout/stderr — surface a structured failure rather than
+          # letting ECHILD escape as :step_raised.
+          status =
+            begin
+              _, st = Process.waitpid2(pid)
+              st
+            rescue Errno::ECHILD
+              pid = nil
+              return Failure.new(error: {
+                code: :exec_status_unavailable,
+                message: "exec child reaped externally; exit status unavailable",
+                command: command,
+                stdout: stdout.strip,
+                stderr: stderr.strip
+              })
+            end
           pid = nil
           build_result(command, stdout, stderr, status)
         ensure
