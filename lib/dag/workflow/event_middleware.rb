@@ -18,6 +18,7 @@ module DAG
 
       def emit_events(step, execution, result)
         return unless result.success?
+        return if lifecycle_payload?(result)
 
         event_bus = @event_bus || execution.event_bus
         return unless event_bus&.respond_to?(:publish)
@@ -55,6 +56,15 @@ module DAG
         return {} if metadata_builder.nil?
 
         metadata_builder.call(result)
+      end
+
+      # Sub_workflow paused/waiting results carry magic-key payloads that
+      # are Runner's internal protocol, not user-facing values. Mirrors
+      # AttemptTraceMiddleware#lifecycle_payload?.
+      def lifecycle_payload?(result)
+        return false unless result.success? && result.value.is_a?(Hash)
+
+        %i[waiting paused].include?(result.value[:__sub_workflow_status__])
       end
     end
   end
