@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "digest"
-require "yaml"
 
 module DAG
   module Workflow
@@ -21,32 +20,47 @@ module DAG
           }
           data[:root_input] = normalize_root_input(root_input) unless root_input.empty?
 
-          Digest::SHA256.hexdigest(YAML.dump(data))
+          Digest::SHA256.hexdigest(canonical_encode(data))
         end
 
         private
 
+        # Deterministic, alias-free serializer. Hashes are key-sorted; equal
+        # subtrees always serialize identically regardless of object identity,
+        # so two structurally-equivalent inputs cannot produce different
+        # digests because of shared-vs-fresh references in the source tree.
+        def canonical_encode(value)
+          case value
+          when Hash
+            "{" + value.sort_by { |k, _| k.to_s }.map { |k, v| "#{canonical_encode(k)}=>#{canonical_encode(v)}" }.join(",") + "}"
+          when Array
+            "[" + value.map { |v| canonical_encode(v) }.join(",") + "]"
+          when Symbol
+            ":#{value}"
+          when String
+            value.dump
+          when Integer, Float, TrueClass, FalseClass, NilClass
+            value.inspect
+          else
+            raise SerializationError, "non-canonical fingerprint value: #{value.inspect} (#{value.class})"
+          end
+        end
+
         def normalize_root_input(root_input)
           root_input.each_with_object({}) do |(key, nested), hash|
             hash[key.to_sym] = normalize_root_input_value(nested)
-          end.sort_by { |key, _| key.to_s }.to_h
+          end
         end
 
         def normalize_root_input_value(value)
           case value
           when Hash
-            value.each_with_object({}) do |(key, nested), hash|
-              hash[key] = normalize_root_input_value(nested)
-            end.sort_by { |key, _| root_input_key_sort_token(key) }.to_h
+            value.transform_values { |nested| normalize_root_input_value(nested) }
           when Array
             value.map { |nested| normalize_root_input_value(nested) }
           else
             value
           end
-        end
-
-        def root_input_key_sort_token(key)
-          [key.class.name, key.inspect]
         end
 
         def fingerprint_step(step, source_path: nil)
@@ -85,7 +99,7 @@ module DAG
           when Hash
             value.each_with_object({}) do |(key, nested), hash|
               hash[key.to_sym] = normalize(nested)
-            end.sort_by { |key, _| key.to_s }.to_h
+            end
           when Array
             value.map { |nested| normalize(nested) }
           else
