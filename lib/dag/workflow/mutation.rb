@@ -62,7 +62,8 @@ module DAG
 
         root = root_node.to_sym
         removed = [root]
-        validate_reconnect_aliases!(definition.graph, root, reconnect)
+        normalized_reconnect = normalize_reconnect_alias_entries(definition.graph, root, reconnect)
+        validate_reconnect_aliases!(definition.graph, root, normalized_reconnect)
 
         new_graph = definition.graph.with_subtree_replaced(
           root: root,
@@ -72,18 +73,21 @@ module DAG
         new_registry = definition.registry.dup
         removed.each { |name| new_registry.remove(name) }
         replacement.registry.steps.each { |step| new_registry.register(step) }
+        rewrite_reconnected_run_if_refs!(new_registry, definition.graph, root, normalized_reconnect)
 
         Definition.new(graph: new_graph, registry: new_registry, source_path: definition.source_path)
       end
 
       private
 
-      def validate_reconnect_aliases!(graph, root, reconnect)
-        aliases_by_target = Hash.new { |hash, key| hash[key] = Set.new }
-        normalized_reconnect = Array(reconnect).map do |descriptor|
+      def normalize_reconnect_alias_entries(graph, root, reconnect)
+        Array(reconnect).map do |descriptor|
           normalize_reconnect_alias_entry(descriptor, graph: graph, root: root)
         end
+      end
 
+      def validate_reconnect_aliases!(graph, root, normalized_reconnect)
+        aliases_by_target = Hash.new { |hash, key| hash[key] = Set.new }
         normalized_reconnect.each do |entry|
           target = entry.fetch(:to)
           aliases = aliases_by_target[target]
@@ -106,6 +110,38 @@ module DAG
 
           aliases_by_target[target] << alias_key
         end
+      end
+
+      def rewrite_reconnected_run_if_refs!(registry, graph, root, normalized_reconnect)
+        reconnects_by_target = normalized_reconnect.group_by { |entry| entry.fetch(:to) }
+
+        graph.each_successor(root) do |target|
+          next unless registry.key?(target)
+
+          step = registry[target]
+          run_if = step.config[:run_if]
+          next unless Condition.referenced_from_keys(run_if).include?(root)
+
+          reconnects = reconnects_by_target.fetch(target, [])
+          raise_stale_run_if_reconnect_error!(target, root) if reconnects.empty?
+          raise_ambiguous_run_if_reconnect_error!(target, root, reconnects) if reconnects.size > 1
+
+          rewritten = Condition.rename_from(run_if, root, reconnects.first.fetch(:from))
+          registry.replace(Step.new(name: step.name, type: step.type, **step.config.merge(run_if: rewritten)))
+        end
+      end
+
+      def raise_stale_run_if_reconnect_error!(target, root)
+        raise ArgumentError,
+          "subtree replacement would leave node #{target} run_if referencing removed node #{root}; " \
+          "reconnect #{root} to #{target} or update run_if before replacing the subtree"
+      end
+
+      def raise_ambiguous_run_if_reconnect_error!(target, root, reconnects)
+        leaves = reconnects.map { |entry| entry.fetch(:from) }.sort
+        raise ArgumentError,
+          "ambiguous run_if rewrite for node #{target}: removed node #{root} reconnects through " \
+          "multiple replacement leaves #{leaves.inspect}"
       end
 
       def normalize_reconnect_alias_entry(descriptor, graph:, root:)

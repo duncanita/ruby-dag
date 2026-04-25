@@ -103,6 +103,187 @@ class MutationTest < Minitest::Test
     refute definition.graph.node?(:normalize)
   end
 
+  def test_workflow_replace_subtree_rewrites_downstream_declarative_run_if
+    definition = build_test_workflow(
+      source: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "payload") }
+      },
+      process: {
+        type: :ruby,
+        depends_on: [:source],
+        callable: ->(input) { DAG::Success.new(value: input[:source].upcase) }
+      },
+      report: {
+        type: :ruby,
+        depends_on: [:process],
+        run_if: {from: :process, status: :success},
+        callable: ->(input) { DAG::Success.new(value: "report:#{input[:summarize]}") }
+      }
+    )
+
+    replacement = build_test_workflow(
+      summarize: {
+        type: :ruby,
+        callable: ->(input) { DAG::Success.new(value: input[:source].downcase) }
+      }
+    )
+
+    mutated = DAG::Workflow.replace_subtree(
+      definition,
+      root_node: :process,
+      replacement: replacement,
+      reconnect: [{from: :summarize, to: :report}]
+    )
+
+    assert_equal :summarize, mutated.step(:report).config[:run_if][:from]
+
+    result = DAG::Workflow::Runner.new(mutated, parallel: false).call
+
+    assert result.success?
+    assert_equal "report:payload", result.outputs[:report].value
+  end
+
+  def test_workflow_replace_subtree_rewrites_nested_downstream_declarative_run_if
+    definition = build_test_workflow(
+      source: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "payload") }
+      },
+      config: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: "enabled") }
+      },
+      process: {
+        type: :ruby,
+        depends_on: [:source],
+        callable: ->(input) { DAG::Success.new(value: input[:source].upcase) }
+      },
+      report: {
+        type: :ruby,
+        depends_on: [:process, :config],
+        run_if: {
+          all: [
+            {from: :process, status: :success},
+            {not: {from: :config, value: {equals: "disabled"}}}
+          ]
+        },
+        callable: ->(input) { DAG::Success.new(value: "#{input[:summary]}|#{input[:config]}") }
+      }
+    )
+
+    replacement = build_test_workflow(
+      summarize: {
+        type: :ruby,
+        callable: ->(input) { DAG::Success.new(value: input[:source].upcase) }
+      }
+    )
+
+    mutated = DAG::Workflow.replace_subtree(
+      definition,
+      root_node: :process,
+      replacement: replacement,
+      reconnect: [{from: :summarize, to: :report, metadata: {as: :summary}}]
+    )
+
+    run_if = mutated.step(:report).config[:run_if]
+    assert_equal :summarize, run_if[:all][0][:from]
+    assert_equal :config, run_if[:all][1][:not][:from]
+
+    result = DAG::Workflow::Runner.new(mutated, parallel: false).call
+
+    assert result.success?
+    assert_equal "PAYLOAD|enabled", result.outputs[:report].value
+  end
+
+  def test_workflow_replace_subtree_rejects_ambiguous_downstream_run_if_rewrite
+    definition = build_test_workflow(
+      source: {type: :ruby, callable: ->(_) { DAG::Success.new(value: "payload") }},
+      process: {
+        type: :ruby,
+        depends_on: [:source],
+        callable: ->(input) { DAG::Success.new(value: input[:source]) }
+      },
+      report: {
+        type: :ruby,
+        depends_on: [:process],
+        run_if: {from: :process, status: :success},
+        callable: ->(_) { DAG::Success.new(value: "report") }
+      }
+    )
+
+    replacement = build_test_workflow(
+      normalize: {
+        type: :ruby,
+        callable: ->(input) { DAG::Success.new(value: input[:source]) }
+      },
+      left: {
+        type: :ruby,
+        depends_on: [:normalize],
+        callable: ->(input) { DAG::Success.new(value: input[:normalize]) }
+      },
+      right: {
+        type: :ruby,
+        depends_on: [:normalize],
+        callable: ->(input) { DAG::Success.new(value: input[:normalize]) }
+      }
+    )
+
+    error = assert_raises(ArgumentError) do
+      DAG::Workflow.replace_subtree(
+        definition,
+        root_node: :process,
+        replacement: replacement,
+        reconnect: [
+          {from: :left, to: :report},
+          {from: :right, to: :report}
+        ]
+      )
+    end
+
+    assert_includes error.message, "ambiguous run_if rewrite"
+    assert_includes error.message, "report"
+    assert_includes error.message, "process"
+    assert_includes error.message, "left"
+    assert_includes error.message, "right"
+  end
+
+  def test_workflow_replace_subtree_rejects_stale_downstream_run_if_without_reconnect
+    definition = build_test_workflow(
+      source: {type: :ruby, callable: ->(_) { DAG::Success.new(value: "payload") }},
+      process: {
+        type: :ruby,
+        depends_on: [:source],
+        callable: ->(input) { DAG::Success.new(value: input[:source]) }
+      },
+      report: {
+        type: :ruby,
+        depends_on: [:process],
+        run_if: {from: :process, status: :success},
+        callable: ->(_) { DAG::Success.new(value: "report") }
+      }
+    )
+
+    replacement = build_test_workflow(
+      summarize: {
+        type: :ruby,
+        callable: ->(input) { DAG::Success.new(value: input[:source]) }
+      }
+    )
+
+    error = assert_raises(ArgumentError) do
+      DAG::Workflow.replace_subtree(
+        definition,
+        root_node: :process,
+        replacement: replacement
+      )
+    end
+
+    assert_includes error.message, "run_if referencing removed node"
+    assert_includes error.message, "report"
+    assert_includes error.message, "process"
+  end
+
   def test_workflow_replace_subtree_preserves_unaffected_downstream_inputs
     definition = build_test_workflow(
       source: {
