@@ -30,12 +30,6 @@ module DAG
         READ_CHUNK = 16_384
         KILL_GRACE_SECONDS = Steps::Exec::KILL_GRACE_SECONDS
 
-        # The unit of data the child ships back over the pipe. Replaces the
-        # bare positional tuple so each field is named at the call sites that
-        # decode and consume it (and so future fields can be added without
-        # invisibly shifting positional indexes downstream).
-        ChildPayload = Data.define(:name, :result, :started_at, :finished_at, :duration_ms, :attempt_log)
-
         def execute(tasks)
           in_flight = {}    # pid => task
           pipes = {}        # IO  => {pid:, buffer:}
