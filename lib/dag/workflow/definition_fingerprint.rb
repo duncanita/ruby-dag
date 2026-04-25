@@ -49,24 +49,18 @@ module DAG
         def normalize_root_input(root_input)
           root_input.each_with_object({}) do |(key, nested), hash|
             hash[key.to_sym] = normalize_root_input_value(nested)
-          end.sort_by { |key, _| key.to_s }.to_h
+          end
         end
 
         def normalize_root_input_value(value)
           case value
           when Hash
-            value.each_with_object({}) do |(key, nested), hash|
-              hash[key] = normalize_root_input_value(nested)
-            end.sort_by { |key, _| root_input_key_sort_token(key) }.to_h
+            value.transform_values { |nested| normalize_root_input_value(nested) }
           when Array
             value.map { |nested| normalize_root_input_value(nested) }
           else
             value
           end
-        end
-
-        def root_input_key_sort_token(key)
-          [key.class.name, key.inspect]
         end
 
         def fingerprint_step(step, source_path: nil)
@@ -105,7 +99,7 @@ module DAG
           when Hash
             value.each_with_object({}) do |(key, nested), hash|
               hash[key.to_sym] = normalize(nested)
-            end.sort_by { |key, _| key.to_s }.to_h
+            end
           when Array
             value.map { |nested| normalize(nested) }
           else

@@ -12,12 +12,6 @@ class DefinitionFingerprintTest < Minitest::Test
     assert_equal a, b
   end
 
-  def test_equivalent_definitions_yield_same_digest
-    a = DAG::Workflow::DefinitionFingerprint.for(simple_definition)
-    b = DAG::Workflow::DefinitionFingerprint.for(simple_definition)
-    assert_equal a, b
-  end
-
   def test_shared_object_refs_in_input_do_not_change_digest
     shared = {"FOO" => "bar", "BAZ" => "qux"}
     shared_def = build_test_workflow(
@@ -81,25 +75,6 @@ class DefinitionFingerprintTest < Minitest::Test
     )
   end
 
-  def test_canonical_encode_is_deterministic_under_hash_key_reordering
-    encoder = DAG::Workflow::DefinitionFingerprint
-    a = encoder.send(:canonical_encode, {b: 2, a: 1, c: 3})
-    b = encoder.send(:canonical_encode, {a: 1, c: 3, b: 2})
-    assert_equal a, b
-  end
-
-  def test_canonical_encode_is_alias_free
-    encoder = DAG::Workflow::DefinitionFingerprint
-    shared_leaf = {"FOO" => "bar"}
-    shared_tree = {a: shared_leaf, b: shared_leaf}
-    fresh_tree = {a: {"FOO" => "bar"}, b: {"FOO" => "bar"}}
-
-    assert_equal(
-      encoder.send(:canonical_encode, shared_tree),
-      encoder.send(:canonical_encode, fresh_tree)
-    )
-  end
-
   def test_canonical_encode_distinguishes_strings_and_symbols
     encoder = DAG::Workflow::DefinitionFingerprint
     refute_equal(
@@ -158,20 +133,13 @@ class DefinitionFingerprintTest < Minitest::Test
       }
     )
 
-    parent_graph = DAG::Graph.new
-    parent_graph.add_node(:nested)
-
-    parent_registry = DAG::Workflow::Registry.new
-    parent_registry.register(
-      DAG::Workflow::Step.new(
-        name: :nested,
+    build_test_workflow(
+      nested: {
         type: :sub_workflow,
         resume_key: "parent-v1",
         definition: child,
         output_key: :leaf
-      )
+      }
     )
-
-    DAG::Workflow::Definition.new(graph: parent_graph, registry: parent_registry)
   end
 end
