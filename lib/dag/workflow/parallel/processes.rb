@@ -30,6 +30,12 @@ module DAG
         READ_CHUNK = 16_384
         KILL_GRACE_SECONDS = Steps::Exec::KILL_GRACE_SECONDS
 
+        # The unit of data the child ships back over the pipe. Replaces the
+        # bare positional tuple so each field is named at the call sites that
+        # decode and consume it (and so future fields can be added without
+        # invisibly shifting positional indexes downstream).
+        ChildPayload = Data.define(:name, :result, :started_at, :finished_at, :duration_ms, :attempt_log)
+
         def execute(tasks)
           in_flight = {}    # pid => task
           pipes = {}        # IO  => {pid:, buffer:}
@@ -69,10 +75,9 @@ module DAG
               pipes.delete(rd)
               rd.close
               status = blocking_waitpid(pid)
-              name, result, started_at, finished_at, duration_ms, child_attempt_log =
-                decode_payload(task, info[:buffer], status)
-              task.attempt_log.concat(child_attempt_log) if child_attempt_log&.any?
-              yield name, result, started_at, finished_at, duration_ms
+              payload = decode_payload(task, info[:buffer], status)
+              task.attempt_log.concat(payload.attempt_log) unless payload.attempt_log.empty?
+              yield payload.name, payload.result, payload.started_at, payload.finished_at, payload.duration_ms
               completed += 1
             end
           end
@@ -124,9 +129,13 @@ module DAG
           # task.attempt_log is mutated by the AttemptTraceMiddleware (and
           # sub_workflow passthrough) inside run_task. After fork() that
           # array lives only in the child, so we ship its post-run state
-          # alongside the timing tuple — the parent concats it back onto
+          # alongside the timing fields — the parent concats it back onto
           # the original Task before recording the trace.
-          wr.write(marshal_tuple(run_task(task), task.attempt_log))
+          name, result, started_at, finished_at, duration_ms = run_task(task)
+          payload = ChildPayload.new(name: name, result: result,
+            started_at: started_at, finished_at: finished_at,
+            duration_ms: duration_ms, attempt_log: task.attempt_log)
+          wr.write(marshal_payload(payload))
           wr.close
           exit!(0)
         rescue => e
@@ -137,7 +146,9 @@ module DAG
             crash = Result.exception_failure(:child_crashed, e,
               message: "child for #{task.name} crashed: #{e.message}",
               strategy: STRATEGY_SYM)
-            wr.write(Marshal.dump([task.name, crash, 0.0, 0.0, 0.0, task.attempt_log]))
+            wr.write(Marshal.dump(ChildPayload.new(name: task.name, result: crash,
+              started_at: 0.0, finished_at: 0.0, duration_ms: 0.0,
+              attempt_log: task.attempt_log)))
             wr.close
           rescue
             # ignore — parent will handle empty payload
@@ -145,19 +156,26 @@ module DAG
           exit!(1)
         end
 
-        # On a non-marshalable step return, the fallback Failure carries
-        # the original timing — the step really did run for that long, the
-        # only thing that failed was shipping the value back to the parent.
-        def marshal_tuple(tuple, attempt_log)
-          Marshal.dump(tuple + [attempt_log])
+        # On a non-marshalable step return, the fallback Failure carries the
+        # original timing — the step really did run for that long, the only
+        # thing that failed was shipping the value back to the parent. The
+        # AttemptTraceMiddleware has by then already pushed an
+        # AttemptTraceEntry with status: :success (true to the step's own
+        # behavior, but out of sync with the Failure we now ship), so demote
+        # that final entry to :failure to keep the trace status consistent
+        # with the result the parent yields.
+        def marshal_payload(payload)
+          Marshal.dump(payload)
         rescue TypeError => e
-          name, _, started_at, finished_at, duration_ms = tuple
           fallback = Failure.new(error: {
             code: :non_marshalable_result,
-            message: "step #{name} returned a non-marshalable value: #{e.message}",
+            message: "step #{payload.name} returned a non-marshalable value: #{e.message}",
             strategy: STRATEGY_SYM
           })
-          Marshal.dump([name, fallback, started_at, finished_at, duration_ms, attempt_log])
+          Marshal.dump(payload.with(
+            result: fallback,
+            attempt_log: demote_final_attempt_to_failure(payload.attempt_log)
+          ))
         end
         # :nocov:
 
@@ -183,7 +201,8 @@ module DAG
               message: "child for #{task.name} exited without writing a payload (#{detail})",
               strategy: STRATEGY_SYM
             })
-            return [task.name, result, now, now, 0.0, []]
+            return ChildPayload.new(name: task.name, result: result,
+              started_at: now, finished_at: now, duration_ms: 0.0, attempt_log: [])
           end
 
           Marshal.load(payload)
@@ -192,7 +211,22 @@ module DAG
           result = Result.exception_failure(:decode_failed, e,
             message: "failed to decode payload from #{task.name}: #{e.message}",
             strategy: STRATEGY_SYM)
-          [task.name, result, now, now, 0.0, []]
+          ChildPayload.new(name: task.name, result: result,
+            started_at: now, finished_at: now, duration_ms: 0.0, attempt_log: [])
+        end
+
+        # Rewrites the final AttemptTraceEntry in the log to status: :failure.
+        # Called only when the marshal fallback substitutes a Failure for a
+        # non-marshalable step return — preserves earlier attempts and any
+        # sub_workflow passthrough entries unchanged.
+        def demote_final_attempt_to_failure(attempt_log)
+          last_idx = attempt_log.rindex { |entry| entry.is_a?(AttemptTraceEntry) }
+          return attempt_log if last_idx.nil?
+          return attempt_log if attempt_log[last_idx].status == :failure
+
+          attempt_log.each_with_index.map do |entry, i|
+            (i == last_idx) ? entry.with(status: :failure) : entry
+          end
         end
 
         # Concurrent TERM -> grace -> KILL -> grace ladder. Signals go

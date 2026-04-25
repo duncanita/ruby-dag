@@ -506,12 +506,11 @@ class ParallelTest < Minitest::Test
   def test_processes_decode_payload_handles_corrupt_marshal_data
     strategy = DAG::Workflow::Parallel::Processes.new(max_parallelism: 1)
     fake_task = Struct.new(:name).new(:bad)
-    name, result, _started, _finished, _duration, child_attempt_log =
-      strategy.send(:decode_payload, fake_task, "definitely not marshal data")
-    assert_equal :bad, name
-    assert result.failure?
-    assert_equal :decode_failed, result.error[:code]
-    assert_equal [], child_attempt_log
+    payload = strategy.send(:decode_payload, fake_task, "definitely not marshal data")
+    assert_equal :bad, payload.name
+    assert payload.result.failure?
+    assert_equal :decode_failed, payload.result.error[:code]
+    assert_equal [], payload.attempt_log
   end
 
   def test_processes_waitpid_nohang_returns_true_for_already_reaped_pid
@@ -575,6 +574,74 @@ class ParallelTest < Minitest::Test
   ensure
     File.unlink(counter) if counter && File.exist?(counter)
     File.unlink(script) if script && File.exist?(script)
+  end
+
+  # Regression: when a step returns a non-marshalable value, the marshal
+  # fallback substitutes Failure(:non_marshalable_result). The
+  # AttemptTraceMiddleware has already pushed an AttemptTraceEntry tagged
+  # :success (the step itself succeeded), so the trace recorder would
+  # otherwise emit a :success entry alongside the :failure result — caught
+  # by Codex stop-hook review on PR #114.
+  def test_processes_strategy_marks_non_marshalable_result_as_failure_in_trace
+    defn = build_test_workflow(
+      proc_returner: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: ->(_x) { :unmarshalable }) }
+      }
+    )
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: :processes).call
+
+    assert result.failure?
+    assert_equal :proc_returner, result.error[:failed_node]
+    assert_equal :non_marshalable_result, result.error[:step_error][:code]
+
+    proc_entries = result.trace.select { |entry| entry.name == :proc_returner }
+    refute_empty proc_entries
+    proc_entries.each do |entry|
+      assert_equal :failure, entry.status,
+        "trace status must agree with the Failure shipped to the parent"
+    end
+  end
+
+  def test_processes_strategy_demote_final_attempt_to_failure_leaves_passthrough_alone
+    strategy = DAG::Workflow::Parallel::Processes.new(max_parallelism: 1)
+    success_attempt = DAG::Workflow::AttemptTraceEntry.new(
+      node_path: [:n], started_at: 0.0, finished_at: 1.0, duration_ms: 1.0,
+      status: :success, attempt: 1
+    )
+    passthrough = DAG::Workflow::TraceEntry.new(
+      name: :"child.leaf", layer: 0, started_at: 0.0, finished_at: 0.5,
+      duration_ms: 0.5, status: :success, input_keys: [], attempt: 1, retried: false
+    )
+
+    out = strategy.send(:demote_final_attempt_to_failure, [passthrough, success_attempt])
+
+    assert_equal :failure, out.last.status
+    assert_equal passthrough, out.first, "passthrough entries must be preserved verbatim"
+  end
+
+  def test_processes_strategy_demote_final_attempt_is_idempotent_when_already_failure
+    strategy = DAG::Workflow::Parallel::Processes.new(max_parallelism: 1)
+    failure_attempt = DAG::Workflow::AttemptTraceEntry.new(
+      node_path: [:n], started_at: 0.0, finished_at: 1.0, duration_ms: 1.0,
+      status: :failure, attempt: 1
+    )
+
+    out = strategy.send(:demote_final_attempt_to_failure, [failure_attempt])
+
+    assert_same failure_attempt, out.first, "no-op when the final attempt is already :failure"
+  end
+
+  def test_processes_strategy_demote_final_attempt_no_op_on_passthrough_only_log
+    strategy = DAG::Workflow::Parallel::Processes.new(max_parallelism: 1)
+    passthrough = DAG::Workflow::TraceEntry.new(
+      name: :"child.leaf", layer: 0, started_at: 0.0, finished_at: 0.5,
+      duration_ms: 0.5, status: :success, input_keys: [], attempt: 1, retried: false
+    )
+
+    out = strategy.send(:demote_final_attempt_to_failure, [passthrough])
+
+    assert_equal [passthrough], out
   end
 
   # Regression for #76: sub_workflow's child trace is concat'd into the parent
