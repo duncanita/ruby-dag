@@ -174,13 +174,7 @@ module DAG
           when :matches
             raise ValidationError, "#{context}.matches must be a non-empty string" unless expected.is_a?(String) && !expected.empty?
 
-            begin
-              verbose, $VERBOSE = $VERBOSE, nil
-              Regexp.new(expected)
-            ensure
-              $VERBOSE = verbose
-            end
-            {matches: expected}
+            {matches: Regexp.new(expected)}
             # :nocov: unreachable — key is pre-validated against VALUE_KEYS
           else raise "unexpected value predicate: #{key}"
             # :nocov:
@@ -242,11 +236,17 @@ module DAG
           when :nil
             actual.nil?
           when :matches
-            actual.is_a?(String) && Regexp.new(expected).match?(actual)
+            actual.is_a?(String) && regexp_for(expected).match?(actual)
             # :nocov: unreachable — predicate comes from normalized condition
           else raise "unexpected value predicate: #{predicate}"
             # :nocov:
           end
+        end
+
+        def regexp_for(value)
+          return value if value.is_a?(Regexp)
+
+          Regexp.new(value)
         end
 
         # Callables receive the same value-only input hash that Runner
@@ -268,9 +268,15 @@ module DAG
           node["status"] = condition[:status].to_s if condition.key?(:status)
           if condition.key?(:value)
             predicate, expected = condition[:value].first
-            node["value"] = {predicate.to_s => expected}
+            node["value"] = {predicate.to_s => dump_value(predicate, expected)}
           end
           node
+        end
+
+        def dump_value(predicate, expected)
+          return expected.source if predicate == :matches && expected.is_a?(Regexp)
+
+          expected
         end
 
         def map_tree(condition, all_key: :all, any_key: :any, not_key: :not, &block)

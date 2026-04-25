@@ -43,7 +43,20 @@ class ConditionTest < Minitest::Test
 
   def test_normalize_leaf_with_value_matches
     result = Condition.normalize({from: :a, value: {matches: "^prod"}})
-    assert_equal({from: :a, value: {matches: "^prod"}}, result)
+    assert_equal :a, result[:from]
+    assert_instance_of Regexp, result[:value][:matches]
+    assert_equal "^prod", result[:value][:matches].source
+  end
+
+  def test_normalize_leaf_with_value_matches_preserves_verbose
+    original = $VERBOSE
+    $VERBOSE = true
+
+    Condition.normalize({from: :a, value: {matches: "^prod"}})
+
+    assert_equal true, $VERBOSE
+  ensure
+    $VERBOSE = original
   end
 
   def test_normalize_leaf_with_status_and_value
@@ -270,7 +283,7 @@ class ConditionTest < Minitest::Test
 
   def test_normalize_rejects_invalid_regex
     error = assert_raises(DAG::ValidationError) do
-      Condition.normalize({from: :a, value: {matches: "[invalid"}})
+      Condition.normalize({from: :a, value: {matches: "("}})
     end
     assert_match(/valid regular expression/, error.message)
   end
@@ -360,13 +373,19 @@ class ConditionTest < Minitest::Test
   end
 
   def test_evaluate_value_matches
+    cond = Condition.normalize({from: :a, value: {matches: "^prod"}})
+    assert Condition.evaluate(cond, {a: {value: "production", status: :success}})
+    refute Condition.evaluate(cond, {a: {value: "staging", status: :success}})
+  end
+
+  def test_evaluate_value_matches_accepts_legacy_string_pattern
     cond = {from: :a, value: {matches: "^prod"}}
     assert Condition.evaluate(cond, {a: {value: "production", status: :success}})
     refute Condition.evaluate(cond, {a: {value: "staging", status: :success}})
   end
 
   def test_evaluate_value_matches_non_string
-    cond = {from: :a, value: {matches: "^prod"}}
+    cond = Condition.normalize({from: :a, value: {matches: "^prod"}})
     refute Condition.evaluate(cond, {a: {value: 42, status: :success}})
   end
 
@@ -512,7 +531,9 @@ class ConditionTest < Minitest::Test
     reloaded = Condition.normalize(dumped)
     assert_equal :a, reloaded[:all][0][:from]
     assert_equal :b, reloaded[:all][1][:from]
-    assert_equal "^ok", reloaded[:all][1][:value][:matches]
+    assert_equal "^ok", dumped["all"][1]["value"]["matches"]
+    assert_instance_of Regexp, reloaded[:all][1][:value][:matches]
+    assert_equal "^ok", reloaded[:all][1][:value][:matches].source
   end
 
   # --- rename_from ---
