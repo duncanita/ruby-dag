@@ -69,7 +69,9 @@ module DAG
               pipes.delete(rd)
               rd.close
               status = blocking_waitpid(pid)
-              yield(*decode_payload(task, info[:buffer], status))
+              payload = decode_payload(task, info[:buffer], status)
+              task.attempt_log.concat(payload.attempt_log)
+              yield payload.outcome
               completed += 1
             end
           end
@@ -118,7 +120,8 @@ module DAG
         # tracking is lost when `exit!` skips SimpleCov's flush. Tested via
         # integration through Processes#execute.
         def run_in_child(task, wr)
-          wr.write(marshal_tuple(run_task(task)))
+          payload = ProcessesPayload.new(outcome: run_task(task), attempt_log: task.attempt_log)
+          wr.write(marshal_payload(payload))
           wr.close
           exit!(0)
         rescue => e
@@ -129,7 +132,10 @@ module DAG
             crash = Result.exception_failure(:child_crashed, e,
               message: "child for #{task.name} crashed: #{e.message}",
               strategy: STRATEGY_SYM)
-            wr.write(Marshal.dump([task.name, crash, 0.0, 0.0, 0.0]))
+            crash_outcome = StepOutcome.new(name: task.name, result: crash,
+              started_at: 0.0, finished_at: 0.0, duration_ms: 0.0)
+            wr.write(Marshal.dump(ProcessesPayload.new(outcome: crash_outcome,
+              attempt_log: task.attempt_log)))
             wr.close
           rescue
             # ignore — parent will handle empty payload
@@ -137,19 +143,20 @@ module DAG
           exit!(1)
         end
 
-        # On a non-marshalable step return, the fallback Failure carries
-        # the original timing — the step really did run for that long, the
-        # only thing that failed was shipping the value back to the parent.
-        def marshal_tuple(tuple)
-          Marshal.dump(tuple)
+        # The AttemptTraceMiddleware has already tagged the final attempt
+        # :success when we get here (the step itself ran fine, only the
+        # value isn't marshalable). Demoting that entry keeps trace status
+        # consistent with the Failure we ship in its place.
+        def marshal_payload(payload)
+          Marshal.dump(payload)
         rescue TypeError => e
-          name, _, started_at, finished_at, duration_ms = tuple
-          fallback = Failure.new(error: {
-            code: :non_marshalable_result,
-            message: "step #{name} returned a non-marshalable value: #{e.message}",
-            strategy: STRATEGY_SYM
-          })
-          Marshal.dump([name, fallback, started_at, finished_at, duration_ms])
+          fallback = Result.exception_failure(:non_marshalable_result, e,
+            message: "step #{payload.outcome.name} returned a non-marshalable value: #{e.message}",
+            strategy: STRATEGY_SYM)
+          Marshal.dump(payload.with(
+            outcome: payload.outcome.with(result: fallback),
+            attempt_log: demote_final_attempt_to_failure(payload.attempt_log)
+          ))
         end
         # :nocov:
 
@@ -168,23 +175,35 @@ module DAG
 
         def decode_payload(task, payload, child_status = nil)
           if payload.empty?
-            now = @clock.monotonic_now
             detail = child_status_detail(task.name, child_status)
-            result = Failure.new(error: {
+            return failure_payload(task, Failure.new(error: {
               code: :empty_child_payload,
               message: "child for #{task.name} exited without writing a payload (#{detail})",
               strategy: STRATEGY_SYM
-            })
-            return [task.name, result, now, now, 0.0]
+            }))
           end
 
           Marshal.load(payload)
         rescue => e
-          now = @clock.monotonic_now
-          result = Result.exception_failure(:decode_failed, e,
+          failure_payload(task, Result.exception_failure(:decode_failed, e,
             message: "failed to decode payload from #{task.name}: #{e.message}",
-            strategy: STRATEGY_SYM)
-          [task.name, result, now, now, 0.0]
+            strategy: STRATEGY_SYM))
+        end
+
+        def failure_payload(task, result)
+          now = @clock.monotonic_now
+          ProcessesPayload.new(
+            outcome: StepOutcome.new(name: task.name, result: result,
+              started_at: now, finished_at: now, duration_ms: 0.0),
+            attempt_log: []
+          )
+        end
+
+        def demote_final_attempt_to_failure(attempt_log)
+          last_idx = attempt_log.rindex { |entry| entry.is_a?(AttemptTraceEntry) }
+          return attempt_log if last_idx.nil? || attempt_log[last_idx].status == :failure
+
+          attempt_log.dup.tap { |dup| dup[last_idx] = dup[last_idx].with(status: :failure) }
         end
 
         # Concurrent TERM -> grace -> KILL -> grace ladder. Signals go

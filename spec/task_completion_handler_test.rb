@@ -30,11 +30,8 @@ class TaskCompletionHandlerTest < Minitest::Test
 
     outcome = handler.handle(
       task: task,
-      result: result,
+      outcome: DAG::Workflow::Parallel::StepOutcome.new(name: :fetch, result: result, started_at: 1.0, finished_at: 2.0, duration_ms: 1000.0),
       layer_index: 0,
-      started_at: 1.0,
-      finished_at: 2.0,
-      duration_ms: 1000.0,
       trace: trace,
       results: results,
       statuses: statuses,
@@ -73,11 +70,8 @@ class TaskCompletionHandlerTest < Minitest::Test
 
     outcome = handler.handle(
       task: task,
-      result: result,
+      outcome: DAG::Workflow::Parallel::StepOutcome.new(name: :process, result: result, started_at: 3.0, finished_at: 4.0, duration_ms: 1000.0),
       layer_index: 1,
-      started_at: 3.0,
-      finished_at: 4.0,
-      duration_ms: 1000.0,
       trace: trace,
       results: results,
       statuses: statuses,
@@ -118,11 +112,8 @@ class TaskCompletionHandlerTest < Minitest::Test
 
     outcome = handler.handle(
       task: task,
-      result: result,
+      outcome: DAG::Workflow::Parallel::StepOutcome.new(name: :process, result: result, started_at: 3.0, finished_at: 4.0, duration_ms: 1000.0),
       layer_index: 1,
-      started_at: 3.0,
-      finished_at: 4.0,
-      duration_ms: 1000.0,
       trace: trace,
       results: results,
       statuses: statuses,

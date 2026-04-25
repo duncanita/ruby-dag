@@ -32,8 +32,7 @@ module DAG
               in_flight += 1
             end
 
-            name, result, started_at, finished_at, duration_ms = queue.pop
-            yield name, result, started_at, finished_at, duration_ms
+            yield queue.pop
             in_flight -= 1
             completed += 1
           end
@@ -66,7 +65,8 @@ module DAG
                 message: "worker for #{task.name} died without producing a result",
                 strategy: STRATEGY_SYM
               })
-              queue.push([task.name, failure, now, now, 0.0])
+              queue.push(StepOutcome.new(name: task.name, result: failure,
+                started_at: now, finished_at: now, duration_ms: 0.0))
             end
           end
         end

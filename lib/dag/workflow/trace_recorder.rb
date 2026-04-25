@@ -42,20 +42,20 @@ module DAG
         end
       end
 
-      def build_trace_entries_for_task(task:, layer_index:, result:, started_at:, finished_at:, duration_ms:, lifecycle_payload:)
+      def build_trace_entries_for_task(task:, layer_index:, outcome:, lifecycle_payload:)
         if task.attempt_log.empty?
           return [] if lifecycle_payload
 
-          return [build_trace_entry(task.execution.node_path, layer_index, result,
-            started_at: started_at,
-            finished_at: finished_at,
-            duration_ms: duration_ms,
+          return [build_trace_entry(task.execution.node_path, layer_index, outcome.result,
+            started_at: outcome.started_at,
+            finished_at: outcome.finished_at,
+            duration_ms: outcome.duration_ms,
             input_keys: task.input_keys)]
         end
 
         attempt_entries, passthrough_entries = partition_attempt_entries(task.attempt_log)
         attempt_trace = attempt_entries.each_with_index.map do |entry, index|
-          build_trace_entry(entry.node_path, layer_index, result,
+          build_trace_entry(entry.node_path, layer_index, outcome.result,
             started_at: entry.started_at,
             finished_at: entry.finished_at,
             duration_ms: entry.duration_ms,

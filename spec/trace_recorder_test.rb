@@ -40,13 +40,14 @@ class TraceRecorderTest < Minitest::Test
       ]
     )
 
+    outcome = DAG::Workflow::Parallel::StepOutcome.new(
+      name: :fetch, result: DAG::Success.new(value: "ok"),
+      started_at: 3.0, finished_at: 4.0, duration_ms: 1000.0
+    )
     entries = recorder.build_trace_entries_for_task(
       task: task,
       layer_index: 0,
-      result: DAG::Success.new(value: "ok"),
-      started_at: 3.0,
-      finished_at: 4.0,
-      duration_ms: 1000.0,
+      outcome: outcome,
       lifecycle_payload: nil
     )
 

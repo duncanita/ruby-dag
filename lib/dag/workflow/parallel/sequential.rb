@@ -16,7 +16,7 @@ module DAG
         end
 
         def execute(tasks)
-          tasks.each { |task| yield(*run_task(task)) }
+          tasks.each { |task| yield run_task(task) }
         end
       end
     end

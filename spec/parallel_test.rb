@@ -463,11 +463,11 @@ class ParallelTest < Minitest::Test
       input_keys: []
     )
     strategy = DAG::Workflow::Parallel::Sequential.new
-    name, result, _started, _finished, _duration = strategy.run_task(task)
-    assert_equal :crash, name
-    assert result.failure?
-    assert_equal :step_raised, result.error[:code]
-    assert_match(/executor kaboom/, result.error[:message])
+    outcome = strategy.run_task(task)
+    assert_equal :crash, outcome.name
+    assert outcome.result.failure?
+    assert_equal :step_raised, outcome.result.error[:code]
+    assert_match(/executor kaboom/, outcome.result.error[:message])
   end
 
   def test_strategy_run_task_uses_injected_clock_for_trace_timing
@@ -495,22 +495,22 @@ class ParallelTest < Minitest::Test
     )
 
     strategy = DAG::Workflow::Parallel::Sequential.new(clock: fake_clock)
-    _name, result, started_at, finished_at, duration_ms = strategy.run_task(task)
+    outcome = strategy.run_task(task)
 
-    assert result.success?
-    assert_equal 10.0, started_at
-    assert_equal 10.25, finished_at
-    assert_equal 250.0, duration_ms
+    assert outcome.result.success?
+    assert_equal 10.0, outcome.started_at
+    assert_equal 10.25, outcome.finished_at
+    assert_equal 250.0, outcome.duration_ms
   end
 
   def test_processes_decode_payload_handles_corrupt_marshal_data
     strategy = DAG::Workflow::Parallel::Processes.new(max_parallelism: 1)
     fake_task = Struct.new(:name).new(:bad)
-    name, result, _started, _finished, _duration =
-      strategy.send(:decode_payload, fake_task, "definitely not marshal data")
-    assert_equal :bad, name
-    assert result.failure?
-    assert_equal :decode_failed, result.error[:code]
+    payload = strategy.send(:decode_payload, fake_task, "definitely not marshal data")
+    assert_equal :bad, payload.outcome.name
+    assert payload.outcome.result.failure?
+    assert_equal :decode_failed, payload.outcome.result.error[:code]
+    assert_equal [], payload.attempt_log
   end
 
   def test_processes_waitpid_nohang_returns_true_for_already_reaped_pid
@@ -532,6 +532,139 @@ class ParallelTest < Minitest::Test
     step_error = result.error[:step_error]
     assert_equal :empty_child_payload, step_error[:code]
     assert_match(/exited without writing/, step_error[:message])
+  end
+
+  # Regression for #76: the AttemptTraceMiddleware mutates task.attempt_log
+  # to record one entry per retry. Under :threads/:sequential the array is
+  # shared with the parent; under :processes it lives in the forked child's
+  # memory and must travel back over the pipe. Without the roundtrip the
+  # parent's TraceRecorder collapses every retried step to a single entry.
+  def test_processes_strategy_preserves_attempt_log_under_retry
+    counter = temp_path(prefix: "dag_processes_retry_counter", suffix: ".txt")
+    script = temp_path(prefix: "dag_processes_retry_script", suffix: ".sh")
+    File.write(counter, "0")
+    File.write(script, <<~SH)
+      #!/bin/sh
+      n=$(cat #{counter})
+      n=$((n+1))
+      echo $n > #{counter}
+      if [ "$n" -lt 3 ]; then exit 1; fi
+      echo "ok after $n"
+    SH
+    File.chmod(0o755, script)
+
+    defn = build_test_workflow(
+      flaky: {
+        type: :exec,
+        command: script,
+        retry: {max_attempts: 3, base_delay: 0.0}
+      }
+    )
+    middleware = DAG::Workflow::RetryMiddleware.new(sleeper: ->(_) {})
+
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry,
+      parallel: :processes, middleware: [middleware]).call
+
+    assert result.success?, "expected success after retries (got #{result.error.inspect})"
+    flaky = result.trace.select { |entry| entry.name == :flaky }
+    assert_equal 3, flaky.size, "expected one trace entry per attempt under :processes"
+    assert_equal [1, 2, 3], flaky.map(&:attempt)
+    assert_equal [:failure, :failure, :success], flaky.map(&:status)
+    assert_equal [true, true, false], flaky.map(&:retried)
+  ensure
+    File.unlink(counter) if counter && File.exist?(counter)
+    File.unlink(script) if script && File.exist?(script)
+  end
+
+  # Regression: when a step returns a non-marshalable value, the marshal
+  # fallback substitutes Failure(:non_marshalable_result). The
+  # AttemptTraceMiddleware has already pushed an AttemptTraceEntry tagged
+  # :success (the step itself succeeded), so the trace recorder would
+  # otherwise emit a :success entry alongside the :failure result — caught
+  # by Codex stop-hook review on PR #114.
+  def test_processes_strategy_marks_non_marshalable_result_as_failure_in_trace
+    defn = build_test_workflow(
+      proc_returner: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: ->(_x) { :unmarshalable }) }
+      }
+    )
+    result = DAG::Workflow::Runner.new(defn.graph, defn.registry, parallel: :processes).call
+
+    assert result.failure?
+    assert_equal :proc_returner, result.error[:failed_node]
+    assert_equal :non_marshalable_result, result.error[:step_error][:code]
+
+    proc_entries = result.trace.select { |entry| entry.name == :proc_returner }
+    refute_empty proc_entries
+    proc_entries.each do |entry|
+      assert_equal :failure, entry.status,
+        "trace status must agree with the Failure shipped to the parent"
+    end
+  end
+
+  def test_processes_strategy_demote_final_attempt_to_failure_leaves_passthrough_alone
+    strategy = DAG::Workflow::Parallel::Processes.new(max_parallelism: 1)
+    success_attempt = DAG::Workflow::AttemptTraceEntry.new(
+      node_path: [:n], started_at: 0.0, finished_at: 1.0, duration_ms: 1.0,
+      status: :success, attempt: 1
+    )
+    passthrough = DAG::Workflow::TraceEntry.new(
+      name: :"child.leaf", layer: 0, started_at: 0.0, finished_at: 0.5,
+      duration_ms: 0.5, status: :success, input_keys: [], attempt: 1, retried: false
+    )
+
+    out = strategy.send(:demote_final_attempt_to_failure, [passthrough, success_attempt])
+
+    assert_equal :failure, out.last.status
+    assert_equal passthrough, out.first, "passthrough entries must be preserved verbatim"
+  end
+
+  def test_processes_strategy_demote_final_attempt_is_idempotent_when_already_failure
+    strategy = DAG::Workflow::Parallel::Processes.new(max_parallelism: 1)
+    failure_attempt = DAG::Workflow::AttemptTraceEntry.new(
+      node_path: [:n], started_at: 0.0, finished_at: 1.0, duration_ms: 1.0,
+      status: :failure, attempt: 1
+    )
+
+    out = strategy.send(:demote_final_attempt_to_failure, [failure_attempt])
+
+    assert_same failure_attempt, out.first, "no-op when the final attempt is already :failure"
+  end
+
+  def test_processes_strategy_demote_final_attempt_no_op_on_passthrough_only_log
+    strategy = DAG::Workflow::Parallel::Processes.new(max_parallelism: 1)
+    passthrough = DAG::Workflow::TraceEntry.new(
+      name: :"child.leaf", layer: 0, started_at: 0.0, finished_at: 0.5,
+      duration_ms: 0.5, status: :success, input_keys: [], attempt: 1, retried: false
+    )
+
+    out = strategy.send(:demote_final_attempt_to_failure, [passthrough])
+
+    assert_equal [passthrough], out
+  end
+
+  # Regression for #76: sub_workflow's child trace is concat'd into the parent
+  # task's attempt_log via core_step_invoker. Under :processes that concat
+  # happens in the forked child's memory, so the namespaced child entries must
+  # ride back on the same pipe roundtrip the retry test exercises.
+  def test_processes_strategy_preserves_sub_workflow_passthrough_trace
+    child = DAG::Workflow::Loader.from_hash(
+      analyze: {type: :exec, command: "echo analyzed"},
+      summarize: {type: :exec, command: "echo summarized", depends_on: [:analyze]}
+    )
+
+    parent = DAG::Workflow::Loader.from_hash(
+      fetch: {type: :exec, command: "echo hello"},
+      process: {type: :sub_workflow, definition: child, depends_on: [:fetch]}
+    )
+
+    result = DAG::Workflow::Runner.new(parent, parallel: :processes).call
+
+    assert result.success?, "expected success (got #{result.error.inspect})"
+    names = result.trace.map(&:name)
+    assert_includes names, :"process.analyze"
+    assert_includes names, :"process.summarize"
   end
 
   private
