@@ -463,11 +463,11 @@ class ParallelTest < Minitest::Test
       input_keys: []
     )
     strategy = DAG::Workflow::Parallel::Sequential.new
-    name, result, _started, _finished, _duration = strategy.run_task(task)
-    assert_equal :crash, name
-    assert result.failure?
-    assert_equal :step_raised, result.error[:code]
-    assert_match(/executor kaboom/, result.error[:message])
+    outcome = strategy.run_task(task)
+    assert_equal :crash, outcome.name
+    assert outcome.result.failure?
+    assert_equal :step_raised, outcome.result.error[:code]
+    assert_match(/executor kaboom/, outcome.result.error[:message])
   end
 
   def test_strategy_run_task_uses_injected_clock_for_trace_timing
@@ -495,21 +495,21 @@ class ParallelTest < Minitest::Test
     )
 
     strategy = DAG::Workflow::Parallel::Sequential.new(clock: fake_clock)
-    _name, result, started_at, finished_at, duration_ms = strategy.run_task(task)
+    outcome = strategy.run_task(task)
 
-    assert result.success?
-    assert_equal 10.0, started_at
-    assert_equal 10.25, finished_at
-    assert_equal 250.0, duration_ms
+    assert outcome.result.success?
+    assert_equal 10.0, outcome.started_at
+    assert_equal 10.25, outcome.finished_at
+    assert_equal 250.0, outcome.duration_ms
   end
 
   def test_processes_decode_payload_handles_corrupt_marshal_data
     strategy = DAG::Workflow::Parallel::Processes.new(max_parallelism: 1)
     fake_task = Struct.new(:name).new(:bad)
     payload = strategy.send(:decode_payload, fake_task, "definitely not marshal data")
-    assert_equal :bad, payload.name
-    assert payload.result.failure?
-    assert_equal :decode_failed, payload.result.error[:code]
+    assert_equal :bad, payload.outcome.name
+    assert payload.outcome.result.failure?
+    assert_equal :decode_failed, payload.outcome.result.error[:code]
     assert_equal [], payload.attempt_log
   end
 

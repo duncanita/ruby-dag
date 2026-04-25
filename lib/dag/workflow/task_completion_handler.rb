@@ -12,14 +12,12 @@ module DAG
         @lifecycle_callback_result = lifecycle_callback_result
       end
 
-      def handle(task:, result:, layer_index:, started_at:, finished_at:, duration_ms:, trace:, results:, statuses:, lifecycle_payload:)
+      def handle(task:, outcome:, layer_index:, trace:, results:, statuses:, lifecycle_payload:)
+        result = outcome.result
         entries = @trace_recorder.build_trace_entries_for_task(
           task: task,
           layer_index: layer_index,
-          result: result,
-          started_at: started_at,
-          finished_at: finished_at,
-          duration_ms: duration_ms,
+          outcome: outcome,
           lifecycle_payload: lifecycle_payload
         )
         trace.concat(entries)

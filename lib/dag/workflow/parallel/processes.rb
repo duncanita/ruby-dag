@@ -71,7 +71,7 @@ module DAG
               status = blocking_waitpid(pid)
               payload = decode_payload(task, info[:buffer], status)
               payload.merge_into(task)
-              yield(*payload.to_yield)
+              yield payload.outcome
               completed += 1
             end
           end
@@ -123,12 +123,9 @@ module DAG
           # task.attempt_log is mutated by the AttemptTraceMiddleware (and
           # sub_workflow passthrough) inside run_task. After fork() that
           # array lives only in the child, so we ship its post-run state
-          # alongside the timing fields — the parent concats it back onto
+          # alongside the StepOutcome — the parent concats it back onto
           # the original Task before recording the trace.
-          name, result, started_at, finished_at, duration_ms = run_task(task)
-          payload = ChildPayload.new(name: name, result: result,
-            started_at: started_at, finished_at: finished_at,
-            duration_ms: duration_ms, attempt_log: task.attempt_log)
+          payload = ChildPayload.new(outcome: run_task(task), attempt_log: task.attempt_log)
           wr.write(marshal_payload(payload))
           wr.close
           exit!(0)
@@ -140,8 +137,9 @@ module DAG
             crash = Result.exception_failure(:child_crashed, e,
               message: "child for #{task.name} crashed: #{e.message}",
               strategy: STRATEGY_SYM)
-            wr.write(Marshal.dump(ChildPayload.new(name: task.name, result: crash,
-              started_at: 0.0, finished_at: 0.0, duration_ms: 0.0,
+            crash_outcome = StepOutcome.new(name: task.name, result: crash,
+              started_at: 0.0, finished_at: 0.0, duration_ms: 0.0)
+            wr.write(Marshal.dump(ChildPayload.new(outcome: crash_outcome,
               attempt_log: task.attempt_log)))
             wr.close
           rescue
@@ -163,11 +161,11 @@ module DAG
         rescue TypeError => e
           fallback = Failure.new(error: {
             code: :non_marshalable_result,
-            message: "step #{payload.name} returned a non-marshalable value: #{e.message}",
+            message: "step #{payload.outcome.name} returned a non-marshalable value: #{e.message}",
             strategy: STRATEGY_SYM
           })
           Marshal.dump(payload.with(
-            result: fallback,
+            outcome: payload.outcome.with(result: fallback),
             attempt_log: demote_final_attempt_to_failure(payload.attempt_log)
           ))
         end
@@ -195,8 +193,11 @@ module DAG
               message: "child for #{task.name} exited without writing a payload (#{detail})",
               strategy: STRATEGY_SYM
             })
-            return ChildPayload.new(name: task.name, result: result,
-              started_at: now, finished_at: now, duration_ms: 0.0, attempt_log: [])
+            return ChildPayload.new(
+              outcome: StepOutcome.new(name: task.name, result: result,
+                started_at: now, finished_at: now, duration_ms: 0.0),
+              attempt_log: []
+            )
           end
 
           Marshal.load(payload)
@@ -205,8 +206,11 @@ module DAG
           result = Result.exception_failure(:decode_failed, e,
             message: "failed to decode payload from #{task.name}: #{e.message}",
             strategy: STRATEGY_SYM)
-          ChildPayload.new(name: task.name, result: result,
-            started_at: now, finished_at: now, duration_ms: 0.0, attempt_log: [])
+          ChildPayload.new(
+            outcome: StepOutcome.new(name: task.name, result: result,
+              started_at: now, finished_at: now, duration_ms: 0.0),
+            attempt_log: []
+          )
         end
 
         # Rewrites the final AttemptTraceEntry in the log to status: :failure.

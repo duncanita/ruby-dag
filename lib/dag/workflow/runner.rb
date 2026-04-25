@@ -330,22 +330,19 @@ module DAG
         waiting_nodes = []
         paused = false
 
-        @strategy.execute(tasks) do |name, result, started_at, finished_at, duration_ms|
-          task = tasks_by_name.fetch(name)
-          outcome = @task_completion_handler.handle(
+        @strategy.execute(tasks) do |outcome|
+          task = tasks_by_name.fetch(outcome.name)
+          completion = @task_completion_handler.handle(
             task: task,
-            result: result,
+            outcome: outcome,
             layer_index: layer_index,
-            started_at: started_at,
-            finished_at: finished_at,
-            duration_ms: duration_ms,
             trace: trace,
             results: results,
             statuses: statuses,
-            lifecycle_payload: sub_workflow_lifecycle_payload(result)
+            lifecycle_payload: sub_workflow_lifecycle_payload(outcome.result)
           )
-          waiting_nodes.concat(outcome.waiting_nodes)
-          paused ||= outcome.paused
+          waiting_nodes.concat(completion.waiting_nodes)
+          paused ||= completion.paused
         end
 
         [waiting_nodes, paused]
