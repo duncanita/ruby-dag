@@ -96,7 +96,8 @@ module DAG
           end
           state[:node_states][[id, new_revision]] = new_states
           row[:current_revision] = new_revision
-          {id: id, revision: new_revision}
+          stamped = event ? append_event_internal(state, id, event) : nil
+          {id: id, revision: new_revision, event: stamped}
         end
 
         def load_revision(state, id:, revision:)

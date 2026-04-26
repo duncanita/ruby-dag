@@ -37,7 +37,7 @@ module StorageContract
       )
 
       next_definition = contract_definition.add_node(:c, type: :passthrough).add_edge(:b, :c)
-      storage.append_revision(
+      result = storage.append_revision(
         id: workflow_id,
         parent_revision: 1,
         definition: next_definition,
@@ -50,6 +50,8 @@ module StorageContract
       assert_equal :pending, states[:b]
       assert_equal :pending, states[:c]
       assert_equal 2, storage.load_current_definition(id: workflow_id).revision
+      assert_equal :mutation_applied, result[:event].type
+      assert_equal result[:event], storage.read_events(workflow_id: workflow_id).last
     end
   end
 end

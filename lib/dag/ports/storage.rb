@@ -3,8 +3,7 @@
 module DAG
   module Ports
     # Storage port — 15 documented methods (Roadmap v3.4 §C / Appendix I)
-    # plus 1 documented extension (`prepare_workflow_retry`) needed for
-    # `Runner#retry_workflow` per R1 DoD. Adapters must implement all 16.
+    # plus documented extensions needed by R1/R2 retry and resume semantics.
     module Storage
       def create_workflow(id:, initial_definition:, initial_context:, runtime_profile:)
         raise PortNotImplementedError
@@ -18,6 +17,9 @@ module DAG
         raise PortNotImplementedError
       end
 
+      # Atomically appends a definition revision, resets invalidated/new nodes
+      # to :pending for the new revision, and appends the supplied durable
+      # event when present. Returns {id:, revision:, event: stamped_event}.
       def append_revision(id:, parent_revision:, definition:, invalidated_node_ids:, event:)
         raise PortNotImplementedError
       end

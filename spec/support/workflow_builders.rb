@@ -35,4 +35,34 @@ module WorkflowBuilders
     )
     id
   end
+
+  def create_committed_workflow(storage, definition, terminal_state: :paused)
+    workflow_id = create_workflow(storage, definition)
+    definition.topological_order.each { |node_id| commit_node(storage, workflow_id, definition.revision, node_id) }
+    storage.transition_workflow_state(id: workflow_id, from: :pending, to: terminal_state)
+    workflow_id
+  end
+
+  def commit_node(storage, workflow_id, revision, node_id)
+    attempt_id = storage.begin_attempt(
+      workflow_id: workflow_id,
+      revision: revision,
+      node_id: node_id,
+      expected_node_state: :pending
+    )
+    storage.commit_attempt(
+      attempt_id: attempt_id,
+      result: DAG::Success[value: node_id, context_patch: {node_id => true}],
+      node_state: :committed,
+      event: DAG::Event[
+        type: :node_committed,
+        workflow_id: workflow_id,
+        revision: revision,
+        node_id: node_id,
+        attempt_id: attempt_id,
+        at_ms: 0,
+        payload: {}
+      ]
+    )
+  end
 end
