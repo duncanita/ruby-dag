@@ -163,13 +163,21 @@ module DAG
         end
 
         def abort_running_attempts(state, workflow_id:)
+          row = fetch_workflow!(state, workflow_id)
+          current_revision = row[:current_revision]
+          current_states = fetch_node_states!(state, workflow_id, current_revision)
           aborted = []
           state[:attempts_index].fetch(workflow_id, []).each do |attempt_id|
             attempt = state[:attempts][attempt_id]
-            if attempt[:state] == :running
-              attempt[:state] = :aborted
-              aborted << attempt_id
-            end
+            next unless attempt[:state] == :running
+
+            attempt[:state] = :aborted
+            aborted << attempt_id
+
+            next unless attempt[:revision] == current_revision
+            next unless current_states[attempt[:node_id]] == :running
+
+            current_states[attempt[:node_id]] = :pending
           end
           aborted
         end

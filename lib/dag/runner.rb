@@ -32,6 +32,31 @@ module DAG
 
     def call(workflow_id)
       workflow = transition_to_running(workflow_id)
+      run_workflow(workflow_id, workflow)
+    end
+
+    def resume(workflow_id)
+      workflow = transition_resume_to_running(workflow_id)
+      @storage.abort_running_attempts(workflow_id: workflow_id)
+      run_workflow(workflow_id, workflow)
+    end
+
+    def retry_workflow(workflow_id)
+      workflow = @storage.load_workflow(id: workflow_id)
+      raise StaleStateError, "workflow not in :failed state (#{workflow[:state].inspect})" unless workflow[:state] == :failed
+
+      retry_count = workflow[:workflow_retry_count]
+      max = workflow[:runtime_profile].max_workflow_retries
+      raise WorkflowRetryExhaustedError, "workflow retries exhausted (#{retry_count}/#{max})" if retry_count >= max
+
+      @storage.prepare_workflow_retry(id: workflow_id)
+      @storage.transition_workflow_state(id: workflow_id, from: :failed, to: :pending)
+      call(workflow_id)
+    end
+
+    private
+
+    def run_workflow(workflow_id, workflow)
       run = build_run_context(workflow_id, workflow)
       append_workflow_started_once(run)
 
@@ -58,27 +83,25 @@ module DAG
       finalize(run, paused: paused, failed: failed)
     end
 
-    def retry_workflow(workflow_id)
-      workflow = @storage.load_workflow(id: workflow_id)
-      raise StaleStateError, "workflow not in :failed state (#{workflow[:state].inspect})" unless workflow[:state] == :failed
-
-      retry_count = workflow[:workflow_retry_count]
-      max = workflow[:runtime_profile].max_workflow_retries
-      raise WorkflowRetryExhaustedError, "workflow retries exhausted (#{retry_count}/#{max})" if retry_count >= max
-
-      @storage.prepare_workflow_retry(id: workflow_id)
-      @storage.transition_workflow_state(id: workflow_id, from: :failed, to: :pending)
-      call(workflow_id)
-    end
-
-    private
-
     def transition_to_running(workflow_id)
       workflow = @storage.load_workflow(id: workflow_id)
       from = workflow[:state]
       unless %i[pending waiting paused].include?(from)
         raise StaleStateError, "workflow #{workflow_id} cannot transition from #{from.inspect} to :running"
       end
+      @storage.transition_workflow_state(id: workflow_id, from: from, to: :running)
+      workflow
+    end
+
+    def transition_resume_to_running(workflow_id)
+      workflow = @storage.load_workflow(id: workflow_id)
+      from = workflow[:state]
+      return workflow if from == :running
+
+      unless %i[pending waiting paused].include?(from)
+        raise StaleStateError, "workflow #{workflow_id} cannot resume from #{from.inspect}"
+      end
+
       @storage.transition_workflow_state(id: workflow_id, from: from, to: :running)
       workflow
     end
