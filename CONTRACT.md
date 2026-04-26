@@ -137,6 +137,39 @@ DAG::MutationService#apply(workflow_id:, mutation:, expected_revision:)
 
 Definitions must not apply storage side effects directly.
 
+`DAG::DefinitionEditor#plan(definition, mutation) -> PlanResult` is the pure
+planning API. It does not read storage, publish events, or mutate the supplied
+definition. `PlanResult` exposes:
+
+```text
+valid?
+new_definition
+invalidated_node_ids
+reason
+```
+
+For `:invalidate`, `invalidated_node_ids` is the target node plus all of its
+descendants. For `:replace_subtree`, the editor removes only the target's
+exclusive descendants, reconnects the replacement graph through explicit
+`entry_node_ids` and `exit_node_ids`, preserves independent parallel branches,
+and invalidates preserved descendants whose inputs may have changed.
+
+`ReplacementGraph` is structural in R3. It carries graph shape plus explicit
+entry and exit node ids; it does not infer entry/exit from roots or leaves. New
+replacement nodes are registered in the returned definition as built-in `:noop`
+steps.
+
+`DAG::MutationService#apply(workflow_id:, mutation:, expected_revision:)`
+is the only kernel API that applies structural side effects. It requires the
+workflow to be in `:paused` or `:waiting`. If the workflow is `:running`, it
+raises `ConcurrentMutationError`; if the stored revision no longer matches
+`expected_revision`, it raises `StaleRevisionError`.
+
+On success, mutation apply appends the new definition revision using storage
+CAS, resets invalidated and newly introduced nodes to `:pending` in the new
+revision, durably appends `mutation_applied`, and only then publishes that
+event through `EventBus#publish`.
+
 ## Events
 
 The coarse event list is closed:
