@@ -92,6 +92,30 @@ ATTEMPT_STATES = %i[
 Only a committed attempt for the current definition revision contributes to the
 effective context.
 
+## Resume And Crash Recovery
+
+`Runner#resume(workflow_id)` can resume workflows in `:running`, `:waiting`, or
+`:paused`. A `:running` workflow means the previous process may have crashed
+before reaching a terminal state.
+
+Before recomputing eligibility, resume calls:
+
+```ruby
+storage.abort_running_attempts(workflow_id:)
+```
+
+The storage operation marks in-flight attempts as `:aborted` and resets any
+matching current-revision node still in `:running` back to `:pending`. Nodes
+already `:committed` are never rerun in that revision. Nodes in `:waiting` are
+not rerun automatically; a consumer must make an explicit app-level decision
+and update state/context before retrying them.
+
+`commit_attempt` is the atomic durability boundary for node execution. When it
+returns, result, attempt state, node state, and the durable event are committed
+together. If a process crashes before that boundary, the step may be invoked
+again on resume. If it crashes after the boundary, resume starts from the next
+eligible node.
+
 ## Proposed Mutations
 
 Consumers may propose mutations with:

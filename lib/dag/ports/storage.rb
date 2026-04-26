@@ -46,6 +46,9 @@ module DAG
         raise PortNotImplementedError
       end
 
+      # Abort in-flight attempts for a workflow before resume. Adapters must
+      # also reset any corresponding current-revision node still in :running
+      # back to :pending so eligibility can recompute from committed state.
       def abort_running_attempts(workflow_id:)
         raise PortNotImplementedError
       end

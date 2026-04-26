@@ -57,7 +57,13 @@ which mandates `Runner#retry_workflow` resets `:failed` nodes and
 "ricrea attempt nuovi"; with only the 15 documented primitives the budget
 restart is not achievable.
 
-All other R1 work uses the 15 documented methods.
+R2 clarifies the existing `abort_running_attempts(workflow_id:)` port method:
+adapters must mark in-flight attempts as `:aborted` and reset matching
+current-revision nodes still in `:running` back to `:pending`. This is not a
+new method, but it is required so `Runner#resume` can recompute eligibility
+after a process crash.
+
+All other R1/R2 work uses the documented methods.
 
 ## Commands
 
@@ -147,9 +153,11 @@ lib/dag/adapters/memory/storage.rb        # facade; deep-dup-freezes returns
 lib/dag/adapters/memory/storage_state.rb  # mutable bookkeeping (only spot in lib/dag/** allowed to mutate)
 ```
 
-Tests live in `spec/r0/` (R0 invariants) and `spec/r1/` (R1 DoD). Shared
-helpers under `spec/support/{runner_factory,workflow_builders,step_helpers}.rb`
-are auto-included into `Minitest::Test` by `spec/test_helper.rb`.
+Tests live in `spec/r0/` (R0 invariants), `spec/r1/` (R1 DoD), and `spec/r2/`
+(R2 DoD). Roadmap paths written as `test/r*/...` map to this repo's
+`spec/r*/...` layout. Shared helpers under
+`spec/support/{runner_factory,workflow_builders,step_helpers}.rb` are
+auto-included into `Minitest::Test` by `spec/test_helper.rb`.
 
 ## Error hierarchy
 
