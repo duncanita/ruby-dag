@@ -205,6 +205,70 @@ class SubWorkflowTest < Minitest::Test
     assert_equal :sub_workflow_invalid_output_key, result.error[:step_error][:code]
   end
 
+  def test_select_sub_workflow_output_returns_leaf_missing_failure_when_named_leaf_absent
+    child = DAG::Workflow::Loader.from_hash(
+      analyze: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: 1) }
+      },
+      summarize: {
+        type: :ruby,
+        depends_on: [:analyze],
+        callable: ->(input) { DAG::Success.new(value: input[:analyze]) }
+      }
+    )
+
+    parent = DAG::Workflow::Loader.from_hash(
+      process: {
+        type: :sub_workflow,
+        definition: child,
+        output_key: :summarize
+      }
+    )
+
+    runner = DAG::Workflow::Runner.new(parent, parallel: false)
+    step = parent.registry[:process]
+    outputs = {}
+
+    failure = runner.send(:select_sub_workflow_output, step, child, outputs)
+
+    assert_kind_of DAG::Failure, failure
+    assert_equal :sub_workflow_leaf_missing, failure.error[:code]
+    assert_equal :summarize, failure.error[:missing_leaf]
+    assert_equal [], failure.error[:available_outputs]
+  end
+
+  def test_select_sub_workflow_output_returns_leaf_missing_failure_when_implicit_leaf_absent
+    child = DAG::Workflow::Loader.from_hash(
+      a: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: 1) }
+      },
+      b: {
+        type: :ruby,
+        callable: ->(_input) { DAG::Success.new(value: 2) }
+      }
+    )
+
+    parent = DAG::Workflow::Loader.from_hash(
+      process: {
+        type: :sub_workflow,
+        definition: child
+      }
+    )
+
+    runner = DAG::Workflow::Runner.new(parent, parallel: false)
+    step = parent.registry[:process]
+    outputs = {a: DAG::Success.new(value: 1)}
+
+    failure = runner.send(:select_sub_workflow_output, step, child, outputs)
+
+    assert_kind_of DAG::Failure, failure
+    assert_equal :sub_workflow_leaf_missing, failure.error[:code]
+    assert_equal :b, failure.error[:missing_leaf]
+    assert_equal [:a], failure.error[:available_outputs]
+  end
+
   def test_sub_workflow_propagates_waiting_status_and_namespaced_waiting_nodes
     clock = build_clock(wall_time: Time.utc(2026, 4, 15, 9, 0, 0))
     future_time = Time.utc(2026, 4, 15, 10, 0, 0)
