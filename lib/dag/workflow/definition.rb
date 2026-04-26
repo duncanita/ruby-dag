@@ -49,6 +49,8 @@ module DAG
       def successors(id) = @graph.successors(id)
       def each_node(&block) = @graph.each_node(&block)
       def each_edge(&block) = @graph.each_edge(&block)
+      def each_predecessor(id, &block) = @graph.each_predecessor(id, &block)
+      def each_successor(id, &block) = @graph.each_successor(id, &block)
       def descendants_of(id, **opts) = @graph.descendants_of(id, **opts)
       def exclusive_descendants_of(id, **opts) = @graph.exclusive_descendants_of(id, **opts)
       def shared_descendants_of(id) = @graph.shared_descendants_of(id)

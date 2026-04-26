@@ -18,7 +18,9 @@ module DAG
     def register(name:, klass:, fingerprint_payload:, config: {})
       raise FrozenError, "registry is frozen" if frozen?
       raise ArgumentError, "name must be a Symbol" unless name.is_a?(Symbol)
-      raise ArgumentError, "klass must implement StepProtocol" unless StepProtocol.implements?(klass)
+      unless klass.is_a?(Class) && klass.method_defined?(:call)
+        raise ArgumentError, "klass must be a Class with a public #call(StepInput) method"
+      end
       DAG.json_safe!(fingerprint_payload, "$root.fingerprint_payload")
 
       new_entry = Entry.new(

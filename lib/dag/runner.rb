@@ -4,6 +4,24 @@ module DAG
   REQUIRED_RUNNER_DEPENDENCIES = %i[storage event_bus registry clock id_generator fingerprint serializer].freeze
 
   class Runner
+    # Per-call constants threaded through the Runner internals: the workflow
+    # being executed, the definition, the runtime profile, the base
+    # ExecutionContext (built once from initial_context), and a
+    # predecessors_by_node map so the eligibility loop and effective-context
+    # calculation never re-walk the graph or re-load the workflow row.
+    #
+    # Inlined here per the file-per-class exception in CLAUDE.md: this is a
+    # private internal carrier with one consumer (Runner) and would die with
+    # it on deletion.
+    RunContext = Data.define(
+      :workflow_id,
+      :revision,
+      :definition,
+      :runtime_profile,
+      :base_context,
+      :predecessors_by_node
+    )
+
     attr_reader :storage, :event_bus, :registry, :clock, :id_generator, :fingerprint, :serializer
 
     def initialize(storage:, event_bus:, registry:, clock:, id_generator:, fingerprint:, serializer:)
@@ -24,7 +42,7 @@ module DAG
     def call(workflow_id)
       workflow = transition_to_running(workflow_id)
       run = build_run_context(workflow_id, workflow)
-      append_workflow_started_once(run, workflow[:state_before_call])
+      append_workflow_started_once(run)
 
       paused = false
       failed = false
@@ -72,33 +90,42 @@ module DAG
         raise StaleStateError, "workflow #{workflow_id} cannot transition from #{from.inspect} to :running"
       end
       @storage.transition_workflow_state(id: workflow_id, from: from, to: :running)
-      workflow.merge(state_before_call: from)
+      workflow
     end
 
     def build_run_context(workflow_id, workflow)
       definition = @storage.load_current_definition(id: workflow_id)
-      predecessors_by_node = definition.nodes.each_with_object({}) do |node_id, acc|
-        acc[node_id] = definition.predecessors(node_id).to_a.sort_by(&:to_s).freeze
-      end.freeze
+      predecessors_by_node = {}
+      definition.each_node do |node_id|
+        preds = []
+        definition.each_predecessor(node_id) { |p| preds << p }
+        predecessors_by_node[node_id] = preds.sort_by!(&:to_s).freeze
+      end
+      predecessors_by_node.freeze
 
       RunContext.new(
         workflow_id: workflow_id,
         revision: definition.revision,
         definition: definition,
         runtime_profile: workflow[:runtime_profile],
-        initial_context: workflow[:initial_context],
+        base_context: DAG::ExecutionContext.from(workflow[:initial_context]),
         predecessors_by_node: predecessors_by_node
       )
     end
 
-    # First run iff transition came from :pending. Subsequent calls (resuming
-    # from :waiting or :paused) skip the workflow_started event.
-    def append_workflow_started_once(run, state_before_call)
-      return unless state_before_call == :pending
+    # workflow_started is emitted exactly once per workflow lifetime. The
+    # event log is the source of truth: after Runner#retry_workflow the
+    # workflow goes back to :pending and #call runs again, but
+    # workflow_started must NOT be re-emitted. Scanning the log is O(events)
+    # but happens once per #call; the cost is negligible relative to the
+    # work it gates.
+    def append_workflow_started_once(run)
+      events = @storage.read_events(workflow_id: run.workflow_id)
+      return if events.any? { |e| e.type == :workflow_started }
 
       append_event(run,
         type: :workflow_started,
-        payload: {initial_context: run.initial_context})
+        payload: {initial_context: run.base_context.to_h})
     end
 
     def eligible_nodes(run)
@@ -109,14 +136,19 @@ module DAG
     end
 
     def execute_node(run, node_id)
-      attempt = @storage.begin_attempt(
+      attempt_number = @storage.count_attempts(
+        workflow_id: run.workflow_id,
+        revision: run.revision,
+        node_id: node_id
+      ) + 1
+
+      attempt_id = @storage.begin_attempt(
         workflow_id: run.workflow_id,
         revision: run.revision,
         node_id: node_id,
+        attempt_number: attempt_number,
         expected_node_state: :pending
       )
-      attempt_id = attempt[:attempt_id]
-      attempt_number = attempt[:attempt_number]
 
       append_event(run,
         type: :node_started,
@@ -184,14 +216,13 @@ module DAG
     end
 
     def effective_context(run, node_id)
-      ctx = DAG::ExecutionContext.from(run.initial_context)
+      ctx = run.base_context
       run.predecessors_by_node[node_id].each do |pred|
         attempts = @storage.list_attempts(workflow_id: run.workflow_id, revision: run.revision, node_id: pred)
-        committed = attempts.reverse.find { |a| a[:state] == :committed }
+        committed = attempts.reverse_each.find { |a| a[:state] == :committed }
         next unless committed
 
-        patch = committed[:result].context_patch
-        ctx = ctx.merge(patch)
+        ctx = ctx.merge(committed[:result].context_patch)
       end
       ctx
     end
@@ -211,28 +242,32 @@ module DAG
       DAG::Result.exception_failure(:step_raised, e)
     end
 
+    # Roadmap §R1 line 565: "if all nodes committed -> :completed; elsif any
+    # waiting -> :waiting; elsif any failed -> :failed; else -> :failed con
+    # diagnostic". The :paused/:failed_terminal early returns above already
+    # handled the loop-exit cases caused by the inner step outcomes, so this
+    # block only sees natural loop exhaustion (eligible.empty?). The "no
+    # eligible but incomplete" branch must surface :failed with a diagnostic
+    # payload, NOT silently coerce to :waiting.
     def finalize(run, paused:, failed:)
       return build_run_result(run, :paused) if paused
       return build_run_result(run, :failed) if failed
 
-      states = @storage.load_node_states(workflow_id: run.workflow_id, revision: run.revision)
-      final, terminal_event = resolve_terminal(states.values)
+      states = @storage.load_node_states(workflow_id: run.workflow_id, revision: run.revision).values
 
-      @storage.transition_workflow_state(id: run.workflow_id, from: :running, to: final)
-      append_event(run, type: terminal_event, payload: {})
-      build_run_result(run, final)
+      if states.all? { |s| s == :committed || s == :invalidated }
+        transition_and_emit_terminal(run, :completed, :workflow_completed, {})
+      elsif states.any? { |s| s == :waiting }
+        transition_and_emit_terminal(run, :waiting, :workflow_waiting, {})
+      else
+        transition_and_emit_terminal(run, :failed, :workflow_failed, {diagnostic: :no_eligible_but_incomplete})
+      end
     end
 
-    # The loop only exits with paused/failed (handled by early returns above)
-    # or with no eligible nodes left. In the latter case every node is either
-    # :committed/:invalidated (workflow done) or :waiting (workflow waiting).
-    # Any other shape would be a contract violation.
-    def resolve_terminal(node_states)
-      if node_states.all? { |s| s == :committed || s == :invalidated }
-        [:completed, :workflow_completed]
-      else
-        [:waiting, :workflow_waiting]
-      end
+    def transition_and_emit_terminal(run, state, event_type, payload)
+      @storage.transition_workflow_state(id: run.workflow_id, from: :running, to: state)
+      append_event(run, type: event_type, payload: payload)
+      build_run_result(run, state)
     end
 
     def build_run_result(run, state)

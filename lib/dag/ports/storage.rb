@@ -35,7 +35,7 @@ module DAG
         raise PortNotImplementedError
       end
 
-      def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:)
+      def begin_attempt(workflow_id:, revision:, node_id:, attempt_number:, expected_node_state:)
         raise PortNotImplementedError
       end
 

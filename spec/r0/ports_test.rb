@@ -12,7 +12,7 @@ class R0PortsTest < Minitest::Test
     load_current_definition: {id: "x"},
     load_node_states: {workflow_id: "x", revision: 1},
     transition_node_state: {workflow_id: "x", revision: 1, node_id: :a, from: :pending, to: :running},
-    begin_attempt: {workflow_id: "x", revision: 1, node_id: :a, expected_node_state: :pending},
+    begin_attempt: {workflow_id: "x", revision: 1, node_id: :a, attempt_number: 1, expected_node_state: :pending},
     commit_attempt: {attempt_id: "x", result: nil, node_state: :committed, event: nil},
     abort_running_attempts: {workflow_id: "x"},
     list_attempts: {workflow_id: "x"},

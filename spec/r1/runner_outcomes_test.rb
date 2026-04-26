@@ -111,4 +111,26 @@ class RunnerOutcomesTest < Minitest::Test
 
     assert_raises(DAG::StaleStateError) { runner.call(workflow_id) }
   end
+
+  # Roadmap §R1 line 565: when the per-layer loop exits with no eligible
+  # nodes and the workflow is incomplete (no node :waiting), workflow goes
+  # to :failed with diagnostic, not :waiting.
+  def test_finalize_fails_with_diagnostic_when_no_eligible_and_incomplete
+    storage = DAG::Adapters::Memory::Storage.new
+    event_bus = DAG::Adapters::Memory::EventBus.new
+    runner = build_runner(storage: storage, event_bus: event_bus)
+    workflow_id = create_workflow(storage, simple_definition)
+
+    # Park `a` in :invalidated (R3-territory state). For R1 there is no
+    # natural transition that produces this without a mutation, so we cheat
+    # via the storage CAS for the test only.
+    storage.transition_node_state(workflow_id: workflow_id, revision: 1, node_id: :a, from: :pending, to: :invalidated)
+    # `b`'s predecessor `a` is :invalidated (not :committed) so eligibility
+    # never lights up, but `b` is still :pending and no node is :waiting.
+
+    result = runner.call(workflow_id)
+    assert_equal :failed, result.state
+    failure_event = event_bus.events.reverse_each.find { |e| e.type == :workflow_failed }
+    assert_equal :no_eligible_but_incomplete, failure_event.payload[:diagnostic]
+  end
 end

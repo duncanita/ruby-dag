@@ -79,13 +79,13 @@ lib/dag/ports/clock.rb                    # Ports::Clock interface
 lib/dag/ports/id_generator.rb             # Ports::IdGenerator interface
 lib/dag/ports/serializer.rb               # Ports::Serializer interface
 lib/dag/execution_context.rb              # DAG::ExecutionContext (deep-frozen CoW)
-lib/dag/step_protocol.rb                  # DAG::StepProtocol.implements? + valid_result?
+lib/dag/step_protocol.rb                  # DAG::StepProtocol.valid_result? (boundary type guard)
 lib/dag/step/base.rb                      # DAG::Step::Base (freezes self + config)
 lib/dag/step_type_registry.rb             # DAG::StepTypeRegistry
 lib/dag/builtin_steps/noop.rb             # :noop -> Success(nil, {})
 lib/dag/builtin_steps/passthrough.rb      # :passthrough -> Success(context, context)
 lib/dag/workflow/definition.rb            # DAG::Workflow::Definition (immutable, chainable)
-lib/dag/runner.rb                         # DAG::Runner kernel
+lib/dag/runner.rb                         # DAG::Runner kernel + private RunContext carrier
 lib/dag/adapters/stdlib/clock.rb          # wall + monotonic ms
 lib/dag/adapters/stdlib/id_generator.rb   # SecureRandom.uuid
 lib/dag/adapters/stdlib/fingerprint.rb    # JSON-canonical SHA256
@@ -115,6 +115,24 @@ All errors inherit from `DAG::Error < StandardError`:
 - `WorkflowRetryExhaustedError`
 
 Adding a duplicate edge is **not** an error — `add_edge` is idempotent.
+
+## File-per-class convention
+
+One class, module, or `Data.define` per file is the project default — it
+makes navigation predictable: a name `Foo::Bar` lives at
+`lib/dag/foo/bar.rb`, no exceptions to remember.
+
+The single exception: **private internal data carriers stay inline in
+their consumer's file.** A `Data.define` that exists only to suppress
+parameter sprawl inside one other class, that is never imported
+elsewhere, that has no validation logic, and that would be deleted if
+its consumer were deleted, lives at the top of the consumer's file. The
+test for inlining is: *"if I delete the consumer, does this carrier die
+with it?"* If yes, inline. If no (it's reusable, public, validated,
+exposed in `CONTRACT.md`), give it a file.
+
+This keeps the convention's value (predictable navigation for the
+public surface) without paying ceremony for private scaffolding.
 
 ## R1 conventions
 
@@ -162,6 +180,28 @@ Adding a duplicate edge is **not** an error — `add_edge` is idempotent.
 - `Memory::Storage` events get a monotonic `seq`; `read_events(after_seq:,
   limit:)` filters by it. `EventBus#publish` sees the same stamped event
   the storage appended.
+- **`Runner#call` finalization** follows Roadmap v3.4 §R1 line 565: if
+  the per-layer loop exits with no eligible nodes and the workflow is
+  not complete, the workflow transitions to `:failed` with event
+  payload `{diagnostic: :no_eligible_but_incomplete}`. It does NOT
+  fall back to `:waiting` — `:waiting` only fires when at least one
+  node is in state `:waiting`.
+- **`begin_attempt` is a pure writer.** The Runner computes
+  `attempt_number = storage.count_attempts(...) + 1` before calling
+  `storage.begin_attempt(..., attempt_number:)` (Roadmap §R1 lines
+  522-525). The storage adapter does not own the numbering rule —
+  this matters when SQLite arrives in S0 because the count and the
+  insert can share one transaction.
+- **`workflow_started` is emitted once per workflow lifetime**, not per
+  `Runner#call`. The Runner detects prior emission by scanning the
+  event log via `Storage#read_events`. After `Runner#retry_workflow`
+  the workflow goes back to `:pending` and `#call` runs again, but
+  `workflow_started` is not re-emitted.
+- Hot-path graph iteration uses `each_predecessor` / `each_successor`
+  rather than `predecessors` / `successors`, which dup the internal
+  Set every call. The Runner's `build_run_context` precomputes
+  `predecessors_by_node` once per `Runner#call` so per-node lookups
+  are O(1) Hash reads.
 
 ## Roadmap board hygiene
 

@@ -30,7 +30,6 @@ require_relative "dag/step_type_registry"
 require_relative "dag/builtin_steps/noop"
 require_relative "dag/builtin_steps/passthrough"
 require_relative "dag/workflow/definition"
-require_relative "dag/run_context"
 require_relative "dag/runner"
 
 # Default adapters

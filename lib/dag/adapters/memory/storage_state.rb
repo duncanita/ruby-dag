@@ -96,22 +96,22 @@ module DAG
           id = args.fetch(:id)
           revision = args.fetch(:revision)
           states_for_rev = fetch_node_states!(state, id, revision)
-          reset = []
-          states_for_rev.each do |node_id, node_state|
-            if node_state == :failed
-              states_for_rev[node_id] = :pending
-              reset << node_id
-              # Abort prior attempts so the per-node attempt counter restarts
-              # from 1 for this workflow retry. count_attempts excludes
-              # :aborted attempts.
-              state[:attempts_index].fetch(id, []).each do |aid|
-                attempt = state[:attempts][aid]
-                next unless attempt[:revision] == revision && attempt[:node_id] == node_id
-                attempt[:state] = :aborted if attempt[:state] == :failed
-              end
+          # Snapshot the failed node ids before mutating; iterating a Hash
+          # while reassigning values is technically safe in Ruby but the
+          # snapshot makes the intent obvious and survives future edits.
+          failed_node_ids = states_for_rev.select { |_, s| s == :failed }.keys
+          # Abort prior :failed attempts so the per-node attempt counter
+          # restarts from 1 on the next run. count_attempts excludes
+          # :aborted attempts.
+          failed_node_ids.each do |node_id|
+            states_for_rev[node_id] = :pending
+            state[:attempts_index].fetch(id, []).each do |aid|
+              attempt = state[:attempts][aid]
+              next unless attempt[:revision] == revision && attempt[:node_id] == node_id
+              attempt[:state] = :aborted if attempt[:state] == :failed
             end
           end
-          {id: id, revision: revision, reset: reset}
+          {id: id, revision: revision, reset: failed_node_ids}
         end
 
         def append_revision(state, args)
@@ -178,10 +178,14 @@ module DAG
           {workflow_id: id, revision: revision, node_id: node_id, state: to}
         end
 
+        # Pure writer: caller supplies attempt_number (Roadmap §R1 lines
+        # 522-525). The adapter does not own the numbering rule; this lets
+        # SQLite share one transaction between count + insert in S0.
         def begin_attempt(state, args)
           id = args.fetch(:workflow_id)
           revision = args.fetch(:revision)
           node_id = args.fetch(:node_id)
+          attempt_number = args.fetch(:attempt_number)
           expected = args.fetch(:expected_node_state)
 
           states_for_rev = fetch_node_states!(state, id, revision)
@@ -190,7 +194,7 @@ module DAG
             raise StaleStateError, "node #{node_id} state is #{current.inspect}, expected #{expected.inspect}"
           end
 
-          attempt_number = count_attempts_internal(state, id, revision, node_id, exclude: [:aborted]) + 1
+          # Format is opaque; consumers must not parse it.
           attempt_id = "#{id}/#{revision}/#{node_id}/#{attempt_number}"
 
           states_for_rev[node_id] = :running
@@ -206,7 +210,7 @@ module DAG
             finished_at_ms: nil
           }
           state[:attempts_index][id] << attempt_id
-          {attempt_id: attempt_id, attempt_number: attempt_number}
+          attempt_id
         end
 
         def commit_attempt(state, args)

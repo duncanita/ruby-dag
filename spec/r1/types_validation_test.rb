@@ -121,9 +121,17 @@ class TypesValidationTest < Minitest::Test
     assert definition.graph.frozen?
   end
 
-  def test_step_protocol_implements_rejects_non_class
-    refute DAG::StepProtocol.implements?("not a class")
-    refute DAG::StepProtocol.implements?(Object.new)
+  def test_step_protocol_valid_result_accepts_step_outcomes
+    assert DAG::StepProtocol.valid_result?(DAG::Success[value: 1])
+    assert DAG::StepProtocol.valid_result?(DAG::Waiting[reason: :ext])
+    assert DAG::StepProtocol.valid_result?(DAG::Failure[error: {code: :x, message: "y"}])
+  end
+
+  def test_step_protocol_valid_result_rejects_other_values
+    refute DAG::StepProtocol.valid_result?(:symbol)
+    refute DAG::StepProtocol.valid_result?("string")
+    refute DAG::StepProtocol.valid_result?({k: :v})
+    refute DAG::StepProtocol.valid_result?(nil)
   end
 
   def test_step_type_registry_rejects_non_symbol_name
