@@ -96,20 +96,17 @@ module DAG
           id = args.fetch(:id)
           revision = args.fetch(:revision)
           states_for_rev = fetch_node_states!(state, id, revision)
-          # Snapshot the failed node ids before mutating; iterating a Hash
-          # while reassigning values is technically safe in Ruby but the
-          # snapshot makes the intent obvious and survives future edits.
           failed_node_ids = states_for_rev.select { |_, s| s == :failed }.keys
-          # Abort prior :failed attempts so the per-node attempt counter
-          # restarts from 1 on the next run. count_attempts excludes
-          # :aborted attempts.
-          failed_node_ids.each do |node_id|
-            states_for_rev[node_id] = :pending
-            state[:attempts_index].fetch(id, []).each do |aid|
-              attempt = state[:attempts][aid]
-              next unless attempt[:revision] == revision && attempt[:node_id] == node_id
-              attempt[:state] = :aborted if attempt[:state] == :failed
-            end
+          failed_node_ids.each { |node_id| states_for_rev[node_id] = :pending }
+
+          # Aborting prior :failed attempts in one walk is O(total_attempts),
+          # vs O(failed × total_attempts) per-node. count_attempts excludes
+          # :aborted, so on the next run attempt_number restarts at 1.
+          failed_set = failed_node_ids.to_set
+          state[:attempts_index].fetch(id, []).each do |aid|
+            attempt = state[:attempts][aid]
+            next unless attempt[:revision] == revision && failed_set.include?(attempt[:node_id])
+            attempt[:state] = :aborted if attempt[:state] == :failed
           end
           {id: id, revision: revision, reset: failed_node_ids}
         end
@@ -178,9 +175,8 @@ module DAG
           {workflow_id: id, revision: revision, node_id: node_id, state: to}
         end
 
-        # Pure writer: caller supplies attempt_number (Roadmap §R1 lines
-        # 522-525). The adapter does not own the numbering rule; this lets
-        # SQLite share one transaction between count + insert in S0.
+        # Pure writer: caller owns numbering so SQLite can share count + insert
+        # in one transaction.
         def begin_attempt(state, args)
           id = args.fetch(:workflow_id)
           revision = args.fetch(:revision)
@@ -194,7 +190,6 @@ module DAG
             raise StaleStateError, "node #{node_id} state is #{current.inspect}, expected #{expected.inspect}"
           end
 
-          # Format is opaque; consumers must not parse it.
           attempt_id = "#{id}/#{revision}/#{node_id}/#{attempt_number}"
 
           states_for_rev[node_id] = :running
@@ -261,6 +256,18 @@ module DAG
           count_attempts_internal(state, id, revision, node_id, exclude: [:aborted])
         end
 
+        def latest_committed_attempt(state, args)
+          id = args.fetch(:workflow_id)
+          revision = args.fetch(:revision)
+          node_id = args.fetch(:node_id)
+          state[:attempts_index].fetch(id, []).reverse_each do |aid|
+            attempt = state[:attempts][aid]
+            next unless attempt[:revision] == revision && attempt[:node_id] == node_id
+            return attempt if attempt[:state] == :committed
+          end
+          nil
+        end
+
         def append_event(state, args)
           id = args.fetch(:workflow_id)
           event = args.fetch(:event)
@@ -277,8 +284,14 @@ module DAG
           after_seq = args[:after_seq]
           limit = args[:limit]
           events = state[:events].fetch(id, [])
-          filtered = after_seq ? events.select { |e| e.seq > after_seq } : events.dup
-          limit ? filtered.first(limit) : filtered
+          events = events.select { |e| e.seq > after_seq } if after_seq
+          events = events.first(limit) if limit
+          events
+        end
+
+        def last_event_seq(state, args)
+          seq = state[:seq][args.fetch(:workflow_id)]
+          (seq && seq > 0) ? seq : nil
         end
 
         def count_attempts_internal(state, id, revision, node_id, exclude: [])

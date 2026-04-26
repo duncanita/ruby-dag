@@ -55,11 +55,26 @@ module DAG
         raise PortNotImplementedError
       end
 
+      # Returns the most recent attempt record for (workflow, revision, node)
+      # whose state is :committed, or nil if there isn't one. Lets adapters
+      # answer the runner's per-predecessor effective-context lookup with a
+      # single record instead of the full attempt history.
+      def latest_committed_attempt(workflow_id:, revision:, node_id:)
+        raise PortNotImplementedError
+      end
+
       def append_event(workflow_id:, event:)
         raise PortNotImplementedError
       end
 
       def read_events(workflow_id:, after_seq: nil, limit: nil)
+        raise PortNotImplementedError
+      end
+
+      # Returns the seq of the most recent event for the workflow, or nil if
+      # there are no events. Cheaper than reading the whole log just to take
+      # `events.last&.seq`.
+      def last_event_seq(workflow_id:)
         raise PortNotImplementedError
       end
     end

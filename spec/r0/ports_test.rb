@@ -17,8 +17,10 @@ class R0PortsTest < Minitest::Test
     abort_running_attempts: {workflow_id: "x"},
     list_attempts: {workflow_id: "x"},
     count_attempts: {workflow_id: "x", revision: 1, node_id: :a},
+    latest_committed_attempt: {workflow_id: "x", revision: 1, node_id: :a},
     append_event: {workflow_id: "x", event: nil},
-    read_events: {workflow_id: "x"}
+    read_events: {workflow_id: "x"},
+    last_event_seq: {workflow_id: "x"}
   }.freeze
 
   def test_storage_port_every_method_raises_port_not_implemented

@@ -152,6 +152,29 @@ class StorageStateExtrasTest < Minitest::Test
     assert_equal 1, limited.size
   end
 
+  def test_last_event_seq_returns_monotonic_seq_or_nil
+    workflow_id = create_workflow(@storage, @definition)
+    assert_nil @storage.last_event_seq(workflow_id: workflow_id)
+    @storage.append_event(workflow_id: workflow_id, event: build_event(:node_started))
+    @storage.append_event(workflow_id: workflow_id, event: build_event(:node_committed))
+    assert_equal 2, @storage.last_event_seq(workflow_id: workflow_id)
+  end
+
+  def test_latest_committed_attempt_returns_most_recent_committed
+    workflow_id = create_workflow(@storage, @definition)
+    a1 = @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, attempt_number: 1, expected_node_state: :pending)
+    @storage.commit_attempt(attempt_id: a1, result: DAG::Failure[error: {code: :x, message: "y"}, retriable: true], node_state: :pending)
+
+    assert_nil @storage.latest_committed_attempt(workflow_id: workflow_id, revision: 1, node_id: :a)
+
+    a2 = @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, attempt_number: 2, expected_node_state: :pending)
+    @storage.commit_attempt(attempt_id: a2, result: DAG::Success[value: 42, context_patch: {x: 1}], node_state: :committed)
+
+    latest = @storage.latest_committed_attempt(workflow_id: workflow_id, revision: 1, node_id: :a)
+    assert_equal a2, latest[:attempt_id]
+    assert_equal 42, latest[:result].value
+  end
+
   private
 
   def create_workflow_with_id(id)

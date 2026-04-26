@@ -37,8 +37,10 @@ module DAG
         def abort_running_attempts(**args) = dispatch(:abort_running_attempts, args)
         def list_attempts(**args) = dispatch(:list_attempts, args)
         def count_attempts(**args) = dispatch(:count_attempts, args)
+        def latest_committed_attempt(**args) = dispatch(:latest_committed_attempt, args)
         def append_event(**args) = dispatch(:append_event, args)
         def read_events(**args) = dispatch(:read_events, args)
+        def last_event_seq(**args) = dispatch(:last_event_seq, args)
 
         private
 

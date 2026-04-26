@@ -4,15 +4,6 @@ module DAG
   REQUIRED_RUNNER_DEPENDENCIES = %i[storage event_bus registry clock id_generator fingerprint serializer].freeze
 
   class Runner
-    # Per-call constants threaded through the Runner internals: the workflow
-    # being executed, the definition, the runtime profile, the base
-    # ExecutionContext (built once from initial_context), and a
-    # predecessors_by_node map so the eligibility loop and effective-context
-    # calculation never re-walk the graph or re-load the workflow row.
-    #
-    # Inlined here per the file-per-class exception in CLAUDE.md: this is a
-    # private internal carrier with one consumer (Runner) and would die with
-    # it on deletion.
     RunContext = Data.define(
       :workflow_id,
       :revision,
@@ -99,7 +90,7 @@ module DAG
       definition.each_node do |node_id|
         preds = []
         definition.each_predecessor(node_id) { |p| preds << p }
-        predecessors_by_node[node_id] = preds.sort_by!(&:to_s).freeze
+        predecessors_by_node[node_id] = preds.sort!.freeze
       end
       predecessors_by_node.freeze
 
@@ -113,15 +104,10 @@ module DAG
       )
     end
 
-    # workflow_started is emitted exactly once per workflow lifetime. The
-    # event log is the source of truth: after Runner#retry_workflow the
-    # workflow goes back to :pending and #call runs again, but
-    # workflow_started must NOT be re-emitted. Scanning the log is O(events)
-    # but happens once per #call; the cost is negligible relative to the
-    # work it gates.
+    # Emitted once per workflow lifetime; survives Runner#retry_workflow.
     def append_workflow_started_once(run)
-      events = @storage.read_events(workflow_id: run.workflow_id)
-      return if events.any? { |e| e.type == :workflow_started }
+      first_event = @storage.read_events(workflow_id: run.workflow_id, limit: 1).first
+      return if first_event&.type == :workflow_started
 
       append_event(run,
         type: :workflow_started,
@@ -218,8 +204,7 @@ module DAG
     def effective_context(run, node_id)
       ctx = run.base_context
       run.predecessors_by_node[node_id].each do |pred|
-        attempts = @storage.list_attempts(workflow_id: run.workflow_id, revision: run.revision, node_id: pred)
-        committed = attempts.reverse_each.find { |a| a[:state] == :committed }
+        committed = @storage.latest_committed_attempt(workflow_id: run.workflow_id, revision: run.revision, node_id: pred)
         next unless committed
 
         ctx = ctx.merge(committed[:result].context_patch)
@@ -242,13 +227,11 @@ module DAG
       DAG::Result.exception_failure(:step_raised, e)
     end
 
-    # Roadmap §R1 line 565: "if all nodes committed -> :completed; elsif any
-    # waiting -> :waiting; elsif any failed -> :failed; else -> :failed con
-    # diagnostic". The :paused/:failed_terminal early returns above already
-    # handled the loop-exit cases caused by the inner step outcomes, so this
-    # block only sees natural loop exhaustion (eligible.empty?). The "no
-    # eligible but incomplete" branch must surface :failed with a diagnostic
-    # payload, NOT silently coerce to :waiting.
+    # The :paused/:failed_terminal early returns above are the only paths
+    # back here that were caused by step outcomes; everything else fell
+    # through naturally on `eligible.empty?`. The else branch is the
+    # diagnostic case: not complete, no node waiting — surface :failed
+    # explicitly rather than coerce to :waiting.
     def finalize(run, paused:, failed:)
       return build_run_result(run, :paused) if paused
       return build_run_result(run, :failed) if failed
@@ -271,10 +254,9 @@ module DAG
     end
 
     def build_run_result(run, state)
-      events = @storage.read_events(workflow_id: run.workflow_id)
       DAG::RunResult.new(
         state: state,
-        last_event_seq: events.last&.seq,
+        last_event_seq: @storage.last_event_seq(workflow_id: run.workflow_id),
         outcome: {workflow_id: run.workflow_id, revision: run.revision},
         metadata: {}
       )
