@@ -22,13 +22,30 @@ class MemoryStorageCasTest < Minitest::Test
     end
   end
 
-  def test_count_attempts_excludes_aborted
+  def test_count_attempts_includes_non_aborted_attempts
     assert_equal 0, @storage.count_attempts(workflow_id: @workflow_id, revision: 1, node_id: :a)
-    a1 = @storage.begin_attempt(workflow_id: @workflow_id, revision: 1, node_id: :a, expected_node_state: :pending)
-    @storage.commit_attempt(attempt_id: a1, result: DAG::Success[value: 1, context_patch: {}], node_state: :pending, event: build_event(:node_committed, workflow_id: @workflow_id))
+    a1 = @storage.begin_attempt(
+      workflow_id: @workflow_id,
+      revision: 1,
+      node_id: :a,
+      expected_node_state: :pending,
+      attempt_number: 1
+    )
+    @storage.commit_attempt(
+      attempt_id: a1,
+      result: DAG::Failure[error: {code: :retry}, retriable: true],
+      node_state: :pending,
+      event: build_event(:node_failed, workflow_id: @workflow_id)
+    )
     @storage.abort_running_attempts(workflow_id: @workflow_id) # nothing to abort
 
-    a2 = @storage.begin_attempt(workflow_id: @workflow_id, revision: 1, node_id: :a, expected_node_state: :pending)
+    a2 = @storage.begin_attempt(
+      workflow_id: @workflow_id,
+      revision: 1,
+      node_id: :a,
+      expected_node_state: :pending,
+      attempt_number: 2
+    )
     refute_equal a1, a2
     assert_equal 2, @storage.count_attempts(workflow_id: @workflow_id, revision: 1, node_id: :a)
   end

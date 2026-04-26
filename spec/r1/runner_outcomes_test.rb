@@ -99,7 +99,7 @@ class RunnerOutcomesTest < Minitest::Test
     workflow_id = create_workflow(storage, simple_definition)
     storage.transition_workflow_state(id: workflow_id, from: :pending, to: :paused)
 
-    result = runner.call(workflow_id)
+    result = runner.resume(workflow_id)
     assert_equal :completed, result.state
   end
 
@@ -108,6 +108,15 @@ class RunnerOutcomesTest < Minitest::Test
     runner = build_runner(storage: storage)
     workflow_id = create_workflow(storage, simple_definition)
     storage.transition_workflow_state(id: workflow_id, from: :pending, to: :running)
+
+    assert_raises(DAG::StaleStateError) { runner.call(workflow_id) }
+  end
+
+  def test_call_rejects_paused_workflow
+    storage = DAG::Adapters::Memory::Storage.new
+    runner = build_runner(storage: storage)
+    workflow_id = create_workflow(storage, simple_definition)
+    storage.transition_workflow_state(id: workflow_id, from: :pending, to: :paused)
 
     assert_raises(DAG::StaleStateError) { runner.call(workflow_id) }
   end

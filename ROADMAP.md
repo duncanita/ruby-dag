@@ -9,10 +9,11 @@ Tracked phases:
 
 | Phase | Issue  | Status     |
 |-------|--------|------------|
-| R0    | #70    | Done (#122)|
-| R1    | #71    | In Progress (this PR) |
-| R2    | #72    | Backlog    |
-| R3    | #73    | Backlog    |
+| R0    | #70    | Done (#122) |
+| R1    | #71    | Done (#123) |
+| R2    | #72    | Done (#124) |
+| R3    | #73    | Done (#125) |
+| S0    | TBD    | Next |
 | Release v1.0 | #74 | Backlog |
 
 Roadmap board: <https://github.com/users/duncanita/projects/2>.

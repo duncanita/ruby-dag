@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Added — Roadmap v3.4 R2/R3: resume and structural mutation
+
+- `DAG::Runner#resume` resumes workflows in `:running`, `:waiting`, or
+  `:paused`, aborting in-flight attempts before recomputing eligibility.
+- `DAG::Adapters::Memory::CrashableStorage` supports deterministic crash
+  injection and `#snapshot_to_healthy` for resume tests.
+- `DAG::DefinitionEditor` and `DAG::MutationService` implement R3
+  `:invalidate` and `:replace_subtree` planning/application with revision CAS
+  and durable `mutation_applied` events.
+- Storage attempt numbering is now supplied by the Runner via
+  `begin_attempt(..., attempt_number:)`; storage persists the supplied number
+  and rejects duplicate `commit_attempt` calls.
+- Tagged types validate through `initialize`, so `.new`, `[]`, and `#with`
+  share the same JSON-safety and closed-enum checks.
+
+### Changed
+
+- `DAG::Runner#call` now only accepts workflows in `:pending`. Use
+  `DAG::Runner#resume` to recover workflows in `:waiting` or `:paused`.
+- `DAG::RunResult` now validates `outcome:` and `metadata:` as JSON-safe
+  on construction; passing `Time`, non-finite floats, or other non-JSON
+  values raises `ArgumentError`.
+
 ### Added — Roadmap v3.4 R1: deterministic core runner and default adapters
 
 - `DAG::Runner` — frozen kernel runner with seven injected ports

@@ -45,8 +45,15 @@ module DAG
           frozen StorageState.transition_node_state(@state, workflow_id: workflow_id, revision: revision, node_id: node_id, from: from, to: to)
         end
 
-        def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:)
-          frozen StorageState.begin_attempt(@state, workflow_id: workflow_id, revision: revision, node_id: node_id, expected_node_state: expected_node_state)
+        def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:)
+          frozen StorageState.begin_attempt(
+            @state,
+            workflow_id: workflow_id,
+            revision: revision,
+            node_id: node_id,
+            expected_node_state: expected_node_state,
+            attempt_number: attempt_number
+          )
         end
 
         def commit_attempt(attempt_id:, result:, node_state:, event:)

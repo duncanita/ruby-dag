@@ -35,8 +35,6 @@ module DAG
       return DAG::PlanResult.invalid("unknown target node: #{target}") unless definition.has_node?(target)
 
       replacement = mutation.replacement_graph
-      validate_replacement_graph!(replacement)
-
       removed = definition.exclusive_descendants_of(target, include_self: true)
       impacted = definition.descendants_of(target, include_self: true) - removed
       kept_nodes = definition.nodes - removed
@@ -53,23 +51,6 @@ module DAG
       )
 
       DAG::PlanResult.valid(new_definition: new_definition, invalidated_node_ids: impacted)
-    end
-
-    def validate_replacement_graph!(replacement)
-      raise ArgumentError, "replacement_graph must be a DAG::ReplacementGraph" unless replacement.is_a?(DAG::ReplacementGraph)
-      raise ArgumentError, "replacement graph must be a DAG::Graph" unless replacement.graph.is_a?(DAG::Graph)
-      validate_node_id_list!(replacement.entry_node_ids, "entry_node_ids", replacement.graph)
-      validate_node_id_list!(replacement.exit_node_ids, "exit_node_ids", replacement.graph)
-    end
-
-    def validate_node_id_list!(ids, label, graph)
-      raise ArgumentError, "#{label} must be an Array" unless ids.is_a?(Array)
-      raise ArgumentError, "#{label} cannot be empty" if ids.empty?
-
-      ids.each do |id|
-        raise ArgumentError, "#{label} entries must be Symbol or String, got #{id.class}: #{id.inspect}" unless id.is_a?(Symbol) || id.is_a?(String)
-        raise ArgumentError, "replacement #{label.sub("_node_ids", "")} node is not in graph: #{id}" unless graph.node?(id)
-      end
     end
 
     def build_replaced_graph(definition, target, removed, kept_nodes, replacement, replacement_nodes)

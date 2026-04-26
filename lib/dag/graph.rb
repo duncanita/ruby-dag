@@ -27,7 +27,9 @@ module DAG
   # detects cycles in O(V+E).
   class Graph
     EMPTY_SET = Set.new.freeze
+    EMPTY_HASH = {}.freeze
     private_constant :EMPTY_SET
+    private_constant :EMPTY_HASH
 
     # Frozen snapshot of the node set. Mutating it never affects the graph.
     def nodes
@@ -221,7 +223,7 @@ module DAG
     end
 
     def edge_metadata(from, to)
-      @edge_metadata.dig(from.to_sym, to.to_sym) || {}
+      @edge_metadata.dig(from.to_sym, to.to_sym) || EMPTY_HASH
     end
 
     # --- Neighbor queries ---
@@ -564,7 +566,7 @@ module DAG
       (@adjacency[from] ||= Set.new) << to
       (@reverse[to] ||= Set.new) << from
       return if metadata.empty?
-      (@edge_metadata[from] ||= {})[to] = metadata.freeze
+      (@edge_metadata[from] ||= {})[to] = DAG.frozen_copy(metadata)
     end
 
     # Drops a single (from, to) entry from the nested @edge_metadata hash

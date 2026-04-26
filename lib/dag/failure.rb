@@ -8,14 +8,14 @@ module DAG
       remove_method :[]
 
       def [](error:, retriable: false, metadata: {})
-        DAG.json_safe!(error, "$root.error")
-        DAG.json_safe!(metadata, "$root.metadata")
-
         new(error: error, retriable: retriable, metadata: metadata)
       end
     end
 
     def initialize(error:, retriable: false, metadata: {})
+      DAG.json_safe!(error, "$root.error")
+      DAG.json_safe!(metadata, "$root.metadata")
+
       super(
         error: DAG.deep_freeze(DAG.deep_dup(error)),
         retriable: !!retriable,

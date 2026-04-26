@@ -4,7 +4,7 @@ module DAG
   # First-class directed edge in the DAG.
   Edge = Data.define(:from, :to, :metadata) do
     def initialize(from:, to:, metadata: {})
-      super(from: from.to_sym, to: to.to_sym, metadata: metadata.freeze)
+      super(from: from.to_sym, to: to.to_sym, metadata: DAG.frozen_copy(metadata))
     end
 
     def weight = metadata.fetch(:weight, 1)

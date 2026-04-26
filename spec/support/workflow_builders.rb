@@ -48,7 +48,8 @@ module WorkflowBuilders
       workflow_id: workflow_id,
       revision: revision,
       node_id: node_id,
-      expected_node_state: :pending
+      expected_node_state: :pending,
+      attempt_number: 1
     )
     storage.commit_attempt(
       attempt_id: attempt_id,

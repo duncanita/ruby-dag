@@ -40,10 +40,14 @@ module DAG
         raise PortNotImplementedError
       end
 
-      def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:)
+      # The Runner owns attempt numbering and passes the already-computed
+      # number here; adapters persist it and do not recalculate.
+      def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:)
         raise PortNotImplementedError
       end
 
+      # One-shot atomic terminal transition for an attempt. Adapters must reject
+      # commits for attempts that are no longer :running.
       def commit_attempt(attempt_id:, result:, node_state:, event:)
         raise PortNotImplementedError
       end

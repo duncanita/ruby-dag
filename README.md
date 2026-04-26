@@ -6,8 +6,8 @@ dependencies; Ruby 3.4+.
 > The legacy v0.x runtime (`Workflow::Runner`, YAML loader, parallel
 > strategies, `:exec` / `:ruby_script` / `:sub_workflow` step types) was
 > removed during R1. The current state of the kernel is the deterministic
-> in-memory runtime described below. SQLite storage, durable resume,
-> and adaptive structural mutation arrive in later phases (R2 / R3 / S0).
+> in-memory runtime described below. Durable in-memory resume and adaptive
+> structural mutation are present; SQLite storage arrives in S0.
 
 ## Quick start
 
@@ -65,8 +65,8 @@ result.state
   `DAG::StepTypeRegistry` with a deterministic
   `fingerprint_payload`.
 - **Runner** (`DAG::Runner`) — frozen, dependency-injected. `#call(id)`
-  runs the layered algorithm; `#retry_workflow(id)` enforces the
-  workflow-retry budget.
+  starts pending workflows, `#resume(id)` recovers running/waiting/paused
+  workflows, and `#retry_workflow(id)` enforces the workflow-retry budget.
 - **Adapters** (`DAG::Adapters::*`) — `Memory::Storage`,
   `Memory::EventBus`, `Null::EventBus`, plus `Stdlib::{Clock,
   IdGenerator, Fingerprint, Serializer}`.
@@ -77,8 +77,8 @@ for the R1 implementation notes.
 
 ## Status
 
-R1 has landed. Next: R2 resume + crash recovery (#72), R3 adaptive
-structural mutation (#73), Release v1.0 readiness gate (#74).
+R0-R3 have landed. Next: S0 SQLite storage and the Release v1.0 readiness
+gate (#74).
 
 Roadmap board: <https://github.com/users/duncanita/projects/2>.
 

@@ -47,6 +47,23 @@ class ResumeAfterCrashTest < Minitest::Test
     assert_equal :committed, node_state(healthy_storage, workflow_id, :c)
   end
 
+  def test_begin_attempt_crash_can_match_attempt_number
+    storage = DAG::Adapters::Memory::CrashableStorage.new(
+      crash_on: {method: :begin_attempt, node_id: :a, attempt_number: 7, before: true}
+    )
+    workflow_id = create_workflow(storage, simple_definition)
+
+    assert_raises(DAG::Adapters::Memory::SimulatedCrash) do
+      storage.begin_attempt(
+        workflow_id: workflow_id,
+        revision: 1,
+        node_id: :a,
+        expected_node_state: :pending,
+        attempt_number: 7
+      )
+    end
+  end
+
   private
 
   def logging_chain

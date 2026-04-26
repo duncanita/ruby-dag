@@ -909,6 +909,19 @@ class GraphTest < Minitest::Test
     assert_equal({weight: 7}, duped.edge_metadata(:a, :b))
   end
 
+  def test_edge_metadata_is_deep_frozen_and_isolated_from_caller_mutation
+    tags = ["initial"]
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    graph.add_edge(:a, :b, tags: tags)
+    graph.freeze
+
+    tags << "mutated"
+
+    assert_equal({tags: ["initial"]}, graph.edge_metadata(:a, :b))
+    assert graph.edge_metadata(:a, :b)[:tags].frozen?
+    assert_raises(FrozenError) { graph.edge_metadata(:a, :b)[:tags] << "nope" }
+  end
+
   def test_edge_metadata_in_subgraph
     graph = build_graph([:a, :b, :c], [])
     graph.add_edge(:a, :b, weight: 2)

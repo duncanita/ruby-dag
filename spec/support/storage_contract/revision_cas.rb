@@ -27,7 +27,8 @@ module StorageContract
         workflow_id: workflow_id,
         revision: 1,
         node_id: :a,
-        expected_node_state: :pending
+        expected_node_state: :pending,
+        attempt_number: 1
       )
       storage.commit_attempt(
         attempt_id: attempt_id,
