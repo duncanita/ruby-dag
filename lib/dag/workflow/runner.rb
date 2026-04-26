@@ -528,14 +528,27 @@ module DAG
               "sub_workflow step #{step.name} output_key #{output_key.inspect} must reference a leaf node (leaves: #{leaves.inspect})"
           end
 
-          return outputs.fetch(output_key).value
+          return outputs.key?(output_key) ? outputs[output_key].value : leaf_missing_failure(step, output_key, outputs)
         end
 
-        leaves.to_h { |leaf| [leaf, outputs.fetch(leaf).value] }
+        leaves.each_with_object({}) do |leaf, acc|
+          return leaf_missing_failure(step, leaf, outputs) unless outputs.key?(leaf)
+
+          acc[leaf] = outputs[leaf].value
+        end
       rescue ValidationError => e
         Failure.new(error: {
           code: :sub_workflow_invalid_output_key,
           message: e.message
+        })
+      end
+
+      def leaf_missing_failure(step, leaf, outputs)
+        Failure.new(error: {
+          code: :sub_workflow_leaf_missing,
+          message: "sub_workflow step #{step.name} expected output for leaf #{leaf.inspect} but it was not produced",
+          missing_leaf: leaf,
+          available_outputs: outputs.keys
         })
       end
 
