@@ -531,9 +531,11 @@ module DAG
           return outputs.key?(output_key) ? outputs[output_key].value : leaf_missing_failure(step, output_key, outputs)
         end
 
-        return leaf_missing_failure(step, leaves.find { |l| !outputs.key?(l) }, outputs) unless leaves.all? { |l| outputs.key?(l) }
+        leaves.each_with_object({}) do |leaf, acc|
+          return leaf_missing_failure(step, leaf, outputs) unless outputs.key?(leaf)
 
-        leaves.to_h { |leaf| [leaf, outputs[leaf].value] }
+          acc[leaf] = outputs[leaf].value
+        end
       rescue ValidationError => e
         Failure.new(error: {
           code: :sub_workflow_invalid_output_key,
