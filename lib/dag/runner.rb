@@ -66,8 +66,7 @@ module DAG
       max = workflow[:runtime_profile].max_workflow_retries
       raise WorkflowRetryExhaustedError, "workflow retries exhausted (#{retry_count}/#{max})" if retry_count >= max
 
-      @storage.increment_workflow_retry(id: workflow_id)
-      @storage.reset_failed_nodes(id: workflow_id, revision: workflow[:current_revision])
+      @storage.prepare_workflow_retry(id: workflow_id)
       @storage.transition_workflow_state(id: workflow_id, from: :failed, to: :pending)
       call(workflow_id)
     end
@@ -132,7 +131,6 @@ module DAG
         workflow_id: run.workflow_id,
         revision: run.revision,
         node_id: node_id,
-        attempt_number: attempt_number,
         expected_node_state: :pending
       )
 
@@ -188,8 +186,7 @@ module DAG
         attempt_id: attempt_id,
         result: result,
         node_state: node_state,
-        event: event,
-        finished_at_ms: @clock.now_ms
+        event: event
       )
       @event_bus.publish(stamped)
     end
@@ -206,7 +203,8 @@ module DAG
     def effective_context(run, node_id)
       ctx = run.base_context
       run.predecessors_by_node[node_id].each do |pred|
-        committed = @storage.latest_committed_attempt(workflow_id: run.workflow_id, revision: run.revision, node_id: pred)
+        attempts = @storage.list_attempts(workflow_id: run.workflow_id, revision: run.revision, node_id: pred)
+        committed = attempts.reverse_each.find { |a| a[:state] == :committed }
         next unless committed
 
         ctx = ctx.merge(committed[:result].context_patch)
@@ -256,9 +254,10 @@ module DAG
     end
 
     def build_run_result(run, state)
+      events = @storage.read_events(workflow_id: run.workflow_id)
       DAG::RunResult.new(
         state: state,
-        last_event_seq: @storage.last_event_seq(workflow_id: run.workflow_id),
+        last_event_seq: events.last&.seq,
         outcome: {workflow_id: run.workflow_id, revision: run.revision},
         metadata: {}
       )

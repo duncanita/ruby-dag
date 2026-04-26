@@ -74,26 +74,6 @@ module DAG
           {id: id, state: to}
         end
 
-        def increment_workflow_retry(state, id:)
-          row = fetch_workflow!(state, id)
-          row[:workflow_retry_count] += 1
-          {id: id, workflow_retry_count: row[:workflow_retry_count]}
-        end
-
-        def reset_failed_nodes(state, id:, revision:)
-          states_for_rev = fetch_node_states!(state, id, revision)
-          failed_node_ids = states_for_rev.select { |_, s| s == :failed }.keys
-          failed_node_ids.each { |node_id| states_for_rev[node_id] = :pending }
-
-          failed_set = failed_node_ids.to_set
-          state[:attempts_index].fetch(id, []).each do |aid|
-            attempt = state[:attempts][aid]
-            next unless attempt[:revision] == revision && failed_set.include?(attempt[:node_id])
-            attempt[:state] = :aborted if attempt[:state] == :failed
-          end
-          {id: id, revision: revision, reset: failed_node_ids}
-        end
-
         def append_revision(state, id:, parent_revision:, definition:, invalidated_node_ids:, event:)
           row = fetch_workflow!(state, id)
           unless row[:current_revision] == parent_revision
@@ -144,9 +124,7 @@ module DAG
           {workflow_id: workflow_id, revision: revision, node_id: node_id, state: to}
         end
 
-        # attempt_seq is workflow-global so reset_failed_nodes can mark prior
-        # attempts :aborted without overwriting them on retry.
-        def begin_attempt(state, workflow_id:, revision:, node_id:, attempt_number:, expected_node_state:)
+        def begin_attempt(state, workflow_id:, revision:, node_id:, expected_node_state:)
           states_for_rev = fetch_node_states!(state, workflow_id, revision)
           current = states_for_rev[node_id]
           unless current == expected_node_state
@@ -155,6 +133,7 @@ module DAG
 
           state[:attempt_seq][workflow_id] += 1
           attempt_id = "#{workflow_id}/#{state[:attempt_seq][workflow_id]}"
+          attempt_number = count_attempts_internal(state, workflow_id, revision, node_id, exclude: [:aborted]) + 1
 
           states_for_rev[node_id] = :running
           state[:attempts][attempt_id] = {
@@ -164,21 +143,18 @@ module DAG
             node_id: node_id,
             attempt_number: attempt_number,
             state: :running,
-            result: nil,
-            started_at_ms: nil,
-            finished_at_ms: nil
+            result: nil
           }
           state[:attempts_index][workflow_id] << attempt_id
           attempt_id
         end
 
-        def commit_attempt(state, attempt_id:, result:, node_state:, event:, finished_at_ms: nil)
+        def commit_attempt(state, attempt_id:, result:, node_state:, event:)
           attempt = state[:attempts].fetch(attempt_id) do
             raise ArgumentError, "Unknown attempt: #{attempt_id}"
           end
           attempt[:result] = result
           attempt[:state] = attempt_terminal_state_for(result)
-          attempt[:finished_at_ms] = finished_at_ms
 
           rev_states = state[:node_states][[attempt[:workflow_id], attempt[:revision]]]
           rev_states[attempt[:node_id]] = node_state
@@ -209,15 +185,6 @@ module DAG
           count_attempts_internal(state, workflow_id, revision, node_id, exclude: [:aborted])
         end
 
-        def latest_committed_attempt(state, workflow_id:, revision:, node_id:)
-          state[:attempts_index].fetch(workflow_id, []).reverse_each do |aid|
-            attempt = state[:attempts][aid]
-            next unless attempt[:revision] == revision && attempt[:node_id] == node_id
-            return attempt if attempt[:state] == :committed
-          end
-          nil
-        end
-
         def append_event(state, workflow_id:, event:)
           append_event_internal(state, workflow_id, event)
         end
@@ -238,9 +205,24 @@ module DAG
           events
         end
 
-        def last_event_seq(state, workflow_id:)
-          seq = state[:seq][workflow_id]
-          (seq && seq > 0) ? seq : nil
+        # Port extension. Atomic: abort prior :failed attempts, reset their
+        # nodes to :pending, increment workflow_retry_count.
+        def prepare_workflow_retry(state, id:)
+          row = fetch_workflow!(state, id)
+          revision = row[:current_revision]
+          states_for_rev = fetch_node_states!(state, id, revision)
+          failed_node_ids = states_for_rev.select { |_, s| s == :failed }.keys
+
+          failed_set = failed_node_ids.to_set
+          state[:attempts_index].fetch(id, []).each do |aid|
+            attempt = state[:attempts][aid]
+            next unless attempt[:revision] == revision && failed_set.include?(attempt[:node_id])
+            attempt[:state] = :aborted if attempt[:state] == :failed
+          end
+          failed_node_ids.each { |node_id| states_for_rev[node_id] = :pending }
+          row[:workflow_retry_count] += 1
+
+          {reset: failed_node_ids, workflow_retry_count: row[:workflow_retry_count]}
         end
 
         def count_attempts_internal(state, id, revision, node_id, exclude: [])

@@ -124,14 +124,14 @@ class StorageStateExtrasTest < Minitest::Test
   def test_begin_attempt_unknown_revision_raises
     workflow_id = create_workflow(@storage, @definition)
     assert_raises(DAG::StaleRevisionError) do
-      @storage.begin_attempt(workflow_id: workflow_id, revision: 99, node_id: :a, attempt_number: 1, expected_node_state: :pending)
+      @storage.begin_attempt(workflow_id: workflow_id, revision: 99, node_id: :a, expected_node_state: :pending)
     end
   end
 
   def test_begin_attempt_state_mismatch_raises
     workflow_id = create_workflow(@storage, @definition)
     assert_raises(DAG::StaleStateError) do
-      @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, attempt_number: 1, expected_node_state: :committed)
+      @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, expected_node_state: :committed)
     end
   end
 
@@ -143,7 +143,7 @@ class StorageStateExtrasTest < Minitest::Test
 
   def test_commit_attempt_unexpected_result_type_raises
     workflow_id = create_workflow(@storage, @definition)
-    attempt_id = @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, attempt_number: 1, expected_node_state: :pending)
+    attempt_id = @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, expected_node_state: :pending)
     assert_raises(ArgumentError) do
       @storage.commit_attempt(attempt_id: attempt_id, result: :not_a_result, node_state: :committed, event: build_event(workflow_id: workflow_id))
     end
@@ -151,18 +151,13 @@ class StorageStateExtrasTest < Minitest::Test
 
   def test_abort_running_attempts_marks_running_as_aborted
     workflow_id = create_workflow(@storage, @definition)
-    attempt_id = @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, attempt_number: 1, expected_node_state: :pending)
+    attempt_id = @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, expected_node_state: :pending)
     aborted = @storage.abort_running_attempts(workflow_id: workflow_id)
     assert_includes aborted, attempt_id
   end
 
-  def test_increment_workflow_retry_unknown_workflow_raises
-    assert_raises(DAG::UnknownWorkflowError) { @storage.increment_workflow_retry(id: "ghost") }
-  end
-
-  def test_reset_failed_nodes_unknown_revision_raises
-    workflow_id = create_workflow(@storage, @definition)
-    assert_raises(DAG::StaleRevisionError) { @storage.reset_failed_nodes(id: workflow_id, revision: 99) }
+  def test_prepare_workflow_retry_unknown_workflow_raises
+    assert_raises(DAG::UnknownWorkflowError) { @storage.prepare_workflow_retry(id: "ghost") }
   end
 
   def test_read_events_filters_after_seq_and_limit
@@ -176,35 +171,6 @@ class StorageStateExtrasTest < Minitest::Test
 
     limited = @storage.read_events(workflow_id: workflow_id, limit: 1)
     assert_equal 1, limited.size
-  end
-
-  def test_last_event_seq_returns_monotonic_seq_or_nil
-    workflow_id = create_workflow(@storage, @definition)
-    assert_nil @storage.last_event_seq(workflow_id: workflow_id)
-    @storage.append_event(workflow_id: workflow_id, event: build_event(:node_started))
-    @storage.append_event(workflow_id: workflow_id, event: build_event(:node_committed))
-    assert_equal 2, @storage.last_event_seq(workflow_id: workflow_id)
-  end
-
-  def test_latest_committed_attempt_returns_most_recent_committed
-    workflow_id = create_workflow(@storage, @definition)
-    a1 = @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, attempt_number: 1, expected_node_state: :pending)
-    @storage.commit_attempt(attempt_id: a1,
-      result: DAG::Failure[error: {code: :x, message: "y"}, retriable: true],
-      node_state: :pending,
-      event: build_event(:node_failed, workflow_id: workflow_id))
-
-    assert_nil @storage.latest_committed_attempt(workflow_id: workflow_id, revision: 1, node_id: :a)
-
-    a2 = @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, attempt_number: 2, expected_node_state: :pending)
-    @storage.commit_attempt(attempt_id: a2,
-      result: DAG::Success[value: 42, context_patch: {x: 1}],
-      node_state: :committed,
-      event: build_event(:node_committed, workflow_id: workflow_id))
-
-    latest = @storage.latest_committed_attempt(workflow_id: workflow_id, revision: 1, node_id: :a)
-    assert_equal a2, latest[:attempt_id]
-    assert_equal 42, latest[:result].value
   end
 
   private

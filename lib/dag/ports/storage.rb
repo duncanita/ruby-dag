@@ -2,6 +2,9 @@
 
 module DAG
   module Ports
+    # Storage port — 15 documented methods (Roadmap v3.4 §C / Appendix I)
+    # plus 1 documented extension (`prepare_workflow_retry`) needed for
+    # `Runner#retry_workflow` per R1 DoD. Adapters must implement all 16.
     module Storage
       def create_workflow(id:, initial_definition:, initial_context:, runtime_profile:)
         raise PortNotImplementedError
@@ -35,14 +38,11 @@ module DAG
         raise PortNotImplementedError
       end
 
-      def begin_attempt(workflow_id:, revision:, node_id:, attempt_number:, expected_node_state:)
+      def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:)
         raise PortNotImplementedError
       end
 
-      # Atomic write: result + node_state transition + event append.
-      # Returns {attempt_id:, state:, node_state:, event:} where :event is
-      # the seq-stamped Event the storage wrote, ready for EventBus#publish.
-      def commit_attempt(attempt_id:, result:, node_state:, event:, finished_at_ms: nil)
+      def commit_attempt(attempt_id:, result:, node_state:, event:)
         raise PortNotImplementedError
       end
 
@@ -58,14 +58,6 @@ module DAG
         raise PortNotImplementedError
       end
 
-      # Returns the most recent attempt record for (workflow, revision, node)
-      # whose state is :committed, or nil if there isn't one. Lets adapters
-      # answer the runner's per-predecessor effective-context lookup with a
-      # single record instead of the full attempt history.
-      def latest_committed_attempt(workflow_id:, revision:, node_id:)
-        raise PortNotImplementedError
-      end
-
       def append_event(workflow_id:, event:)
         raise PortNotImplementedError
       end
@@ -74,10 +66,13 @@ module DAG
         raise PortNotImplementedError
       end
 
-      # Returns the seq of the most recent event for the workflow, or nil if
-      # there are no events. Cheaper than reading the whole log just to take
-      # `events.last&.seq`.
-      def last_event_seq(workflow_id:)
+      # Port extension (see CLAUDE.md "Port extensions"). Atomically:
+      # (a) find :failed nodes for the workflow's current revision,
+      # (b) mark each corresponding :failed attempt as :aborted,
+      # (c) transition those nodes back to :pending,
+      # (d) increment the workflow's retry-count tracking.
+      # Returns {reset: [node_id, ...], workflow_retry_count: Integer}.
+      def prepare_workflow_retry(id:)
         raise PortNotImplementedError
       end
     end

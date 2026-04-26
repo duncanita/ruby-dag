@@ -8,6 +8,57 @@ definition runs through `DAG::Runner` against injected ports for storage,
 event bus, clock, ids, fingerprint, and serialization. Zero runtime
 dependencies; Ruby 3.4+.
 
+## Source of truth
+
+**`Ruby DAG Project Roadmap v3.4.md` (sibling to this repo) is the contract
+source.** Implement everything taking that document into account: the 4
+pillars (§2), frozen decisions (§3), public contract (§7), per-phase Output
+file obbligatori and DoD (§5–§6), anti-patterns (§9), and the appendices
+(immutability, tagged types, ports, default adapters, cops, test scenarios,
+public adapter signatures).
+
+Hard rules:
+
+- **Storage port shape (Appendix C / I) is canonical.** Any deviation is a
+  documented extension with explicit justification — see "Port extensions"
+  below.
+- **Anti-patterns in §9.1 do not pass review.** No `Thread`/`Ractor`/
+  `Mutex`/`Queue` anywhere; no `Process.fork`/`spawn`/`system` in
+  `lib/dag/**`; no `attr_accessor` in `lib/dag/**`; no in-place mutation in
+  pure-kernel files; no non-stdlib `require` at runtime; no AI/LLM terms in
+  the kernel; no budget/approval inside `Runner`; no default-singleton
+  injected dependencies on `Runner.new` (all 7 keyword args are required).
+- **Frozen decisions (§3) are not negotiable.** Ruby ≥ 3.4. Zero runtime
+  deps. Test framework Minitest. Memory adapters single-process. SQLite
+  for durable concurrency in S0. No Ractor anywhere.
+- **Phase scope is enforced.** R1 must not implement R2/R3 features.
+  Output files in §5 must exist by phase close, even as motivated stubs.
+- When the implementation needs something the documented contract does not
+  provide, prefer adding a documented port extension over silent drift.
+  Justify the extension with a roadmap-level concern (DoD requirement,
+  pillar invariant) and update CONTRACT.md.
+
+## Port extensions
+
+The roadmap port (Appendix C) lists 15 methods. Implementing R1's
+`Runner#retry_workflow` per its DoD requires one operation that cannot be
+expressed via the 15 documented primitives:
+
+- **`prepare_workflow_retry(id:)`** — atomically (a) finds nodes in state
+  `:failed` for the workflow's current revision, (b) marks each
+  corresponding `:failed` attempt as `:aborted` so `count_attempts`
+  excludes them and the per-node attempt budget restarts, (c) transitions
+  those nodes back to `:pending`, and (d) increments the workflow's
+  retry-count tracking. Returns `{reset: [node_id, ...],
+  workflow_retry_count:}`.
+
+This is the only documented extension. It is justified by R1 DoD line 586
+which mandates `Runner#retry_workflow` resets `:failed` nodes and
+"ricrea attempt nuovi"; with only the 15 documented primitives the budget
+restart is not achievable.
+
+All other R1 work uses the 15 documented methods.
+
 ## Commands
 
 ```bash

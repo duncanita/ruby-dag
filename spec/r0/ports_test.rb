@@ -12,15 +12,14 @@ class R0PortsTest < Minitest::Test
     load_current_definition: {id: "x"},
     load_node_states: {workflow_id: "x", revision: 1},
     transition_node_state: {workflow_id: "x", revision: 1, node_id: :a, from: :pending, to: :running},
-    begin_attempt: {workflow_id: "x", revision: 1, node_id: :a, attempt_number: 1, expected_node_state: :pending},
-    commit_attempt: {attempt_id: "x", result: nil, node_state: :committed, event: nil, finished_at_ms: nil},
+    begin_attempt: {workflow_id: "x", revision: 1, node_id: :a, expected_node_state: :pending},
+    commit_attempt: {attempt_id: "x", result: nil, node_state: :committed, event: nil},
     abort_running_attempts: {workflow_id: "x"},
     list_attempts: {workflow_id: "x"},
     count_attempts: {workflow_id: "x", revision: 1, node_id: :a},
-    latest_committed_attempt: {workflow_id: "x", revision: 1, node_id: :a},
     append_event: {workflow_id: "x", event: nil},
     read_events: {workflow_id: "x"},
-    last_event_seq: {workflow_id: "x"}
+    prepare_workflow_retry: {id: "x"}
   }.freeze
 
   def test_storage_port_every_method_raises_port_not_implemented

@@ -25,14 +25,6 @@ module DAG
           frozen StorageState.transition_workflow_state(@state, id: id, from: from, to: to)
         end
 
-        def increment_workflow_retry(id:)
-          frozen StorageState.increment_workflow_retry(@state, id: id)
-        end
-
-        def reset_failed_nodes(id:, revision:)
-          frozen StorageState.reset_failed_nodes(@state, id: id, revision: revision)
-        end
-
         def append_revision(id:, parent_revision:, definition:, invalidated_node_ids:, event:)
           frozen StorageState.append_revision(@state, id: id, parent_revision: parent_revision, definition: definition, invalidated_node_ids: invalidated_node_ids, event: event)
         end
@@ -53,12 +45,12 @@ module DAG
           frozen StorageState.transition_node_state(@state, workflow_id: workflow_id, revision: revision, node_id: node_id, from: from, to: to)
         end
 
-        def begin_attempt(workflow_id:, revision:, node_id:, attempt_number:, expected_node_state:)
-          frozen StorageState.begin_attempt(@state, workflow_id: workflow_id, revision: revision, node_id: node_id, attempt_number: attempt_number, expected_node_state: expected_node_state)
+        def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:)
+          frozen StorageState.begin_attempt(@state, workflow_id: workflow_id, revision: revision, node_id: node_id, expected_node_state: expected_node_state)
         end
 
-        def commit_attempt(attempt_id:, result:, node_state:, event:, finished_at_ms: nil)
-          frozen StorageState.commit_attempt(@state, attempt_id: attempt_id, result: result, node_state: node_state, event: event, finished_at_ms: finished_at_ms)
+        def commit_attempt(attempt_id:, result:, node_state:, event:)
+          frozen StorageState.commit_attempt(@state, attempt_id: attempt_id, result: result, node_state: node_state, event: event)
         end
 
         def abort_running_attempts(workflow_id:)
@@ -73,10 +65,6 @@ module DAG
           frozen StorageState.count_attempts(@state, workflow_id: workflow_id, revision: revision, node_id: node_id)
         end
 
-        def latest_committed_attempt(workflow_id:, revision:, node_id:)
-          frozen StorageState.latest_committed_attempt(@state, workflow_id: workflow_id, revision: revision, node_id: node_id)
-        end
-
         def append_event(workflow_id:, event:)
           frozen StorageState.append_event(@state, workflow_id: workflow_id, event: event)
         end
@@ -85,8 +73,8 @@ module DAG
           frozen StorageState.read_events(@state, workflow_id: workflow_id, after_seq: after_seq, limit: limit)
         end
 
-        def last_event_seq(workflow_id:)
-          frozen StorageState.last_event_seq(@state, workflow_id: workflow_id)
+        def prepare_workflow_retry(id:)
+          frozen StorageState.prepare_workflow_retry(@state, id: id)
         end
 
         private
