@@ -83,6 +83,32 @@ class StorageStateExtrasTest < Minitest::Test
     assert_equal :pending, states[:c]
   end
 
+  def test_append_revision_normalizes_definition_revision
+    workflow_id = create_workflow(@storage, @definition)
+    new_definition = @definition.add_node(:c, type: :passthrough).add_edge(:b, :c)
+    assert_equal 1, new_definition.revision
+
+    @storage.append_revision(id: workflow_id, parent_revision: 1, definition: new_definition, invalidated_node_ids: [], event: nil)
+
+    current = @storage.load_current_definition(id: workflow_id)
+    assert_equal 2, current.revision, "stored definition's :revision must match its key"
+  end
+
+  def test_create_workflow_isolates_initial_context_from_caller_mutation
+    initial = {hello: "world"}
+    workflow_id = SecureRandom.uuid
+    @storage.create_workflow(
+      id: workflow_id,
+      initial_definition: @definition,
+      initial_context: initial,
+      runtime_profile: DAG::RuntimeProfile.default
+    )
+    initial[:hello] = "mutated"
+
+    stored = @storage.load_workflow(id: workflow_id)
+    assert_equal "world", stored[:initial_context][:hello]
+  end
+
   def test_load_node_states_unknown_revision_raises
     workflow_id = create_workflow(@storage, @definition)
     assert_raises(DAG::StaleRevisionError) { @storage.load_node_states(workflow_id: workflow_id, revision: 99) }
@@ -111,7 +137,7 @@ class StorageStateExtrasTest < Minitest::Test
 
   def test_commit_attempt_unknown_attempt_raises
     assert_raises(ArgumentError) do
-      @storage.commit_attempt(attempt_id: "missing", result: DAG::Success[value: 1, context_patch: {}], node_state: :committed)
+      @storage.commit_attempt(attempt_id: "missing", result: DAG::Success[value: 1, context_patch: {}], node_state: :committed, event: build_event)
     end
   end
 
@@ -119,7 +145,7 @@ class StorageStateExtrasTest < Minitest::Test
     workflow_id = create_workflow(@storage, @definition)
     attempt_id = @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, attempt_number: 1, expected_node_state: :pending)
     assert_raises(ArgumentError) do
-      @storage.commit_attempt(attempt_id: attempt_id, result: :not_a_result, node_state: :committed)
+      @storage.commit_attempt(attempt_id: attempt_id, result: :not_a_result, node_state: :committed, event: build_event(workflow_id: workflow_id))
     end
   end
 
@@ -163,12 +189,18 @@ class StorageStateExtrasTest < Minitest::Test
   def test_latest_committed_attempt_returns_most_recent_committed
     workflow_id = create_workflow(@storage, @definition)
     a1 = @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, attempt_number: 1, expected_node_state: :pending)
-    @storage.commit_attempt(attempt_id: a1, result: DAG::Failure[error: {code: :x, message: "y"}, retriable: true], node_state: :pending)
+    @storage.commit_attempt(attempt_id: a1,
+      result: DAG::Failure[error: {code: :x, message: "y"}, retriable: true],
+      node_state: :pending,
+      event: build_event(:node_failed, workflow_id: workflow_id))
 
     assert_nil @storage.latest_committed_attempt(workflow_id: workflow_id, revision: 1, node_id: :a)
 
     a2 = @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, attempt_number: 2, expected_node_state: :pending)
-    @storage.commit_attempt(attempt_id: a2, result: DAG::Success[value: 42, context_patch: {x: 1}], node_state: :committed)
+    @storage.commit_attempt(attempt_id: a2,
+      result: DAG::Success[value: 42, context_patch: {x: 1}],
+      node_state: :committed,
+      event: build_event(:node_committed, workflow_id: workflow_id))
 
     latest = @storage.latest_committed_attempt(workflow_id: workflow_id, revision: 1, node_id: :a)
     assert_equal a2, latest[:attempt_id]
@@ -186,7 +218,7 @@ class StorageStateExtrasTest < Minitest::Test
     )
   end
 
-  def build_event(type)
-    DAG::Event[type: type, workflow_id: "x", revision: 1, at_ms: 0, payload: {}]
+  def build_event(type = :node_started, workflow_id: "x")
+    DAG::Event[type: type, workflow_id: workflow_id, revision: 1, at_ms: 0, payload: {}]
   end
 end

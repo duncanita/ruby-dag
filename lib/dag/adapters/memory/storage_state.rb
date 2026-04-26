@@ -17,8 +17,9 @@ module DAG
             node_states: {}, # {[workflow_id, revision] => {node_id => state}}
             attempts: {},    # {attempt_id => attempt_record}
             attempts_index: {}, # {workflow_id => [attempt_id, ...]}
+            attempt_seq: {}, # {workflow_id => Integer} monotonic, never reset
             events: {},      # {workflow_id => [event, ...]}
-            seq: {}          # {workflow_id => Integer}
+            seq: {}          # {workflow_id => Integer} event seq
           }
         end
 
@@ -57,12 +58,13 @@ module DAG
             state: :pending,
             current_revision: revision,
             runtime_profile: runtime_profile,
-            initial_context: initial_context,
+            initial_context: DAG.frozen_copy(initial_context),
             workflow_retry_count: 0
           }
           state[:definitions][[id, revision]] = definition
           state[:node_states][[id, revision]] = definition.nodes.each_with_object({}) { |n, h| h[n] = :pending }
           state[:attempts_index][id] = []
+          state[:attempt_seq][id] = 0
           state[:events][id] = []
           state[:seq][id] = 0
           {id: id, current_revision: revision}
@@ -124,10 +126,14 @@ module DAG
           end
 
           new_revision = parent_revision + 1
-          state[:definitions][[id, new_revision]] = definition
+          # Normalize the stored definition's revision to the new key so
+          # load_current_definition returns a Definition whose .revision
+          # matches the storage row's :current_revision.
+          stored_definition = (definition.revision == new_revision) ? definition : definition.with_revision(new_revision)
+          state[:definitions][[id, new_revision]] = stored_definition
 
           previous_states = state[:node_states][[id, parent_revision]] || {}
-          new_states = definition.nodes.each_with_object({}) do |node_id, acc|
+          new_states = stored_definition.nodes.each_with_object({}) do |node_id, acc|
             acc[node_id] = if invalidated_node_ids.include?(node_id) || !previous_states.key?(node_id)
               :pending
             else
@@ -176,7 +182,11 @@ module DAG
         end
 
         # Pure writer: caller owns numbering so SQLite can share count + insert
-        # in one transaction.
+        # in one transaction. attempt_id uses a workflow-global monotonic
+        # counter (attempt_seq) so identifiers stay unique across retries
+        # even when the per-node attempt_number resets — reset_failed_nodes
+        # marks prior attempts :aborted but the records must not be
+        # overwritten.
         def begin_attempt(state, args)
           id = args.fetch(:workflow_id)
           revision = args.fetch(:revision)
@@ -190,7 +200,9 @@ module DAG
             raise StaleStateError, "node #{node_id} state is #{current.inspect}, expected #{expected.inspect}"
           end
 
-          attempt_id = "#{id}/#{revision}/#{node_id}/#{attempt_number}"
+          state[:attempt_seq][id] ||= 0
+          state[:attempt_seq][id] += 1
+          attempt_id = "#{id}/#{state[:attempt_seq][id]}"
 
           states_for_rev[node_id] = :running
           state[:attempts][attempt_id] = {
@@ -208,10 +220,15 @@ module DAG
           attempt_id
         end
 
+        # Atomic write per Roadmap §7.6: result + node state transition + the
+        # matching event are committed in a single call. The Memory adapter
+        # is single-threaded so atomicity is trivial; durable adapters wrap
+        # all three writes in a transaction.
         def commit_attempt(state, args)
           attempt_id = args.fetch(:attempt_id)
           result = args.fetch(:result)
           node_state = args.fetch(:node_state)
+          event = args.fetch(:event)
 
           attempt = state[:attempts].fetch(attempt_id) do
             raise ArgumentError, "Unknown attempt: #{attempt_id}"
@@ -223,7 +240,8 @@ module DAG
           rev_states = state[:node_states][[attempt[:workflow_id], attempt[:revision]]]
           rev_states[attempt[:node_id]] = node_state
 
-          {attempt_id: attempt_id, state: attempt[:state], node_state: node_state}
+          stamped = append_event_internal(state, attempt[:workflow_id], event)
+          {attempt_id: attempt_id, state: attempt[:state], node_state: node_state, event: stamped}
         end
 
         def abort_running_attempts(state, args)
@@ -269,13 +287,15 @@ module DAG
         end
 
         def append_event(state, args)
-          id = args.fetch(:workflow_id)
-          event = args.fetch(:event)
-          state[:seq][id] ||= 0
-          state[:seq][id] += 1
-          stamped = event.with(seq: state[:seq][id])
-          state[:events][id] ||= []
-          state[:events][id] << stamped
+          append_event_internal(state, args.fetch(:workflow_id), args.fetch(:event))
+        end
+
+        def append_event_internal(state, workflow_id, event)
+          state[:seq][workflow_id] ||= 0
+          state[:seq][workflow_id] += 1
+          stamped = event.with(seq: state[:seq][workflow_id])
+          state[:events][workflow_id] ||= []
+          state[:events][workflow_id] << stamped
           stamped
         end
 

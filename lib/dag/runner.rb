@@ -179,17 +179,19 @@ module DAG
     end
 
     def commit_and_emit(run, node_id, attempt_id, attempt_number, result, node_state, event_type, extra_payload)
-      @storage.commit_attempt(
-        attempt_id: attempt_id,
-        result: result,
-        node_state: node_state,
-        finished_at_ms: @clock.now_ms
-      )
-      append_event(run,
+      event = build_event(run,
         type: event_type,
         node_id: node_id,
         attempt_id: attempt_id,
         payload: extra_payload.merge(attempt_number: attempt_number))
+      outcome = @storage.commit_attempt(
+        attempt_id: attempt_id,
+        result: result,
+        node_state: node_state,
+        event: event,
+        finished_at_ms: @clock.now_ms
+      )
+      @event_bus.publish(outcome[:event])
     end
 
     def build_step_input(run, node_id, attempt_number)
@@ -262,8 +264,8 @@ module DAG
       )
     end
 
-    def append_event(run, type:, payload:, node_id: nil, attempt_id: nil)
-      event = DAG::Event[
+    def build_event(run, type:, payload:, node_id: nil, attempt_id: nil)
+      DAG::Event[
         type: type,
         workflow_id: run.workflow_id,
         revision: run.revision,
@@ -272,7 +274,10 @@ module DAG
         attempt_id: attempt_id,
         payload: payload
       ]
-      stamped = @storage.append_event(workflow_id: run.workflow_id, event: event)
+    end
+
+    def append_event(run, **kwargs)
+      stamped = @storage.append_event(workflow_id: run.workflow_id, event: build_event(run, **kwargs))
       @event_bus.publish(stamped)
     end
   end

@@ -25,7 +25,7 @@ class MemoryStorageCasTest < Minitest::Test
   def test_count_attempts_excludes_aborted
     assert_equal 0, @storage.count_attempts(workflow_id: @workflow_id, revision: 1, node_id: :a)
     a1 = @storage.begin_attempt(workflow_id: @workflow_id, revision: 1, node_id: :a, attempt_number: 1, expected_node_state: :pending)
-    @storage.commit_attempt(attempt_id: a1, result: DAG::Success[value: 1, context_patch: {}], node_state: :pending)
+    @storage.commit_attempt(attempt_id: a1, result: DAG::Success[value: 1, context_patch: {}], node_state: :pending, event: build_event(type: :node_committed))
     @storage.abort_running_attempts(workflow_id: @workflow_id) # nothing to abort
 
     a2 = @storage.begin_attempt(workflow_id: @workflow_id, revision: 1, node_id: :a, attempt_number: 2, expected_node_state: :pending)
@@ -45,9 +45,9 @@ class MemoryStorageCasTest < Minitest::Test
 
   private
 
-  def build_event
+  def build_event(type: :node_started)
     DAG::Event[
-      type: :node_started,
+      type: type,
       workflow_id: @workflow_id,
       revision: 1,
       at_ms: 1_700_000_000_000,

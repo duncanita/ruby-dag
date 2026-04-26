@@ -39,7 +39,10 @@ module DAG
         raise PortNotImplementedError
       end
 
-      def commit_attempt(attempt_id:, result:, node_state:, event:)
+      # Atomic write: result + node_state transition + event append.
+      # Returns {attempt_id:, state:, node_state:, event:} where :event is
+      # the seq-stamped Event the storage wrote, ready for EventBus#publish.
+      def commit_attempt(attempt_id:, result:, node_state:, event:, finished_at_ms: nil)
         raise PortNotImplementedError
       end
 

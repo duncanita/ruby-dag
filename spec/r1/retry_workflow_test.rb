@@ -49,6 +49,26 @@ class RetryWorkflowTest < Minitest::Test
     assert_raises(DAG::StaleStateError) { runner.retry_workflow(workflow_id) }
   end
 
+  def test_retry_does_not_overwrite_aborted_attempt_records
+    storage = DAG::Adapters::Memory::Storage.new
+    registry, _counter = registry_with_failing_step(failures_before_success: 4)
+    runner = build_runner(storage: storage, registry: registry)
+
+    definition = DAG::Workflow::Definition.new.add_node(:flaky, type: :flaky)
+    workflow_id = create_workflow(storage, definition,
+      runtime_profile: profile(max_attempts_per_node: 2, max_workflow_retries: 5))
+
+    runner.call(workflow_id)
+    runner.retry_workflow(workflow_id)
+    runner.retry_workflow(workflow_id)
+
+    attempts = storage.list_attempts(workflow_id: workflow_id, node_id: :flaky)
+    attempt_ids = attempts.map { |a| a[:attempt_id] }
+    assert_equal attempt_ids.size, attempt_ids.uniq.size, "attempt_ids must be unique across retries"
+    aborted = attempts.count { |a| a[:state] == :aborted }
+    assert aborted >= 1, "expected at least one :aborted attempt to survive retry"
+  end
+
   private
 
   def profile(max_attempts_per_node:, max_workflow_retries:)
