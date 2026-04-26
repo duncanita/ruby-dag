@@ -1,0 +1,48 @@
+# frozen_string_literal: true
+
+require_relative "../test_helper"
+
+class StepTypeRegistryTest < Minitest::Test
+  def test_register_and_lookup
+    reg = DAG::StepTypeRegistry.new
+    reg.register(name: :passthrough, klass: DAG::BuiltinSteps::Passthrough, fingerprint_payload: {v: 1})
+    entry = reg.lookup(:passthrough)
+    assert_equal DAG::BuiltinSteps::Passthrough, entry.klass
+  end
+
+  def test_register_idempotent_with_same_payload
+    reg = DAG::StepTypeRegistry.new
+    reg.register(name: :p, klass: DAG::BuiltinSteps::Passthrough, fingerprint_payload: {v: 1})
+    reg.register(name: :p, klass: DAG::BuiltinSteps::Passthrough, fingerprint_payload: {v: 1})
+    assert_equal [:p], reg.names
+  end
+
+  def test_register_mismatch_raises
+    reg = DAG::StepTypeRegistry.new
+    reg.register(name: :p, klass: DAG::BuiltinSteps::Passthrough, fingerprint_payload: {v: 1})
+    assert_raises(DAG::FingerprintMismatchError) do
+      reg.register(name: :p, klass: DAG::BuiltinSteps::Passthrough, fingerprint_payload: {v: 2})
+    end
+  end
+
+  def test_lookup_unknown_raises
+    reg = DAG::StepTypeRegistry.new.tap(&:freeze!)
+    assert_raises(DAG::UnknownStepTypeError) { reg.lookup(:missing) }
+  end
+
+  def test_freeze_blocks_register
+    reg = DAG::StepTypeRegistry.new
+    reg.register(name: :p, klass: DAG::BuiltinSteps::Passthrough, fingerprint_payload: {v: 1})
+    reg.freeze!
+    assert_raises(FrozenError) do
+      reg.register(name: :other, klass: DAG::BuiltinSteps::Noop, fingerprint_payload: {v: 1})
+    end
+  end
+
+  def test_register_rejects_non_step_klass
+    reg = DAG::StepTypeRegistry.new
+    assert_raises(ArgumentError) do
+      reg.register(name: :bad, klass: String, fingerprint_payload: {v: 1})
+    end
+  end
+end

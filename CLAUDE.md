@@ -2,129 +2,191 @@
 
 ## What this is
 
-Ruby PORO DAG library for openclaw. An agent builds a workflow as a DAG, runs it with pluggable parallel execution (Threads / Processes / Sequential strategies). Zero runtime dependencies.
+Ruby PORO DAG library targeting Roadmap v3.4. The kernel is the deterministic
+runtime sketched in `Ruby DAG Project Roadmap v3.4.md`: an immutable workflow
+definition runs through `DAG::Runner` against injected ports for storage,
+event bus, clock, ids, fingerprint, and serialization. Zero runtime
+dependencies; Ruby 3.4+.
 
 ## Commands
 
 ```bash
-bundle exec rake          # test + lint
+bundle exec rake          # test + standardrb (the actual gate)
 bundle exec rake test     # tests only
-ruby -Ilib -Ispec -e 'Dir["spec/**/*_test.rb"].each { |f| require_relative f }'  # run tests without rake
+bundle exec rubocop       # custom DAG cops (NoThreadOrRactor, NoMutableAccessors,
+                          # NoInPlaceMutation, NoExternalRequires)
 ```
 
 ## Architecture
 
-Two layers:
+Two layers, in order of dependency:
 
-- **Graph** (`lib/dag/graph.rb`) -- pure DAG. Nodes are symbols, edges are `Data.define(:from, :to, :metadata)`. Enforces acyclicity on every `add_edge`. Supports `freeze` for immutability with cached derived properties (layers, sort, roots, leaves, edges all eagerly cached on `freeze`). Iteration: `each_node` and `each_edge` are the ONLY entry points — `Graph` intentionally does NOT include `Enumerable` and has no top-level `each`, so `graph.map` / `graph.count` / `graph.include?` don't exist. Use `graph.each_node.map { ... }` / `graph.each_edge.count` / `graph.node?(name)` instead. Key methods: `each_node`, `each_edge`, `each_predecessor`, `each_successor`, `topological_layers`, `topological_sort`, `shortest_path`, `longest_path`, `critical_path`, `path?`, `ancestors`, `descendants`, `subgraph`, `incoming_edges`, `edge_metadata`, `to_dot`, `with_node`, `with_edge`, `without_node`, `without_edge`, `with_node_replaced`, `remove_node`, `remove_edge`, `replace_node`.
-- **Workflow** (`lib/dag/workflow/`) -- steps with types (exec, ruby_script, file_read, file_write, ruby), a Registry mapping names to Steps (with `register`/`replace`/`remove`), a Definition bundling Graph + Registry (with `replace_step` returning a new Definition), a Loader (YAML/Hash -> Definition), a Dumper (Definition -> YAML), a Parallel::Strategy hierarchy with three adapters (Sequential, Threads, Processes), and a Runner that hands each layer to the configured strategy.
-
-Graph knows nothing about workflows. Workflow depends on Graph.
+- **Graph** (`lib/dag/graph.rb`) — pure DAG. Nodes are Symbols, edges are
+  `Edge = Data.define(:from, :to, :metadata)`. Acyclicity is enforced on every
+  `add_edge` via an O(V+E) reachability walk. `each_node` and `each_edge` are
+  the ONLY iteration entry points (no `Enumerable` mixin). Frozen graphs
+  eagerly cache layers, sort, roots, leaves, and edges. Topological sort is
+  deterministic with `id.to_s` ASCII tie-break at every Kahn frontier.
+  R1-specific helpers: `descendants_of`, `exclusive_descendants_of`,
+  `shared_descendants_of`, `topological_order`, canonical sorted `to_h`.
+- **Kernel runtime** (R1) — built on top of Graph, ports, and tagged types:
+  - `DAG::Workflow::Definition` — immutable, chainable. `add_node(id, type:,
+    config: {})` and `add_edge(from, to, **meta)` return new frozen instances.
+    `revision` starts at 1; `fingerprint(via: port)` defers to
+    `Ports::Fingerprint`.
+  - `DAG::ExecutionContext` — deep-frozen copy-on-write hash wrapper.
+    `merge` returns a new context; `to_h` returns a fresh deep-dup.
+  - `DAG::Step::Base` + `DAG::StepProtocol` — steps return
+    `Success | Waiting | Failure`. Subclasses freeze themselves at
+    construction.
+  - `DAG::StepTypeRegistry` — `register(name:, klass:, fingerprint_payload:,
+    config: {})`. Re-registering the same name with a different payload
+    raises `FingerprintMismatchError`. `freeze!` after registration is
+    complete; lookup of an unknown type raises `UnknownStepTypeError`.
+  - Built-ins: `DAG::BuiltinSteps::{Noop, Passthrough}`. `:branch` is
+    deferred to a later phase.
+  - `DAG::Runner` — frozen kernel. `#call(workflow_id)` runs the layered
+    algorithm; `#retry_workflow(workflow_id)` enforces
+    `max_workflow_retries` and raises `WorkflowRetryExhaustedError` when
+    the budget is spent.
 
 ## Key files
 
 ```
-lib/dag.rb                       # require entry point
-lib/dag/version.rb               # DAG::VERSION constant (0.3.1)
-lib/dag/errors.rb                # Exception hierarchy (DAG::Error base)
-lib/dag/edge.rb                  # Edge = Data.define(:from, :to, :metadata)
-lib/dag/graph.rb                 # Graph class. Adjacency + reverse adjacency Sets. each_node / each_edge are the only iteration entry points; no Enumerable mixin, no top-level each.
-lib/dag/graph/builder.rb         # Builder.build { |b| ... } -> frozen Graph
-lib/dag/graph/validator.rb       # Structural validation. DEFAULT_RULES = [:no_isolated].freeze (on by default; opt out with defaults: []). AVAILABLE_RULES lists built-ins. Returns Validator::Report (named to avoid clash with DAG::Result).
-lib/dag/workflow/step.rb         # Step = Data.define(:name, :type, :config). Pure data — knows nothing about strategies.
-lib/dag/workflow/registry.rb     # name -> Step mapping
-lib/dag/workflow/definition.rb   # Definition = Data.define(:graph, :registry)
-lib/dag/workflow/loader.rb       # YAML -> Definition (supports edge metadata in depends_on)
-lib/dag/workflow/dumper.rb       # Definition -> YAML (inverse of Loader)
-lib/dag/workflow/runner.rb       # Coordinator: builds Tasks per layer, delegates to Parallel::Strategy, writes trace + fires callbacks. Handles run_if skipping. Builds {outputs:, trace:, error:} payload.
-lib/dag/workflow/parallel.rb     # Parallel module + Task = Data.define(:name, :step, :input, :executor_class, :input_keys)
-lib/dag/workflow/parallel/strategy.rb    # Abstract Strategy base. #execute(tasks) yielding [name, result, started_at, finished_at, duration_ms] in completion order. Class method .run_task(task) is the single place that stamps timings and rescues step errors into a Failure.
-lib/dag/workflow/parallel/sequential.rb  # Default for parallel: false. Single-threaded loop. max_parallelism ignored.
-lib/dag/workflow/parallel/threads.rb     # Default for parallel: true. Queue-based windowed Thread pool. No constraints on step results.
-lib/dag/workflow/parallel/processes.rb   # parallel: :processes. Forks one child per task, ships result back via Marshal over IO.pipe with IO.select windowing. Results must be Marshal-able. Not on Windows.
-lib/dag/workflow/condition.rb     # Declarative run_if DSL: normalize, validate, evaluate, dump. Logical ops (all/any/not), leaf predicates (from/status/value with equals/in/present/nil/matches).
-lib/dag/workflow/validator.rb    # Workflow-level validation: checks run_if conditions against graph structure. Returns ValidationReport.
-lib/dag/workflow/steps.rb        # Plugin registry (register/build/freeze_registry!)
-lib/dag/workflow/steps/          # Step type implementations (exec, ruby_script, etc.)
-lib/dag/result.rb                # DAG::Result marker module included by Success/Failure. Also exposes Result.try { ... } to convert exception-throwing code into a Success/Failure, and Result.assert_result! used internally by and_then/recover to enforce the contract.
-lib/dag/success.rb               # Success(value:) with and_then, map, recover (noop), unwrap!, to_h
-lib/dag/failure.rb               # Failure(error:) with and_then (noop), map (noop), recover, unwrap! (raises), to_h
+lib/dag.rb                                # require entry point (no I/O)
+lib/dag/version.rb                        # DAG::VERSION
+lib/dag/errors.rb                         # Exception hierarchy (DAG::Error base)
+lib/dag/edge.rb                           # Edge = Data.define(:from, :to, :metadata)
+lib/dag/graph.rb                          # Graph class
+lib/dag/graph/builder.rb                  # Builder.build { |b| ... } -> frozen Graph
+lib/dag/graph/validator.rb                # Structural validation -> Validator::Report
+lib/dag/result.rb                         # DAG::Result marker + Result.try / assert_result!
+lib/dag/success.rb                        # Success(value:, context_patch:, proposed_mutations:, metadata:)
+lib/dag/failure.rb                        # Failure(error:, retriable:, metadata:)
+lib/dag/types.rb                          # Loads tagged types
+lib/dag/step_input.rb                     # StepInput[context:, node_id:, attempt_number:, metadata:]
+lib/dag/waiting.rb                        # Waiting[reason:, resume_token:, not_before_ms:, metadata:]
+lib/dag/proposed_mutation.rb              # ProposedMutation[kind:, target_node_id:, replacement_graph:, ...]
+lib/dag/replacement_graph.rb              # ReplacementGraph[graph:, entry_node_ids:, exit_node_ids:]
+lib/dag/runtime_profile.rb                # RuntimeProfile[durability:, max_attempts_per_node:, max_workflow_retries:, event_bus_kind:, metadata:]
+lib/dag/run_result.rb                     # RunResult(state:, last_event_seq:, outcome:, metadata:)
+lib/dag/event.rb                          # Event[seq:, type:, workflow_id:, revision:, ...]; TYPES is closed
+lib/dag/immutability.rb                   # deep_freeze, deep_dup, json_safe!
+lib/dag/ports/storage.rb                  # Ports::Storage interface
+lib/dag/ports/event_bus.rb                # Ports::EventBus interface
+lib/dag/ports/fingerprint.rb              # Ports::Fingerprint interface
+lib/dag/ports/clock.rb                    # Ports::Clock interface
+lib/dag/ports/id_generator.rb             # Ports::IdGenerator interface
+lib/dag/ports/serializer.rb               # Ports::Serializer interface
+lib/dag/execution_context.rb              # DAG::ExecutionContext (deep-frozen CoW)
+lib/dag/step_protocol.rb                  # DAG::StepProtocol.implements? + valid_result?
+lib/dag/step/base.rb                      # DAG::Step::Base (freezes self + config)
+lib/dag/step_type_registry.rb             # DAG::StepTypeRegistry
+lib/dag/builtin_steps/noop.rb             # :noop -> Success(nil, {})
+lib/dag/builtin_steps/passthrough.rb      # :passthrough -> Success(context, context)
+lib/dag/workflow/definition.rb            # DAG::Workflow::Definition (immutable, chainable)
+lib/dag/runner.rb                         # DAG::Runner kernel
+lib/dag/adapters/stdlib/clock.rb          # wall + monotonic ms
+lib/dag/adapters/stdlib/id_generator.rb   # SecureRandom.uuid
+lib/dag/adapters/stdlib/fingerprint.rb    # JSON-canonical SHA256
+lib/dag/adapters/stdlib/serializer.rb     # JSON wrapper enforcing json_safe!
+lib/dag/adapters/null/event_bus.rb        # drops everything; optional logger
+lib/dag/adapters/memory/event_bus.rb      # bounded ring buffer + subscribers
+lib/dag/adapters/memory/storage.rb        # facade; deep-dup-freezes returns
+lib/dag/adapters/memory/storage_state.rb  # mutable bookkeeping (only spot in lib/dag/** allowed to mutate)
 ```
+
+Tests live in `spec/r0/` (R0 invariants) and `spec/r1/` (R1 DoD). Shared
+helpers under `spec/support/{runner_factory,workflow_builders,step_helpers}.rb`
+are auto-included into `Minitest::Test` by `spec/test_helper.rb`.
 
 ## Error hierarchy
 
 All errors inherit from `DAG::Error < StandardError`:
 
-- `CycleError` -- adding edge would create cycle
-- `DuplicateNodeError` -- adding node that already exists
-- `UnknownNodeError` -- referencing non-existent node/edge
-- `ValidationError` -- structural validation failure (has `.errors` array)
-- `SerializationError` -- non-serializable step in Dumper
+- `CycleError` — adding edge would create a cycle (message names the
+  offending edge)
+- `DuplicateNodeError`, `UnknownNodeError`
+- `ValidationError` (has `.errors` array), `SerializationError`
+- `PortNotImplementedError`
+- `StaleStateError`, `StaleRevisionError`, `ConcurrentMutationError`
+- `FingerprintMismatchError`
+- `UnknownStepTypeError`, `UnknownWorkflowError`
+- `WorkflowRetryExhaustedError`
 
-Adding a duplicate edge is **not** an error — `add_edge` is idempotent and returns `self` if the edge already exists.
+Adding a duplicate edge is **not** an error — `add_edge` is idempotent.
 
-## Conventions
+## R1 conventions
 
-- Tests use Minitest in `spec/`, named `*_test.rb`
-- `test_helper.rb` provides `build_test_workflow` helper
-- All graph nodes are symbols internally (`.to_sym` on input)
-- Core step types: exec, ruby_script, file_read, file_write, ruby
-- The `ruby` step type carries a lambda and is not YAML-serializable; Dumper raises `SerializationError`
-- Step inputs are always hashes keyed by dependency name; zero-dep steps receive {}
-- Runner result has the same shape on both Success and Failure branches: `{outputs:, trace:, error:}`. On Success: `result.value[:outputs]` / `result.value[:trace]` / `result.value[:error] == nil`. On Failure: `result.error[:outputs]` / `result.error[:trace]` / `result.error[:error] == {failed_node:, step_error:}`. Top-level keys are identical so callers can read trace/outputs without branching first.
-- Runner accepts `parallel:` as bool or symbol: `true`/`:threads` (default, Threads strategy), `false`/`:sequential`, `:processes`. Anything else (including the long-removed `:ractors`) raises `ArgumentError`.
-- `max_parallelism:` defaults to `[Etc.nprocessors, 8].min`. Honored as a hard cap by Threads and Processes; always-1 for Sequential.
-- TraceEntry has `started_at`, `finished_at`, `duration_ms`, `status`, `input_keys` populated identically in parallel and sequential modes (skipped steps record `nil` timestamps). In sequential mode the trace is in layer order; in parallel mode entries within a layer arrive in completion order, not submission order. Cross-layer order is preserved either way.
-- `@adjacency` and `@reverse` are plain hashes (no default block); writes use `(hash[k] ||= Set.new) << v`, reads use `fetch_set` which returns a shared frozen `EMPTY_SET` on miss. Prevents auto-vivification on frozen hashes.
-- `Data.define` used for immutable value types: Edge, Step, Definition, Success, Failure, TraceEntry
-- Data.define objects are frozen after construction -- cannot add instance variables
-- `DAG::Result` is a marker module included by Success/Failure, plus two module-level helpers: `Result.try { ... }` runs a block and returns `Success(return)` or `Failure("ExceptionClass: message")` (default `error_class: StandardError`, narrowable), and `Result.assert_result!(value, source)` is the internal guard that enforces `and_then` / `recover` blocks return a `Result`. `is_a?(DAG::Result)` is the type check. There is no `DAG.Success(...)` factory — call `Success.new(value: ...)` / `Failure.new(error: ...)`.
-- Monad API (symmetric across Success/Failure): `success?` / `failure?`, `value` / `error`, `and_then { |v| ... }` (success-side chain; MUST return Result; Failure passes through), `map { |v| ... }` (Success only; Failure passes through), `recover { |e| ... }` (Failure-side chain; MUST return Result; Success passes through), `unwrap!`, `to_h`. `and_then` and `recover` raise `TypeError` if the block returns a non-Result — this is intentional, it catches the most common monad bug. Methods deliberately NOT shipped: `tap`, `tap_error`, `map_error`, `value_or`. Each was either trivially expressible in two lines of caller code or never used internally; the smaller surface is the long-term commitment.
-- Cycle detection via the private `reachable?(from, to)` walker (shared by `add_edge`'s pre-insert check and `path?`)
-- Topological sort uses Kahn's algorithm with O(V+E) queue, produces deterministic sorted layers
-- `shortest_path`, `longest_path`, and `critical_path` all share a single private `relax(sources, sentinel, &better)` helper that supports single- or multi-source relaxation in topological order
-- Step is pure data — does not know about strategies. Strategies see only `Parallel::Task` values built by the Runner.
-- **Ractors strategy was removed in 0.3.1.** It used to ship as an experimental opt-in (`DAG_ENABLE_RACTORS=1`), but Ruby 4.0's per-Ractor deadlock detector trips on `Process.spawn`, which broke `:exec` and `:ruby_script` — the dominant step types. Keeping it gated behind a flag forced a `Strategy#supports?` / `@fallback_strategy` machinery in Runner that existed solely to support Ractors. Both the strategy and the fallback path are gone. If a future constrained backend (Fibers, WASI) needs the same shape, resurrect from git history (the last commit on `main` carrying ractors.rb) and reintroduce `supports?` then. **Do not add it back without that real driver.**
-- Conditional execution via `run_if:` — either a callable (lambda/proc receiving value-only input hash) or a declarative condition DSL (see `Condition` module). Skipped steps get `:skipped` trace status and `Success(nil)` in outputs. Runner success criterion is "no step failed" — skipped steps are not failures.
-- Exec step uses raw `Process.spawn` + `IO.pipe` + `IO.select` draining (not `Open3.capture3`) so a wall-clock `timeout` can interrupt long-running commands; `Exec.run_command(command, timeout:)` is the shared spawn helper used by both `exec` and `ruby_script` steps. `command` may be a String (interpreted by /bin/sh when it contains shell metacharacters) or an Array (passed as argv directly to execve, no shell). **Use the Array form for any value that did not come from a hard-coded literal in the source — period.** Do not try to escape input. `RubyScript` always passes an argv Array.
-- **All `Failure` errors produced by the library are Hashes with at least `:code` (Symbol) and `:message` (String).** Optional fields are added per error mode (e.g. `:exit_status`, `:command`, `:stdout`, `:stderr` for `:exec_failed`; `:command`, `:stdout`, `:stderr` for `:exec_status_unavailable` (raised when a host SIGCHLD reaper takes the child before our `Process.waitpid2` — output is preserved, exit status is gone); `:path` for file errors; `:strategy`, `:step` for parallel-strategy errors). No step type returns string-form errors anywhere — `Result.try` also produces a hash. User-constructed `Failure` values can still carry any payload; this rule is the library-side contract only.
-- Step executor return-type contract is enforced at the `Strategy.run_task` boundary: an executor that returns anything other than a `DAG::Result` is wrapped in `Failure(code: :step_bad_return, ...)`. This is the safety net for `:ruby` callables that forget to wrap their return value in `Success`/`Failure`. Tested across all three strategies in `parallel_test.rb`.
-- `Steps.class_for(type)` returns the registered Class for a step type without instantiating it. The Runner uses this to populate `Parallel::Task#executor_class` — there is no per-type instance cache in Runner anymore; the old `@executors[type] ||= Steps.build(type)` was building a throwaway instance just to call `.class` on it.
-- Both subprocess managers (`Steps::Exec` and `Parallel::Processes`) share a single `KILL_GRACE_SECONDS` constant defined on `Steps::Exec`. `Processes` references it as `Steps::Exec::KILL_GRACE_SECONDS` rather than redefining its own — single source of truth for the TERM→KILL grace window.
-- Edge metadata stored in `@edge_metadata` hash keyed by `[from, to]` pairs; edges are lazy (no `@edges` ivar)
-- Frozen graphs eagerly cache `topological_layers`, `roots`, `leaves` on freeze
-- Plugin registry uses class-level `@registry` with `register`/`build`/`freeze_registry!` pattern. `freeze_registry!` is opt-in and never called by the library — applications call it once after registering all custom step types.
-- Extensions register via `Steps.register(:type, Klass, yaml_safe: true)` instead of mutating constants
-- `DAG::Graph::Validator::Report` (not `Result`) is the validation result type, to avoid collision with `DAG::Result`
-- `FileWrite` content resolution order: `config[:content]` (literal) → `config[:from]` → single-input value → Failure (multi-dep without `:from` is **not** silently `Hash#to_s`'d any more; it returns Failure)
-- `Loader.from_yaml` and `Loader.from_hash` share a private `normalize_entries(node_defs, string_keys:)` helper that handles both string-key (YAML) and symbol-key (Hash) forms. Both public methods are 3 lines.
-- `Graph#subgraph` is structured as `add_nodes_to(Graph.new, keep).then { |g| copy_internal_edges(g, keep) }` using two private helpers — preferred `.then` chain style with named extraction over inline `each_with_object` blocks
-- `Graph#==` and `#hash` are **structural** and work on frozen and unfrozen graphs alike (no FrozenError). The caveat is the usual one: if you store an unfrozen Graph as a Hash key or Set member and then mutate it, you break the container. Freeze before using as a key. Use `node_count` / `edge_count` for cheap scalar queries that don't materialize the edge set.
-- Node-collection return types are Sets throughout: `successors`, `predecessors`, `roots`, `leaves`, `incoming_edges`, and `nodes_with_no` (private) all return `Set`. `roots`/`leaves` are cached as frozen Sets on `freeze`. Use `each_root`/`each_leaf` if you want an ordered iterator. `each_predecessor`/`each_successor` iterate without duping the internal Set — use them on hot paths instead of `predecessors`/`successors`.
-- `Graph#to_dot` quotes any node or graph name that isn't a bare `[A-Za-z_][A-Za-z0-9_]*` identifier, and escapes embedded `"` and `\` inside the quoted form. Private helpers: `dot_id(name)` / `dot_quote(str)`.
-- `Graph#replace_node` does not go through `add_edge` when rewiring preserved edges — it inserts directly via the private `insert_edge(from, to, metadata)` helper (no cycle re-check), because renaming a node in place can't introduce a cycle that wasn't there before.
-- `Graph#add_edge` cost is O(V+E) per call because of the cycle-detection walk. Building a graph node-by-node is therefore O(V·(V+E)) total — fine for the workflow graphs this library targets. Documented inline on the method.
-- Runner accepts `timeout:` (seconds, Numeric or nil). Checked between layers — a layer that has already started runs to completion. On trip, Runner returns `Failure(error: {outputs:, trace:, error: {failed_node: :workflow_timeout, step_error: {code: :workflow_timeout, message: "...", timeout_seconds: <n>}}})`. No way to interrupt mid-layer for `:ruby` callables; use `:processes` if you need hard isolation.
-- Runner accepts `max_sub_workflow_depth:` (Integer or nil, default 10). Enforced in `run_sub_workflow_step` before resolving the child definition. Propagated down nested chains via `StepExecution#effective_max_sub_workflow_depth`. A step config overrides the Runner-level default; `nil` means no limit at that level.
-- Sub-workflow error codes: `:sub_workflow_invalid_definition` (raised when definition loading or parsing fails), `:sub_workflow_input_missing` (input_mapping references a key not present in parent outputs), `:sub_workflow_depth_exceeded` (nesting depth exceeds the configured limit).
-- `resolve_sub_workflow_definition` rescues all exceptions via `rescue => e` and converts them to `Failure(:sub_workflow_invalid_definition)`. This includes `ArgumentError`, `ValidationError`, `Errno::*` (file not found), and `Psych::SyntaxError` (invalid YAML). No sub-workflow loader exception escapes as a raw exception.
-- `map_sub_workflow_input` returns `Failure(:sub_workflow_input_missing)` when `input_mapping` references a dependency key not present in the parent's outputs.
-- `Parallel::Threads` worker uses an `ensure` block to guarantee exactly one push onto the result queue. The `begin` body rescues `StandardError` into a `Failure`; the `ensure` checks a `pushed` flag and pushes a synthetic "worker died without producing a result" `Failure` if the thread died below StandardError (or anywhere else) before the normal push. The worker thread also sets `Thread.current.report_on_exception = false` because worker death is already surfaced as a `Failure` — Ruby's default thread-death warning would be redundant double-reporting.
-- `Parallel::Processes` drains each child's pipe **incrementally** with `read_nonblock` inside the same `IO.select` loop the windowing uses. EOF (returned as `nil` from `read_nonblock`) is the signal that a child is done. This avoids deadlock for payloads larger than one pipe buffer (~64 KB on Linux/macOS).
-- `Parallel::Task = Data.define(:name, :step, :input, :executor_class, :input_keys)` is the unit handed to strategies. The Runner builds Tasks per layer, fires `on_step_start` callbacks before handing them off, then writes trace + fires `on_step_finish` as the strategy yields results.
-
-## Dumper round-trip property
-
-`Loader.from_yaml(Dumper.to_yaml(definition))` produces an equivalent Definition for all serializable step types. This includes edge metadata via expanded `depends_on` format. Tested against every example YAML.
+- Tests use Minitest in `spec/`, named `*_test.rb`. Helpers in
+  `spec/support/` are auto-included.
+- All graph nodes are symbols internally (`.to_sym` on input).
+- Step inputs flow through `DAG::StepInput[context: ec, node_id:,
+  attempt_number:, metadata: {workflow_id:, revision:}]` where `ec` is an
+  `ExecutionContext`. `input.context` is always an `ExecutionContext`.
+- Effective context for a node = `initial_context` + each predecessor's
+  committed-attempt `context_patch`, applied in `id.to_s` ASCII order
+  over predecessors. Later predecessor wins on key collision. Bit-identical
+  across runs (verified by 100-run fingerprint stability test).
+- Steps return one of `Success | Waiting | Failure`. Anything else is
+  caught at the Runner boundary as
+  `Failure[error: {code: :step_bad_return, ...}, retriable: false]`.
+- `StandardError` raised in `#call` is converted to
+  `Failure[error: {code: :step_raised, class:, message:}, retriable: false]`.
+  `NoMemoryError`, `SystemExit`, and `Interrupt` propagate.
+- `count_attempts` excludes `:aborted` attempts. `Runner#retry_workflow`
+  marks failed attempts as `:aborted` so the per-node attempt budget
+  resets across workflow retries.
+- `Memory::Storage` is single-process only. The mutable bookkeeping lives
+  in `DAG::Adapters::Memory::StorageState`, which is the ONLY spot under
+  `lib/dag/**` allowed to mutate hashes in place. The
+  `Dag/NoInPlaceMutation` cop scopes only the pure-kernel files
+  (`event.rb`, `proposed_mutation.rb`, `replacement_graph.rb`,
+  `run_result.rb`, `runtime_profile.rb`, `step_input.rb`, `types.rb`,
+  `waiting.rb`) plus everything under `lib/dag/ports/`. Memory adapters
+  and the immutability primitives are excluded.
+- The Runner is frozen after `initialize` and never holds mutable state.
+  All state lives behind the storage port.
+- `Runner.new` requires every keyword argument (`storage:, event_bus:,
+  registry:, clock:, id_generator:, fingerprint:, serializer:`); a
+  missing or `nil` keyword raises `ArgumentError`.
+- No `Thread`, `Mutex`, `Queue`, `Ractor`, `Monitor`, or `ConditionVariable`
+  anywhere in `lib/dag/**`. The `Dag/NoThreadOrRactor` cop enforces this
+  globally.
+- Event types are the closed set in `DAG::Event::TYPES`. The Runner
+  emits `:workflow_started` once per workflow (idempotent via event log
+  inspection), `:node_started` / `:node_committed` / `:node_waiting` /
+  `:node_failed` per attempt, and one terminal
+  `:workflow_completed` / `:workflow_waiting` / `:workflow_paused` /
+  `:workflow_failed`.
+- `Memory::Storage` events get a monotonic `seq`; `read_events(after_seq:,
+  limit:)` filters by it. `EventBus#publish` sees the same stamped event
+  the storage appended.
 
 ## Roadmap board hygiene
 
-Issues for this repo are tracked on GitHub Project #2 (`ruby-dag Roadmap v3.4`, project_id `PVT_kwHOAAsSz84BVsbw`). The board has a `Roadmap Status` field with options `Backlog | Ready | In Progress | Blocked | Done` (field_id `PVTSSF_lAHOAAsSz84BVsbwzhRGfOs`). **Keep this field current at every transition** — it is the source of truth for "what is in progress, what is ready to pick up, what is blocked, what is done".
+Issues live on GitHub Project #2 (`ruby-dag Roadmap v3.4`,
+`PVT_kwHOAAsSz84BVsbw`). The `Roadmap Status` field
+(`PVTSSF_lAHOAAsSz84BVsbwzhRGfOs`) has options
+`Backlog | Ready | In Progress | Blocked | Done`. **Update at every
+transition** — it is the source of truth for what's in progress, ready,
+blocked, or done.
 
 - New issues triaged but not scheduled → `Backlog` (`92bab679`).
 - Issue reviewed and a plan written → `Ready` (`cbe5fa16`).
 - PR opened or work actively in progress → `In Progress` (`17602557`).
-- Work paused on an external dependency or another issue → `Blocked` (`77d114c8`); also fill the `Blocked By` field.
-- PR merged → `Done` (`0372fd32`) (also set `Status = Done`).
+- Work paused on an external dependency → `Blocked` (`77d114c8`).
+- PR merged → `Done` (`0372fd32`).
 
-Update via `gh project item-edit --id <ITEM_ID> --field-id PVTSSF_lAHOAAsSz84BVsbwzhRGfOs --project-id PVT_kwHOAAsSz84BVsbw --single-select-option-id <OPT_ID>`. Look up `ITEM_ID` with `gh project item-list 2 --owner duncanita --format json | jq '.items[] | select(.content.number == <N>) | .id'`.
+Update via:
+
+```bash
+gh project item-edit \
+  --id <ITEM_ID> \
+  --field-id PVTSSF_lAHOAAsSz84BVsbwzhRGfOs \
+  --project-id PVT_kwHOAAsSz84BVsbw \
+  --single-select-option-id <OPT_ID>
+```
+
+Look up `ITEM_ID` with
+`gh project item-list 2 --owner duncanita --format json | jq '.items[] | select(.content.number == <N>) | .id'`.

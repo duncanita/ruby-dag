@@ -1148,6 +1148,58 @@ class GraphTest < Minitest::Test
     assert_nil graph.longest_path(:a, :nonexistent)
   end
 
+  # --- R1 helpers ---
+
+  def test_descendants_of_includes_self_by_default
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+    assert_equal Set[:a, :b, :c], graph.descendants_of(:a)
+  end
+
+  def test_descendants_of_excludes_self_when_requested
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+    assert_equal Set[:b, :c], graph.descendants_of(:a, include_self: false)
+  end
+
+  def test_descendants_of_unknown_raises
+    graph = build_graph([:a], [])
+    assert_raises(DAG::UnknownNodeError) { graph.descendants_of(:nope) }
+  end
+
+  def test_exclusive_descendants_diamond
+    # r → a → b → d; r → c → d. d is shared between a and c.
+    graph = build_graph([:r, :a, :b, :c, :d],
+      [[:r, :a], [:r, :c], [:a, :b], [:b, :d], [:c, :d]])
+    assert_equal Set[:a, :b], graph.exclusive_descendants_of(:a)
+    assert_equal Set[:c], graph.exclusive_descendants_of(:c)
+    assert_equal Set[:d], graph.shared_descendants_of(:a)
+    assert_equal Set[:d], graph.shared_descendants_of(:c)
+  end
+
+  def test_exclusive_descendants_self_only
+    graph = build_graph([:a, :b], [[:a, :b]])
+    assert_equal Set[:a, :b], graph.exclusive_descendants_of(:a)
+    assert_equal Set[], graph.shared_descendants_of(:a)
+  end
+
+  def test_topological_order_is_alias_with_ascii_tiebreak
+    graph = build_graph([:c, :b, :a], [])
+    assert_equal [:a, :b, :c], graph.topological_order
+  end
+
+  def test_to_h_is_canonical_under_insertion_order
+    g1 = build_graph([:b, :a, :c], [[:a, :c], [:b, :c]])
+    g2 = build_graph([:a, :b, :c], [[:b, :c], [:a, :c]])
+    assert_equal g1.to_h, g2.to_h
+  end
+
+  def test_add_edge_cycle_message_names_offending_edge
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    graph.add_edge(:a, :b)
+    error = assert_raises(DAG::CycleError) { graph.add_edge(:b, :a) }
+    assert_match(/b/, error.message)
+    assert_match(/a/, error.message)
+  end
+
   # --- delete_metadata partial-row case ---
 
   def test_remove_edge_preserves_other_metadata_in_same_row

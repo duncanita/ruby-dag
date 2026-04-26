@@ -48,6 +48,26 @@ class R0RuboCopCopsTest < Minitest::Test
     assert_empty offenses
   end
 
+  def test_no_thread_or_ractor_flags_bare_system_in_runtime
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoThreadOrRactor,
+      "system('echo ok')\n",
+      path: runtime_path("system_example.rb")
+    )
+
+    refute_empty offenses
+  end
+
+  def test_no_thread_or_ractor_flags_backticks_in_runtime
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoThreadOrRactor,
+      "`echo ok`\n",
+      path: runtime_path("backtick_example.rb")
+    )
+
+    refute_empty offenses
+  end
+
   def test_no_mutable_accessors_flags_runtime_attr_accessor
     offenses = inspect_source(
       RuboCop::Cop::DAG::NoMutableAccessors,
