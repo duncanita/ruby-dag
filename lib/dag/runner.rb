@@ -184,14 +184,14 @@ module DAG
         node_id: node_id,
         attempt_id: attempt_id,
         payload: extra_payload.merge(attempt_number: attempt_number))
-      outcome = @storage.commit_attempt(
+      stamped = @storage.commit_attempt(
         attempt_id: attempt_id,
         result: result,
         node_state: node_state,
         event: event,
         finished_at_ms: @clock.now_ms
       )
-      @event_bus.publish(outcome[:event])
+      @event_bus.publish(stamped)
     end
 
     def build_step_input(run, node_id, attempt_number)

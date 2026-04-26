@@ -23,10 +23,6 @@ module DAG
           }
         end
 
-        def dispatch(state, method_name, args)
-          send(method_name, state, args)
-        end
-
         def fetch_workflow!(state, id)
           state[:workflows].fetch(id) { raise UnknownWorkflowError, "Unknown workflow: #{id}" }
         end
@@ -37,14 +33,9 @@ module DAG
           end
         end
 
-        def create_workflow(state, args)
-          id = args.fetch(:id)
-          definition = args.fetch(:initial_definition)
-          initial_context = args.fetch(:initial_context)
-          runtime_profile = args.fetch(:runtime_profile)
-
+        def create_workflow(state, id:, initial_definition:, initial_context:, runtime_profile:)
           raise ArgumentError, "workflow #{id} already exists" if state[:workflows].key?(id)
-          unless definition.is_a?(DAG::Workflow::Definition)
+          unless initial_definition.is_a?(DAG::Workflow::Definition)
             raise ArgumentError, "initial_definition must be a DAG::Workflow::Definition"
           end
           unless runtime_profile.is_a?(DAG::RuntimeProfile)
@@ -52,7 +43,7 @@ module DAG
           end
           DAG.json_safe!(initial_context, "$root.initial_context")
 
-          revision = definition.revision
+          revision = initial_definition.revision
           state[:workflows][id] = {
             id: id,
             state: :pending,
@@ -61,8 +52,8 @@ module DAG
             initial_context: DAG.frozen_copy(initial_context),
             workflow_retry_count: 0
           }
-          state[:definitions][[id, revision]] = definition
-          state[:node_states][[id, revision]] = definition.nodes.each_with_object({}) { |n, h| h[n] = :pending }
+          state[:definitions][[id, revision]] = initial_definition
+          state[:node_states][[id, revision]] = initial_definition.nodes.each_with_object({}) { |n, h| h[n] = :pending }
           state[:attempts_index][id] = []
           state[:attempt_seq][id] = 0
           state[:events][id] = []
@@ -70,15 +61,11 @@ module DAG
           {id: id, current_revision: revision}
         end
 
-        def load_workflow(state, args)
-          id = args.fetch(:id)
+        def load_workflow(state, id:)
           fetch_workflow!(state, id).dup
         end
 
-        def transition_workflow_state(state, args)
-          id = args.fetch(:id)
-          from = args.fetch(:from)
-          to = args.fetch(:to)
+        def transition_workflow_state(state, id:, from:, to:)
           row = fetch_workflow!(state, id)
           unless row[:state] == from
             raise StaleStateError, "workflow #{id} state is #{row[:state].inspect}, expected #{from.inspect}"
@@ -87,23 +74,17 @@ module DAG
           {id: id, state: to}
         end
 
-        def increment_workflow_retry(state, args)
-          id = args.fetch(:id)
+        def increment_workflow_retry(state, id:)
           row = fetch_workflow!(state, id)
           row[:workflow_retry_count] += 1
           {id: id, workflow_retry_count: row[:workflow_retry_count]}
         end
 
-        def reset_failed_nodes(state, args)
-          id = args.fetch(:id)
-          revision = args.fetch(:revision)
+        def reset_failed_nodes(state, id:, revision:)
           states_for_rev = fetch_node_states!(state, id, revision)
           failed_node_ids = states_for_rev.select { |_, s| s == :failed }.keys
           failed_node_ids.each { |node_id| states_for_rev[node_id] = :pending }
 
-          # Aborting prior :failed attempts in one walk is O(total_attempts),
-          # vs O(failed × total_attempts) per-node. count_attempts excludes
-          # :aborted, so on the next run attempt_number restarts at 1.
           failed_set = failed_node_ids.to_set
           state[:attempts_index].fetch(id, []).each do |aid|
             attempt = state[:attempts][aid]
@@ -113,12 +94,7 @@ module DAG
           {id: id, revision: revision, reset: failed_node_ids}
         end
 
-        def append_revision(state, args)
-          id = args.fetch(:id)
-          parent_revision = args.fetch(:parent_revision)
-          definition = args.fetch(:definition)
-          invalidated_node_ids = args.fetch(:invalidated_node_ids, []).map(&:to_sym)
-
+        def append_revision(state, id:, parent_revision:, definition:, invalidated_node_ids:, event:)
           row = fetch_workflow!(state, id)
           unless row[:current_revision] == parent_revision
             raise StaleRevisionError,
@@ -126,15 +102,13 @@ module DAG
           end
 
           new_revision = parent_revision + 1
-          # Normalize the stored definition's revision to the new key so
-          # load_current_definition returns a Definition whose .revision
-          # matches the storage row's :current_revision.
           stored_definition = (definition.revision == new_revision) ? definition : definition.with_revision(new_revision)
           state[:definitions][[id, new_revision]] = stored_definition
 
           previous_states = state[:node_states][[id, parent_revision]] || {}
+          invalidated = invalidated_node_ids.map(&:to_sym)
           new_states = stored_definition.nodes.each_with_object({}) do |node_id, acc|
-            acc[node_id] = if invalidated_node_ids.include?(node_id) || !previous_states.key?(node_id)
+            acc[node_id] = if invalidated.include?(node_id) || !previous_states.key?(node_id)
               :pending
             else
               previous_states[node_id]
@@ -145,69 +119,47 @@ module DAG
           {id: id, revision: new_revision}
         end
 
-        def load_revision(state, args)
-          id = args.fetch(:id)
-          revision = args.fetch(:revision)
+        def load_revision(state, id:, revision:)
           state[:definitions].fetch([id, revision]) do
             raise StaleRevisionError, "no revision #{revision} for #{id}"
           end
         end
 
-        def load_current_definition(state, args)
-          id = args.fetch(:id)
+        def load_current_definition(state, id:)
           row = fetch_workflow!(state, id)
           state[:definitions].fetch([id, row[:current_revision]])
         end
 
-        def load_node_states(state, args)
-          id = args.fetch(:workflow_id)
-          revision = args.fetch(:revision)
-          fetch_node_states!(state, id, revision).dup
+        def load_node_states(state, workflow_id:, revision:)
+          fetch_node_states!(state, workflow_id, revision).dup
         end
 
-        def transition_node_state(state, args)
-          id = args.fetch(:workflow_id)
-          revision = args.fetch(:revision)
-          node_id = args.fetch(:node_id)
-          from = args.fetch(:from)
-          to = args.fetch(:to)
-
-          states_for_rev = fetch_node_states!(state, id, revision)
+        def transition_node_state(state, workflow_id:, revision:, node_id:, from:, to:)
+          states_for_rev = fetch_node_states!(state, workflow_id, revision)
           current = states_for_rev[node_id]
           unless current == from
             raise StaleStateError, "node #{node_id} state is #{current.inspect}, expected #{from.inspect}"
           end
           states_for_rev[node_id] = to
-          {workflow_id: id, revision: revision, node_id: node_id, state: to}
+          {workflow_id: workflow_id, revision: revision, node_id: node_id, state: to}
         end
 
-        # Pure writer: caller owns numbering so SQLite can share count + insert
-        # in one transaction. attempt_id uses a workflow-global monotonic
-        # counter (attempt_seq) so identifiers stay unique across retries
-        # even when the per-node attempt_number resets — reset_failed_nodes
-        # marks prior attempts :aborted but the records must not be
-        # overwritten.
-        def begin_attempt(state, args)
-          id = args.fetch(:workflow_id)
-          revision = args.fetch(:revision)
-          node_id = args.fetch(:node_id)
-          attempt_number = args.fetch(:attempt_number)
-          expected = args.fetch(:expected_node_state)
-
-          states_for_rev = fetch_node_states!(state, id, revision)
+        # attempt_seq is workflow-global so reset_failed_nodes can mark prior
+        # attempts :aborted without overwriting them on retry.
+        def begin_attempt(state, workflow_id:, revision:, node_id:, attempt_number:, expected_node_state:)
+          states_for_rev = fetch_node_states!(state, workflow_id, revision)
           current = states_for_rev[node_id]
-          unless current == expected
-            raise StaleStateError, "node #{node_id} state is #{current.inspect}, expected #{expected.inspect}"
+          unless current == expected_node_state
+            raise StaleStateError, "node #{node_id} state is #{current.inspect}, expected #{expected_node_state.inspect}"
           end
 
-          state[:attempt_seq][id] ||= 0
-          state[:attempt_seq][id] += 1
-          attempt_id = "#{id}/#{state[:attempt_seq][id]}"
+          state[:attempt_seq][workflow_id] += 1
+          attempt_id = "#{workflow_id}/#{state[:attempt_seq][workflow_id]}"
 
           states_for_rev[node_id] = :running
           state[:attempts][attempt_id] = {
             attempt_id: attempt_id,
-            workflow_id: id,
+            workflow_id: workflow_id,
             revision: revision,
             node_id: node_id,
             attempt_number: attempt_number,
@@ -216,38 +168,27 @@ module DAG
             started_at_ms: nil,
             finished_at_ms: nil
           }
-          state[:attempts_index][id] << attempt_id
+          state[:attempts_index][workflow_id] << attempt_id
           attempt_id
         end
 
-        # Atomic write per Roadmap §7.6: result + node state transition + the
-        # matching event are committed in a single call. The Memory adapter
-        # is single-threaded so atomicity is trivial; durable adapters wrap
-        # all three writes in a transaction.
-        def commit_attempt(state, args)
-          attempt_id = args.fetch(:attempt_id)
-          result = args.fetch(:result)
-          node_state = args.fetch(:node_state)
-          event = args.fetch(:event)
-
+        def commit_attempt(state, attempt_id:, result:, node_state:, event:, finished_at_ms: nil)
           attempt = state[:attempts].fetch(attempt_id) do
             raise ArgumentError, "Unknown attempt: #{attempt_id}"
           end
           attempt[:result] = result
           attempt[:state] = attempt_terminal_state_for(result)
-          attempt[:finished_at_ms] = args[:finished_at_ms]
+          attempt[:finished_at_ms] = finished_at_ms
 
           rev_states = state[:node_states][[attempt[:workflow_id], attempt[:revision]]]
           rev_states[attempt[:node_id]] = node_state
 
-          stamped = append_event_internal(state, attempt[:workflow_id], event)
-          {attempt_id: attempt_id, state: attempt[:state], node_state: node_state, event: stamped}
+          append_event_internal(state, attempt[:workflow_id], event)
         end
 
-        def abort_running_attempts(state, args)
-          id = args.fetch(:workflow_id)
+        def abort_running_attempts(state, workflow_id:)
           aborted = []
-          state[:attempts_index].fetch(id, []).each do |attempt_id|
+          state[:attempts_index].fetch(workflow_id, []).each do |attempt_id|
             attempt = state[:attempts][attempt_id]
             if attempt[:state] == :running
               attempt[:state] = :aborted
@@ -257,28 +198,19 @@ module DAG
           aborted
         end
 
-        def list_attempts(state, args)
-          id = args.fetch(:workflow_id)
-          revision = args[:revision]
-          node_id = args[:node_id]
-          state[:attempts_index].fetch(id, []).map { |aid| state[:attempts][aid] }.select do |attempt|
+        def list_attempts(state, workflow_id:, revision: nil, node_id: nil)
+          state[:attempts_index].fetch(workflow_id, []).map { |aid| state[:attempts][aid] }.select do |attempt|
             (revision.nil? || attempt[:revision] == revision) &&
               (node_id.nil? || attempt[:node_id] == node_id)
           end
         end
 
-        def count_attempts(state, args)
-          id = args.fetch(:workflow_id)
-          revision = args.fetch(:revision)
-          node_id = args.fetch(:node_id)
-          count_attempts_internal(state, id, revision, node_id, exclude: [:aborted])
+        def count_attempts(state, workflow_id:, revision:, node_id:)
+          count_attempts_internal(state, workflow_id, revision, node_id, exclude: [:aborted])
         end
 
-        def latest_committed_attempt(state, args)
-          id = args.fetch(:workflow_id)
-          revision = args.fetch(:revision)
-          node_id = args.fetch(:node_id)
-          state[:attempts_index].fetch(id, []).reverse_each do |aid|
+        def latest_committed_attempt(state, workflow_id:, revision:, node_id:)
+          state[:attempts_index].fetch(workflow_id, []).reverse_each do |aid|
             attempt = state[:attempts][aid]
             next unless attempt[:revision] == revision && attempt[:node_id] == node_id
             return attempt if attempt[:state] == :committed
@@ -286,8 +218,8 @@ module DAG
           nil
         end
 
-        def append_event(state, args)
-          append_event_internal(state, args.fetch(:workflow_id), args.fetch(:event))
+        def append_event(state, workflow_id:, event:)
+          append_event_internal(state, workflow_id, event)
         end
 
         def append_event_internal(state, workflow_id, event)
@@ -299,18 +231,15 @@ module DAG
           stamped
         end
 
-        def read_events(state, args)
-          id = args.fetch(:workflow_id)
-          after_seq = args[:after_seq]
-          limit = args[:limit]
-          events = state[:events].fetch(id, [])
+        def read_events(state, workflow_id:, after_seq: nil, limit: nil)
+          events = state[:events].fetch(workflow_id, [])
           events = events.select { |e| e.seq > after_seq } if after_seq
           events = events.first(limit) if limit
           events
         end
 
-        def last_event_seq(state, args)
-          seq = state[:seq][args.fetch(:workflow_id)]
+        def last_event_seq(state, workflow_id:)
+          seq = state[:seq][workflow_id]
           (seq && seq > 0) ? seq : nil
         end
 

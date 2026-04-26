@@ -217,8 +217,4 @@ class StorageStateExtrasTest < Minitest::Test
       runtime_profile: DAG::RuntimeProfile.default
     )
   end
-
-  def build_event(type = :node_started, workflow_id: "x")
-    DAG::Event[type: type, workflow_id: workflow_id, revision: 1, at_ms: 0, payload: {}]
-  end
 end
