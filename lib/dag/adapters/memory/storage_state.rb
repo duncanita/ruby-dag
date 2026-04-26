@@ -26,7 +26,15 @@ module DAG
           send(method_name, state, args)
         end
 
-        # --- workflows ---
+        def fetch_workflow!(state, id)
+          state[:workflows].fetch(id) { raise UnknownWorkflowError, "Unknown workflow: #{id}" }
+        end
+
+        def fetch_node_states!(state, id, revision)
+          state[:node_states].fetch([id, revision]) do
+            raise StaleRevisionError, "no node states for #{id} revision #{revision}"
+          end
+        end
 
         def create_workflow(state, args)
           id = args.fetch(:id)
@@ -62,18 +70,16 @@ module DAG
 
         def load_workflow(state, args)
           id = args.fetch(:id)
-          row = state[:workflows].fetch(id) { raise UnknownWorkflowError, "Unknown workflow: #{id}" }
-          row.dup
+          fetch_workflow!(state, id).dup
         end
 
         def transition_workflow_state(state, args)
           id = args.fetch(:id)
           from = args.fetch(:from)
           to = args.fetch(:to)
-          row = state[:workflows].fetch(id) { raise UnknownWorkflowError, "Unknown workflow: #{id}" }
+          row = fetch_workflow!(state, id)
           unless row[:state] == from
-            raise StaleStateError,
-              "workflow #{id} state is #{row[:state].inspect}, expected #{from.inspect}"
+            raise StaleStateError, "workflow #{id} state is #{row[:state].inspect}, expected #{from.inspect}"
           end
           row[:state] = to
           {id: id, state: to}
@@ -81,7 +87,7 @@ module DAG
 
         def increment_workflow_retry(state, args)
           id = args.fetch(:id)
-          row = state[:workflows].fetch(id) { raise UnknownWorkflowError, "Unknown workflow: #{id}" }
+          row = fetch_workflow!(state, id)
           row[:workflow_retry_count] += 1
           {id: id, workflow_retry_count: row[:workflow_retry_count]}
         end
@@ -89,9 +95,7 @@ module DAG
         def reset_failed_nodes(state, args)
           id = args.fetch(:id)
           revision = args.fetch(:revision)
-          states_for_rev = state[:node_states].fetch([id, revision]) do
-            raise StaleRevisionError, "no node states for #{id} revision #{revision}"
-          end
+          states_for_rev = fetch_node_states!(state, id, revision)
           reset = []
           states_for_rev.each do |node_id, node_state|
             if node_state == :failed
@@ -110,15 +114,13 @@ module DAG
           {id: id, revision: revision, reset: reset}
         end
 
-        # --- revisions ---
-
         def append_revision(state, args)
           id = args.fetch(:id)
           parent_revision = args.fetch(:parent_revision)
           definition = args.fetch(:definition)
           invalidated_node_ids = args.fetch(:invalidated_node_ids, []).map(&:to_sym)
 
-          row = state[:workflows].fetch(id) { raise UnknownWorkflowError, "Unknown workflow: #{id}" }
+          row = fetch_workflow!(state, id)
           unless row[:current_revision] == parent_revision
             raise StaleRevisionError,
               "workflow #{id} current_revision is #{row[:current_revision]}, expected #{parent_revision}"
@@ -150,18 +152,14 @@ module DAG
 
         def load_current_definition(state, args)
           id = args.fetch(:id)
-          row = state[:workflows].fetch(id) { raise UnknownWorkflowError, "Unknown workflow: #{id}" }
+          row = fetch_workflow!(state, id)
           state[:definitions].fetch([id, row[:current_revision]])
         end
-
-        # --- node states ---
 
         def load_node_states(state, args)
           id = args.fetch(:workflow_id)
           revision = args.fetch(:revision)
-          state[:node_states].fetch([id, revision]) do
-            raise StaleRevisionError, "no node states for #{id} revision #{revision}"
-          end.dup
+          fetch_node_states!(state, id, revision).dup
         end
 
         def transition_node_state(state, args)
@@ -171,19 +169,14 @@ module DAG
           from = args.fetch(:from)
           to = args.fetch(:to)
 
-          states_for_rev = state[:node_states].fetch([id, revision]) do
-            raise StaleRevisionError, "no node states for #{id} revision #{revision}"
-          end
+          states_for_rev = fetch_node_states!(state, id, revision)
           current = states_for_rev[node_id]
           unless current == from
-            raise StaleStateError,
-              "node #{node_id} state is #{current.inspect}, expected #{from.inspect}"
+            raise StaleStateError, "node #{node_id} state is #{current.inspect}, expected #{from.inspect}"
           end
           states_for_rev[node_id] = to
           {workflow_id: id, revision: revision, node_id: node_id, state: to}
         end
-
-        # --- attempts ---
 
         def begin_attempt(state, args)
           id = args.fetch(:workflow_id)
@@ -191,13 +184,10 @@ module DAG
           node_id = args.fetch(:node_id)
           expected = args.fetch(:expected_node_state)
 
-          states_for_rev = state[:node_states].fetch([id, revision]) do
-            raise StaleRevisionError, "no node states for #{id} revision #{revision}"
-          end
+          states_for_rev = fetch_node_states!(state, id, revision)
           current = states_for_rev[node_id]
           unless current == expected
-            raise StaleStateError,
-              "node #{node_id} state is #{current.inspect}, expected #{expected.inspect}"
+            raise StaleStateError, "node #{node_id} state is #{current.inspect}, expected #{expected.inspect}"
           end
 
           attempt_number = count_attempts_internal(state, id, revision, node_id, exclude: [:aborted]) + 1
@@ -216,7 +206,7 @@ module DAG
             finished_at_ms: nil
           }
           state[:attempts_index][id] << attempt_id
-          attempt_id
+          {attempt_id: attempt_id, attempt_number: attempt_number}
         end
 
         def commit_attempt(state, args)
@@ -267,8 +257,6 @@ module DAG
           count_attempts_internal(state, id, revision, node_id, exclude: [:aborted])
         end
 
-        # --- events ---
-
         def append_event(state, args)
           id = args.fetch(:workflow_id)
           event = args.fetch(:event)
@@ -288,8 +276,6 @@ module DAG
           filtered = after_seq ? events.select { |e| e.seq > after_seq } : events.dup
           limit ? filtered.first(limit) : filtered
         end
-
-        # --- internals ---
 
         def count_attempts_internal(state, id, revision, node_id, exclude: [])
           state[:attempts_index].fetch(id, []).count do |aid|

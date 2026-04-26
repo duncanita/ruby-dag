@@ -53,20 +53,15 @@ module DAG
       def exclusive_descendants_of(id, **opts) = @graph.exclusive_descendants_of(id, **opts)
       def shared_descendants_of(id) = @graph.shared_descendants_of(id)
 
-      # Canonical representation. Used by `fingerprint(via:)` and asserted as
-      # bit-identical across equal definitions.
       def to_h
+        graph_hash = @graph.to_h
         {
           revision: @revision,
-          nodes: @graph.nodes.to_a.sort_by(&:to_s).map { |n|
-            entry = @step_types.fetch(n)
-            {id: n, type: entry[:type], config: entry[:config]}
+          nodes: graph_hash[:nodes].map { |id|
+            entry = @step_types.fetch(id)
+            {id: id, type: entry[:type], config: entry[:config]}
           },
-          edges: @graph.each_edge.to_a.sort_by { |e| [e.from.to_s, e.to.to_s] }.map { |e|
-            h = {from: e.from, to: e.to}
-            h[:metadata] = e.metadata unless e.metadata.empty?
-            h
-          }
+          edges: graph_hash[:edges]
         }
       end
 

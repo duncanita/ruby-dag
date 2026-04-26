@@ -8,7 +8,7 @@ module DAG
       attr_reader :config
 
       def initialize(config: {})
-        @config = DAG.deep_freeze(DAG.deep_dup(config))
+        @config = DAG.frozen_copy(config)
         freeze
       end
 

@@ -117,17 +117,17 @@ class StorageStateExtrasTest < Minitest::Test
 
   def test_commit_attempt_unexpected_result_type_raises
     workflow_id = create_workflow(@storage, @definition)
-    attempt_id = @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, expected_node_state: :pending)
+    attempt = @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, expected_node_state: :pending)
     assert_raises(ArgumentError) do
-      @storage.commit_attempt(attempt_id: attempt_id, result: :not_a_result, node_state: :committed)
+      @storage.commit_attempt(attempt_id: attempt[:attempt_id], result: :not_a_result, node_state: :committed)
     end
   end
 
   def test_abort_running_attempts_marks_running_as_aborted
     workflow_id = create_workflow(@storage, @definition)
-    attempt_id = @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, expected_node_state: :pending)
+    attempt = @storage.begin_attempt(workflow_id: workflow_id, revision: 1, node_id: :a, expected_node_state: :pending)
     aborted = @storage.abort_running_attempts(workflow_id: workflow_id)
-    assert_includes aborted, attempt_id
+    assert_includes aborted, attempt[:attempt_id]
   end
 
   def test_increment_workflow_retry_unknown_workflow_raises

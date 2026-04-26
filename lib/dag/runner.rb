@@ -1,20 +1,6 @@
 # frozen_string_literal: true
 
 module DAG
-  # Deterministic kernel runner. All collaborators are injected; nothing is
-  # singleton or default. The runner is frozen after construction.
-  #
-  # The lifecycle of `#call(workflow_id)`:
-  #
-  #   1. CAS the workflow from {pending, waiting, paused} -> running.
-  #   2. Append `workflow_started` if this is the first ever run.
-  #   3. Loop: pick eligible nodes (predecessors all committed, state pending),
-  #      ordered by topological order; begin_attempt, build StepInput, call
-  #      the step, commit_attempt + transition node state + append the
-  #      matching event for each outcome. Bail on a non-retriable failure.
-  #   4. Resolve final workflow state: completed / waiting / paused / failed.
-  #
-  # See Roadmap v3.4 R1 for the binding algorithm.
   REQUIRED_RUNNER_DEPENDENCIES = %i[storage event_bus registry clock id_generator fingerprint serializer].freeze
 
   class Runner
@@ -37,21 +23,17 @@ module DAG
 
     def call(workflow_id)
       workflow = transition_to_running(workflow_id)
-      definition = @storage.load_current_definition(id: workflow_id)
-      runtime_profile = workflow[:runtime_profile]
-      revision = definition.revision
-
-      append_workflow_started_once(workflow_id, revision, workflow)
+      run = build_run_context(workflow_id, workflow)
+      append_workflow_started_once(run, workflow[:state_before_call])
 
       paused = false
       failed = false
       loop do
-        eligible = eligible_nodes(workflow_id, revision, definition)
+        eligible = eligible_nodes(run)
         break if eligible.empty?
 
         eligible.each do |node_id|
-          outcome = execute_node(workflow_id, revision, definition, node_id, runtime_profile)
-          case outcome
+          case execute_node(run, node_id)
           when :paused
             paused = true
             break
@@ -64,7 +46,7 @@ module DAG
         break if paused || failed
       end
 
-      finalize(workflow_id, revision, paused: paused, failed: failed)
+      finalize(run, paused: paused, failed: failed)
     end
 
     def retry_workflow(workflow_id)
@@ -90,124 +72,126 @@ module DAG
         raise StaleStateError, "workflow #{workflow_id} cannot transition from #{from.inspect} to :running"
       end
       @storage.transition_workflow_state(id: workflow_id, from: from, to: :running)
-      workflow
+      workflow.merge(state_before_call: from)
     end
 
-    def append_workflow_started_once(workflow_id, revision, workflow)
-      events = @storage.read_events(workflow_id: workflow_id)
-      return if events.any? { |e| e.type == :workflow_started }
+    def build_run_context(workflow_id, workflow)
+      definition = @storage.load_current_definition(id: workflow_id)
+      predecessors_by_node = definition.nodes.each_with_object({}) do |node_id, acc|
+        acc[node_id] = definition.predecessors(node_id).to_a.sort_by(&:to_s).freeze
+      end.freeze
 
-      append_event(workflow_id, revision,
+      RunContext.new(
+        workflow_id: workflow_id,
+        revision: definition.revision,
+        definition: definition,
+        runtime_profile: workflow[:runtime_profile],
+        initial_context: workflow[:initial_context],
+        predecessors_by_node: predecessors_by_node
+      )
+    end
+
+    # First run iff transition came from :pending. Subsequent calls (resuming
+    # from :waiting or :paused) skip the workflow_started event.
+    def append_workflow_started_once(run, state_before_call)
+      return unless state_before_call == :pending
+
+      append_event(run,
         type: :workflow_started,
-        payload: {initial_context: workflow[:initial_context]})
+        payload: {initial_context: run.initial_context})
     end
 
-    def eligible_nodes(workflow_id, revision, definition)
-      states = @storage.load_node_states(workflow_id: workflow_id, revision: revision)
-      definition.topological_order.select do |node_id|
-        states[node_id] == :pending && definition.predecessors(node_id).all? { |pred| states[pred] == :committed }
+    def eligible_nodes(run)
+      states = @storage.load_node_states(workflow_id: run.workflow_id, revision: run.revision)
+      run.definition.topological_order.select do |node_id|
+        states[node_id] == :pending && run.predecessors_by_node[node_id].all? { |pred| states[pred] == :committed }
       end
     end
 
-    def execute_node(workflow_id, revision, definition, node_id, runtime_profile)
-      attempt_id = @storage.begin_attempt(
-        workflow_id: workflow_id,
-        revision: revision,
+    def execute_node(run, node_id)
+      attempt = @storage.begin_attempt(
+        workflow_id: run.workflow_id,
+        revision: run.revision,
         node_id: node_id,
         expected_node_state: :pending
       )
-      attempt_number = attempt_number_from(attempt_id)
+      attempt_id = attempt[:attempt_id]
+      attempt_number = attempt[:attempt_number]
 
-      append_event(workflow_id, revision,
+      append_event(run,
         type: :node_started,
         node_id: node_id,
         attempt_id: attempt_id,
         payload: {attempt_number: attempt_number})
 
-      input = build_step_input(workflow_id, revision, definition, node_id, attempt_number)
-      result = safe_call_step(definition, node_id, input)
+      input = build_step_input(run, node_id, attempt_number)
+      result = safe_call_step(run.definition, node_id, input)
 
-      handle_outcome(workflow_id, revision, definition, node_id, attempt_id, attempt_number, result, runtime_profile)
+      handle_outcome(run, node_id, attempt_id, attempt_number, result)
     end
 
-    def handle_outcome(workflow_id, revision, definition, node_id, attempt_id, attempt_number, result, runtime_profile)
+    def handle_outcome(run, node_id, attempt_id, attempt_number, result)
       case result
       when DAG::Success
-        finished_ms = @clock.now_ms
-        @storage.commit_attempt(attempt_id: attempt_id, result: result, node_state: :committed, finished_at_ms: finished_ms)
-        append_event(workflow_id, revision,
-          type: :node_committed,
-          node_id: node_id,
-          attempt_id: attempt_id,
-          payload: {attempt_number: attempt_number})
+        commit_and_emit(run, node_id, attempt_id, attempt_number, result, :committed, :node_committed, {})
+        return :continue if result.proposed_mutations.empty?
 
-        if result.proposed_mutations.any?
-          @storage.transition_workflow_state(id: workflow_id, from: :running, to: :paused)
-          append_event(workflow_id, revision,
-            type: :workflow_paused,
-            payload: {by_node: node_id, mutation_count: result.proposed_mutations.size})
-          return :paused
-        end
-        :continue
+        @storage.transition_workflow_state(id: run.workflow_id, from: :running, to: :paused)
+        append_event(run, type: :workflow_paused, payload: {by_node: node_id, mutation_count: result.proposed_mutations.size})
+        :paused
 
       when DAG::Waiting
-        finished_ms = @clock.now_ms
-        @storage.commit_attempt(attempt_id: attempt_id, result: result, node_state: :waiting, finished_at_ms: finished_ms)
-        append_event(workflow_id, revision,
-          type: :node_waiting,
-          node_id: node_id,
-          attempt_id: attempt_id,
-          payload: {reason: result.reason, not_before_ms: result.not_before_ms})
+        commit_and_emit(run, node_id, attempt_id, attempt_number, result, :waiting, :node_waiting,
+          {reason: result.reason, not_before_ms: result.not_before_ms})
         :continue
 
       when DAG::Failure
-        finished_ms = @clock.now_ms
-        if result.retriable && attempt_number < runtime_profile.max_attempts_per_node
-          @storage.commit_attempt(attempt_id: attempt_id, result: result, node_state: :pending, finished_at_ms: finished_ms)
-          append_event(workflow_id, revision,
-            type: :node_failed,
-            node_id: node_id,
-            attempt_id: attempt_id,
-            payload: {retriable: true, attempt_number: attempt_number, error: result.error})
+        if result.retriable && attempt_number < run.runtime_profile.max_attempts_per_node
+          commit_and_emit(run, node_id, attempt_id, attempt_number, result, :pending, :node_failed,
+            {retriable: true, error: result.error})
           return :continue
         end
 
-        @storage.commit_attempt(attempt_id: attempt_id, result: result, node_state: :failed, finished_at_ms: finished_ms)
-        append_event(workflow_id, revision,
-          type: :node_failed,
-          node_id: node_id,
-          attempt_id: attempt_id,
-          payload: {retriable: false, attempt_number: attempt_number, error: result.error})
-        @storage.transition_workflow_state(id: workflow_id, from: :running, to: :failed)
-        append_event(workflow_id, revision,
-          type: :workflow_failed,
-          payload: {failed_node: node_id, error: result.error})
+        commit_and_emit(run, node_id, attempt_id, attempt_number, result, :failed, :node_failed,
+          {retriable: false, error: result.error})
+        @storage.transition_workflow_state(id: run.workflow_id, from: :running, to: :failed)
+        append_event(run, type: :workflow_failed, payload: {failed_node: node_id, error: result.error})
         :failed_terminal
       end
     end
 
-    def build_step_input(workflow_id, revision, definition, node_id, attempt_number)
-      context = effective_context(workflow_id, revision, definition, node_id)
+    def commit_and_emit(run, node_id, attempt_id, attempt_number, result, node_state, event_type, extra_payload)
+      @storage.commit_attempt(
+        attempt_id: attempt_id,
+        result: result,
+        node_state: node_state,
+        finished_at_ms: @clock.now_ms
+      )
+      append_event(run,
+        type: event_type,
+        node_id: node_id,
+        attempt_id: attempt_id,
+        payload: extra_payload.merge(attempt_number: attempt_number))
+    end
+
+    def build_step_input(run, node_id, attempt_number)
       DAG::StepInput[
-        context: context,
+        context: effective_context(run, node_id),
         node_id: node_id,
         attempt_number: attempt_number,
-        metadata: {workflow_id: workflow_id, revision: revision}
+        metadata: {workflow_id: run.workflow_id, revision: run.revision}
       ]
     end
 
-    def effective_context(workflow_id, revision, definition, node_id)
-      workflow = @storage.load_workflow(id: workflow_id)
-      ctx = DAG::ExecutionContext.from(workflow[:initial_context])
-
-      ordered_predecessors = definition.predecessors(node_id).to_a.sort_by(&:to_s)
-      ordered_predecessors.each do |pred|
-        attempts = @storage.list_attempts(workflow_id: workflow_id, revision: revision, node_id: pred)
+    def effective_context(run, node_id)
+      ctx = DAG::ExecutionContext.from(run.initial_context)
+      run.predecessors_by_node[node_id].each do |pred|
+        attempts = @storage.list_attempts(workflow_id: run.workflow_id, revision: run.revision, node_id: pred)
         committed = attempts.reverse.find { |a| a[:state] == :committed }
         next unless committed
 
         patch = committed[:result].context_patch
-        ctx = ctx.merge(patch) if patch && !patch.empty?
+        ctx = ctx.merge(patch)
       end
       ctx
     end
@@ -217,30 +201,26 @@ module DAG
       entry = @registry.lookup(step_def[:type])
       step = entry.klass.new(config: step_def[:config])
       result = step.call(input)
-      unless DAG::StepProtocol.valid_result?(result)
-        return DAG::Failure[
-          error: {code: :step_bad_return, message: "expected Success/Waiting/Failure, got #{result.class}"},
-          retriable: false
-        ]
-      end
-      result
-    rescue => e
+      return result if DAG::StepProtocol.valid_result?(result)
+
       DAG::Failure[
-        error: {code: :step_raised, class: e.class.name, message: e.message},
+        error: {code: :step_bad_return, message: "expected Success/Waiting/Failure, got #{result.class}"},
         retriable: false
       ]
+    rescue => e
+      DAG::Result.exception_failure(:step_raised, e)
     end
 
-    def finalize(workflow_id, revision, paused:, failed:)
-      return build_run_result(workflow_id, revision, :paused) if paused
-      return build_run_result(workflow_id, revision, :failed) if failed
+    def finalize(run, paused:, failed:)
+      return build_run_result(run, :paused) if paused
+      return build_run_result(run, :failed) if failed
 
-      states = @storage.load_node_states(workflow_id: workflow_id, revision: revision)
+      states = @storage.load_node_states(workflow_id: run.workflow_id, revision: run.revision)
       final, terminal_event = resolve_terminal(states.values)
 
-      @storage.transition_workflow_state(id: workflow_id, from: :running, to: final)
-      append_event(workflow_id, revision, type: terminal_event, payload: {})
-      build_run_result(workflow_id, revision, final)
+      @storage.transition_workflow_state(id: run.workflow_id, from: :running, to: final)
+      append_event(run, type: terminal_event, payload: {})
+      build_run_result(run, final)
     end
 
     # The loop only exits with paused/failed (handled by early returns above)
@@ -255,33 +235,28 @@ module DAG
       end
     end
 
-    def build_run_result(workflow_id, revision, state)
-      events = @storage.read_events(workflow_id: workflow_id)
-      last_seq = events.last&.seq
+    def build_run_result(run, state)
+      events = @storage.read_events(workflow_id: run.workflow_id)
       DAG::RunResult.new(
         state: state,
-        last_event_seq: last_seq,
-        outcome: {workflow_id: workflow_id, revision: revision},
+        last_event_seq: events.last&.seq,
+        outcome: {workflow_id: run.workflow_id, revision: run.revision},
         metadata: {}
       )
     end
 
-    def append_event(workflow_id, revision, type:, payload:, node_id: nil, attempt_id: nil)
+    def append_event(run, type:, payload:, node_id: nil, attempt_id: nil)
       event = DAG::Event[
         type: type,
-        workflow_id: workflow_id,
-        revision: revision,
+        workflow_id: run.workflow_id,
+        revision: run.revision,
         at_ms: @clock.now_ms,
         node_id: node_id,
         attempt_id: attempt_id,
         payload: payload
       ]
-      stamped = @storage.append_event(workflow_id: workflow_id, event: event)
+      stamped = @storage.append_event(workflow_id: run.workflow_id, event: event)
       @event_bus.publish(stamped)
-    end
-
-    def attempt_number_from(attempt_id)
-      attempt_id.split("/").last.to_i
     end
   end
 end

@@ -18,10 +18,6 @@ module DAG
       class Storage
         include Ports::Storage
 
-        WORKFLOW_STATES = %i[pending running waiting paused completed failed].freeze
-        NODE_STATES = %i[pending running committed waiting failed invalidated].freeze
-        ATTEMPT_STATES = %i[running committed waiting failed aborted].freeze
-
         def initialize(initial_state: nil)
           @state = initial_state || StorageState.fresh_state
         end
@@ -47,8 +43,7 @@ module DAG
         private
 
         def dispatch(method_name, args)
-          result = StorageState.dispatch(@state, method_name, args)
-          DAG.deep_freeze(DAG.deep_dup(result))
+          DAG.frozen_copy(StorageState.dispatch(@state, method_name, args))
         end
       end
     end

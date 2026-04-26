@@ -18,7 +18,7 @@ module DAG
         end
 
         def publish(event)
-          frozen_event = DAG.deep_freeze(DAG.deep_dup(event))
+          frozen_event = DAG.frozen_copy(event)
           @events << frozen_event
           @events.shift if @events.size > @buffer_size
           @subscribers.each { |subscriber| subscriber.call(frozen_event) }
@@ -33,7 +33,7 @@ module DAG
         end
 
         def events
-          DAG.deep_freeze(DAG.deep_dup(@events))
+          DAG.frozen_copy(@events)
         end
       end
     end

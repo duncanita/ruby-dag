@@ -54,4 +54,12 @@ class DefinitionTest < Minitest::Test
       .add_edge(:a, :b)
     assert_raises(DAG::CycleError) { base.add_edge(:b, :a) }
   end
+
+  def test_equality_is_structural
+    a = DAG::Workflow::Definition.new.add_node(:n, type: :passthrough)
+    b = DAG::Workflow::Definition.new.add_node(:n, type: :passthrough)
+    assert_equal a, b
+    refute_equal a, DAG::Workflow::Definition.new.add_node(:other, type: :passthrough)
+    refute_equal a, "not a definition"
+  end
 end

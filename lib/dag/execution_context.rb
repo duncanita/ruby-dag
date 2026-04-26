@@ -11,14 +11,13 @@ module DAG
 
     def initialize(hash)
       DAG.json_safe!(hash, "$root")
-      @data = DAG.deep_freeze(DAG.deep_dup(hash))
+      @data = DAG.frozen_copy(hash)
       freeze
     end
 
     def merge(patch)
-      patch ||= {}
-      DAG.json_safe!(patch, "$patch")
-      ExecutionContext.new(@data.merge(DAG.deep_dup(patch)))
+      return self if patch.nil? || patch.empty?
+      ExecutionContext.new(@data.merge(patch))
     end
 
     def fetch(key, *default, &block)

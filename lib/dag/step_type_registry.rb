@@ -21,13 +21,15 @@ module DAG
       raise ArgumentError, "klass must implement StepProtocol" unless StepProtocol.implements?(klass)
       DAG.json_safe!(fingerprint_payload, "$root.fingerprint_payload")
 
-      payload_frozen = DAG.deep_freeze(DAG.deep_dup(fingerprint_payload))
-      config_frozen = DAG.deep_freeze(DAG.deep_dup(config))
-      new_entry = Entry.new(klass: klass, fingerprint_payload: payload_frozen, config: config_frozen)
+      new_entry = Entry.new(
+        klass: klass,
+        fingerprint_payload: DAG.frozen_copy(fingerprint_payload),
+        config: DAG.frozen_copy(config)
+      )
 
       existing = @entries[name]
       if existing
-        if existing.klass == klass && existing.fingerprint_payload == payload_frozen
+        if existing.klass == klass && existing.fingerprint_payload == new_entry.fingerprint_payload
           return self
         end
         raise FingerprintMismatchError,

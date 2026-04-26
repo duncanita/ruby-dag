@@ -90,7 +90,7 @@ class RunnerOutcomesTest < Minitest::Test
     assert_equal :failed, result.state
     attempt = storage.list_attempts(workflow_id: workflow_id, node_id: :a).last
     assert_equal :step_raised, attempt[:result].error[:code]
-    assert_equal "RuntimeError", attempt[:result].error[:class]
+    assert_equal "RuntimeError", attempt[:result].error[:error_class]
   end
 
   def test_paused_workflow_can_be_resumed_back_to_running

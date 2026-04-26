@@ -19,31 +19,17 @@ module DAG
 
         def compute(value)
           DAG.json_safe!(value)
-          Digest::SHA256.hexdigest(JSON.generate(deep_canonical(value)))
+          Digest::SHA256.hexdigest(JSON.generate(canonicalize(value)))
         end
 
         private
 
-        def deep_canonical(value)
+        def canonicalize(value)
           case value
-          when Hash
-            seen = {}
-            pairs = value.map do |k, v|
-              key = k.to_s
-              raise ArgumentError, "canonical key collision: #{key.inspect}" if seen[key]
-              seen[key] = true
-              [key, deep_canonical(v)]
-            end
-            pairs.sort_by(&:first).to_h
-          when Array
-            value.map { |v| deep_canonical(v) }
-          when Symbol
-            value.to_s
-          when Float
-            raise ArgumentError, "non-finite float" if value.nan? || value.infinite?
-            value
-          when String, Integer, TrueClass, FalseClass, NilClass
-            value
+          when Hash then value.map { |k, v| [k.to_s, canonicalize(v)] }.sort_by(&:first).to_h
+          when Array then value.map { |v| canonicalize(v) }
+          when Symbol then value.to_s
+          else value
           end
         end
       end
