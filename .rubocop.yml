@@ -1,0 +1,21 @@
+require:
+  - ./rubocop/cop/dag/no_thread_or_ractor
+  - ./rubocop/cop/dag/no_mutable_accessors
+  - ./rubocop/cop/dag/no_in_place_mutation
+  - ./rubocop/cop/dag/no_external_requires
+
+AllCops:
+  TargetRubyVersion: 3.4
+  NewCops: enable
+
+DAG/NoThreadOrRactor:
+  Enabled: true
+
+DAG/NoMutableAccessors:
+  Enabled: true
+
+DAG/NoInPlaceMutation:
+  Enabled: true
+
+DAG/NoExternalRequires:
+  Enabled: true

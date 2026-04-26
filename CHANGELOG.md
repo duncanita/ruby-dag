@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- R0 foundation files: `require "ruby-dag"` entrypoint, boundary port
+  contracts, immutable tagged types, JSON-safety helpers, custom DAG cops,
+  `CONTRACT.md`, and CI scaffolding for Ruby 3.4/head.
+
 ## 0.4.0
 
 ### Added
