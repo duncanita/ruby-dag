@@ -89,4 +89,15 @@ bundle install
 bundle exec rake          # test + standardrb
 ```
 
+## Production Readiness Stress
+
+```bash
+scripts/production_readiness.rb --fast
+scripts/production_readiness.rb
+```
+
+`--fast` targets about two minutes. Without `--fast`, the script runs a
+one-hour stress profile. Use `--duration SECONDS` and `--seed INTEGER` to
+reproduce or shorten a run.
+
 License: MIT.
