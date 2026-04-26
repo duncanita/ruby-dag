@@ -1,8 +1,27 @@
 # frozen_string_literal: true
 
 module DAG
-  Failure = Data.define(:error) do
+  Failure = Data.define(:error, :retriable, :metadata) do
     include Result
+
+    class << self
+      remove_method :[]
+
+      def [](error:, retriable: false, metadata: {})
+        DAG.json_safe!(error, "$root.error")
+        DAG.json_safe!(metadata, "$root.metadata")
+
+        new(error: error, retriable: retriable, metadata: metadata)
+      end
+    end
+
+    def initialize(error:, retriable: false, metadata: {})
+      super(
+        error: DAG.deep_freeze(DAG.deep_dup(error)),
+        retriable: !!retriable,
+        metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
+      )
+    end
 
     def success? = false
     def failure? = true

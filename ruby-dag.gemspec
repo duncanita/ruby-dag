@@ -10,9 +10,9 @@ Gem::Specification.new do |spec|
   spec.description = "Define multi-step workflows as YAML or build them programmatically. Automatic dependency resolution and pluggable parallel execution (Threads, Processes, or Sequential). Zero runtime dependencies."
   spec.homepage = "https://github.com/duncanita/ruby-dag"
   spec.license = "MIT"
-  spec.required_ruby_version = ">= 3.2"
+  spec.required_ruby_version = ">= 3.4"
 
-  spec.files = Dir["lib/**/*.rb", "bin/*", "README.md", "LICENSE"]
+  spec.files = Dir["lib/**/*.rb", "bin/*", "README.md", "CONTRACT.md", "CHANGELOG.md", "LICENSE"]
   spec.bindir = "bin"
   spec.executables = ["dag"]
 

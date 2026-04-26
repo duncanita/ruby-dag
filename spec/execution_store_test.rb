@@ -8,18 +8,20 @@ class ExecutionStoreTest < Minitest::Test
 
   def test_load_output_returns_isolated_result_snapshot
     store = DAG::Workflow::ExecutionStore::MemoryStore.new
+    original_value = {payload: ["a"]}
     store.begin_run(workflow_id: "wf-store", definition_fingerprint: "fp-1", node_paths: [[:fetch]])
     store.save_output(
       workflow_id: "wf-store",
       node_path: [:fetch],
       version: 1,
-      result: DAG::Success.new(value: {payload: ["a"]}),
+      result: DAG::Success.new(value: original_value),
       reusable: true,
       superseded: false
     )
+    original_value[:payload] << "outside"
 
     loaded = store.load_output(workflow_id: "wf-store", node_path: [:fetch])
-    loaded[:result].value[:payload] << "b"
+    assert_raises(FrozenError) { loaded[:result].value[:payload] << "b" }
 
     reloaded = store.load_output(workflow_id: "wf-store", node_path: [:fetch])
     assert_equal ["a"], reloaded[:result].value[:payload]

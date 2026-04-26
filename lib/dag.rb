@@ -4,15 +4,26 @@ require_relative "dag/version"
 
 # Core graph
 require_relative "dag/errors"
+require_relative "dag/immutability"
 require_relative "dag/edge"
 require_relative "dag/result"
 require_relative "dag/success"
 require_relative "dag/failure"
+require_relative "dag/types"
 require_relative "dag/graph"
 require_relative "dag/graph/builder"
 require_relative "dag/graph/validator"
 
+# Boundary ports
+require_relative "dag/ports/storage"
+require_relative "dag/ports/event_bus"
+require_relative "dag/ports/fingerprint"
+require_relative "dag/ports/clock"
+require_relative "dag/ports/id_generator"
+require_relative "dag/ports/serializer"
+
 # Workflow layer
+require_relative "dag/workflow"
 require_relative "dag/workflow/condition"
 require_relative "dag/workflow/step"
 require_relative "dag/workflow/registry"

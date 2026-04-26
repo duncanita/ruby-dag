@@ -1,8 +1,40 @@
 # frozen_string_literal: true
 
 module DAG
-  Success = Data.define(:value) do
+  Success = Data.define(:value, :context_patch, :proposed_mutations, :metadata) do
     include Result
+
+    class << self
+      remove_method :[]
+
+      def [](value: nil, context_patch: {}, proposed_mutations: [], metadata: {})
+        DAG.json_safe!(value, "$root.value")
+        DAG.json_safe!(context_patch, "$root.context_patch")
+        DAG.json_safe!(metadata, "$root.metadata")
+
+        proposed_mutations.each do |mutation|
+          unless mutation.is_a?(DAG::ProposedMutation)
+            raise ArgumentError, "proposed_mutations must contain ProposedMutation"
+          end
+        end
+
+        new(
+          value: value,
+          context_patch: context_patch,
+          proposed_mutations: proposed_mutations,
+          metadata: metadata
+        )
+      end
+    end
+
+    def initialize(value:, context_patch: {}, proposed_mutations: [], metadata: {})
+      super(
+        value: DAG.deep_freeze(DAG.deep_dup(value)),
+        context_patch: DAG.deep_freeze(DAG.deep_dup(context_patch)),
+        proposed_mutations: DAG.deep_freeze(proposed_mutations.dup),
+        metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
+      )
+    end
 
     def success? = true
     def failure? = false
@@ -13,7 +45,12 @@ module DAG
     end
 
     def map
-      Success.new(value: yield(value))
+      Success.new(
+        value: yield(value),
+        context_patch: context_patch,
+        proposed_mutations: proposed_mutations,
+        metadata: metadata
+      )
     end
 
     def recover = self
