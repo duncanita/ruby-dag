@@ -26,9 +26,9 @@ module DAG
 
         def commit_attempt(attempt_id:, result:, node_state:, event:)
           context = attempt_context(attempt_id).merge(node_state: node_state)
-          crash_if!(:before_commit, :commit_attempt, context)
+          crash_if_any!(%i[before_commit before], :commit_attempt, context)
           stamped = super
-          crash_if!(:after_commit, :commit_attempt, context)
+          crash_if_any!(%i[after_commit after], :commit_attempt, context)
           stamped
         end
 
@@ -61,6 +61,10 @@ module DAG
             revision: attempt[:revision],
             node_id: attempt[:node_id]
           }
+        end
+
+        def crash_if_any!(phases, method, context)
+          phases.each { |phase| crash_if!(phase, method, context) }
         end
 
         def crash_if!(phase, method, context)

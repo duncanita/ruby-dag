@@ -4,6 +4,9 @@ module DAG
   REQUIRED_RUNNER_DEPENDENCIES = %i[storage event_bus registry clock id_generator fingerprint serializer].freeze
 
   class Runner
+    CALL_FROM_STATES = %i[pending waiting paused].freeze
+    RESUME_FROM_STATES = %i[running waiting paused].freeze
+
     RunContext = Data.define(
       :workflow_id,
       :revision,
@@ -31,12 +34,12 @@ module DAG
     end
 
     def call(workflow_id)
-      workflow = transition_to_running(workflow_id)
+      workflow = acquire_running(workflow_id, allowed_from: CALL_FROM_STATES)
       run_workflow(workflow_id, workflow)
     end
 
     def resume(workflow_id)
-      workflow = transition_resume_to_running(workflow_id)
+      workflow = acquire_running(workflow_id, allowed_from: RESUME_FROM_STATES)
       @storage.abort_running_attempts(workflow_id: workflow_id)
       run_workflow(workflow_id, workflow)
     end
@@ -83,24 +86,14 @@ module DAG
       finalize(run, paused: paused, failed: failed)
     end
 
-    def transition_to_running(workflow_id)
+    def acquire_running(workflow_id, allowed_from:)
       workflow = @storage.load_workflow(id: workflow_id)
       from = workflow[:state]
-      unless %i[pending waiting paused].include?(from)
-        raise StaleStateError, "workflow #{workflow_id} cannot transition from #{from.inspect} to :running"
+      unless allowed_from.include?(from)
+        raise StaleStateError,
+          "workflow #{workflow_id} cannot transition to :running from #{from.inspect} (allowed: #{allowed_from.inspect})"
       end
-      @storage.transition_workflow_state(id: workflow_id, from: from, to: :running)
-      workflow
-    end
-
-    def transition_resume_to_running(workflow_id)
-      workflow = @storage.load_workflow(id: workflow_id)
-      from = workflow[:state]
       return workflow if from == :running
-
-      unless %i[pending waiting paused].include?(from)
-        raise StaleStateError, "workflow #{workflow_id} cannot resume from #{from.inspect}"
-      end
 
       @storage.transition_workflow_state(id: workflow_id, from: from, to: :running)
       workflow
