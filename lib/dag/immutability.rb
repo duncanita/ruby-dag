@@ -6,6 +6,16 @@ module DAG
 
   module_function
 
+  # Convenience for the deep_freeze(deep_dup(...)) idiom that recurs at every
+  # boundary where a value is taken from outside and stored under the
+  # library's immutability discipline. Already-frozen values are returned
+  # as-is — Data.define instances and other immutable values do not need
+  # to be re-cloned.
+  def frozen_copy(value)
+    return value if value.frozen? && !value.is_a?(Hash) && !value.is_a?(Array) && !value.is_a?(String)
+    deep_freeze(deep_dup(value))
+  end
+
   def deep_freeze(value, seen = {})
     return value if immutable_scalar?(value)
     return seen[value.object_id] if seen.key?(value.object_id)

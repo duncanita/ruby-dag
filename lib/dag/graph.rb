@@ -160,34 +160,6 @@ module DAG
       dup.tap { |g| g.replace_node(old_name, new_name) }.freeze
     end
 
-    def with_subtree_replaced(root:, replacement_graph:, reconnect: [])
-      root_sym = root.to_sym
-      raise UnknownNodeError, "Unknown node: #{root_sym}" unless @nodes.include?(root_sym)
-      raise ArgumentError, "replacement_graph must be a DAG::Graph" unless replacement_graph.is_a?(Graph)
-
-      replacement_roots = replacement_graph.roots.to_a
-      if replacement_roots.size != 1
-        raise ArgumentError, "replacement_graph must have exactly one root, got #{replacement_roots.sort.inspect}"
-      end
-
-      removed = Set.new([root_sym])
-      downstream = each_successor(root_sym).to_set
-      normalized_reconnect = Array(reconnect).map do |descriptor|
-        normalize_reconnect_entry(descriptor,
-          replacement_graph: replacement_graph,
-          downstream: downstream,
-          root: root_sym)
-      end
-
-      dup.tap do |graph|
-        removed.each { |node| graph.remove_node(node) }
-        replacement_graph.each_node { |node| graph.add_node(node) }
-        replacement_graph.each_edge { |edge| graph.add_edge(edge.from, edge.to, **edge.metadata) }
-        each_predecessor(root_sym) { |pred| graph.add_edge(pred, replacement_roots.first, **edge_metadata(pred, root_sym)) }
-        normalized_reconnect.each { |entry| graph.add_edge(entry[:from], entry[:to], **entry[:metadata]) }
-      end.freeze
-    end
-
     # --- Freezing ---
 
     def freeze
@@ -252,25 +224,6 @@ module DAG
       @edge_metadata.dig(from.to_sym, to.to_sym) || {}
     end
 
-    def merged_edge_metadata(from, to, overrides = nil)
-      edge_metadata(from, to).merge((overrides || {}).transform_keys(&:to_sym))
-    end
-
-    def normalize_reconnect_entry(descriptor, replacement_graph:, downstream:, root:)
-      raise ArgumentError, "reconnect entries must be Hashes" unless descriptor.is_a?(Hash)
-
-      entry = descriptor.transform_keys(&:to_sym)
-      raise ArgumentError, "reconnect entries must include :from" unless entry.key?(:from)
-      raise ArgumentError, "reconnect entries must include :to" unless entry.key?(:to)
-
-      from = entry.fetch(:from).to_sym
-      to = entry.fetch(:to).to_sym
-      raise ArgumentError, "reconnect from #{from.inspect} must reference a replacement leaf" unless replacement_graph.leaves.include?(from)
-      raise ArgumentError, "reconnect to #{to.inspect} must reference a downstream node outside the removed subtree" unless downstream.include?(to)
-
-      {from: from, to: to, metadata: merged_edge_metadata(root, to, entry[:metadata])}
-    end
-
     # --- Neighbor queries ---
 
     def successors(name) = fetch_set(@adjacency, name.to_sym).dup
@@ -288,6 +241,41 @@ module DAG
 
     def ancestors(name) = walk(@reverse, name.to_sym)
     def descendants(name) = walk(@adjacency, name.to_sym)
+
+    # Descendants of `root_id` as a Set, optionally including the root itself.
+    # Raises `UnknownNodeError` if the node is not in the graph.
+    def descendants_of(root_id, include_self: true)
+      sym = root_id.to_sym
+      raise UnknownNodeError, "Unknown node: #{sym}" unless @nodes.include?(sym)
+      result = walk(@adjacency, sym)
+      result << sym if include_self
+      result
+    end
+
+    # Descendants reachable ONLY through `root_id`. A node `d` is exclusive iff
+    # every path from a graph root to `d` passes through `root_id`. Equivalently:
+    # blocking `root_id` in a BFS from all other graph roots leaves `d`
+    # unreachable. The root itself is included when `include_self` is true.
+    def exclusive_descendants_of(root_id, include_self: true)
+      sym = root_id.to_sym
+      raise UnknownNodeError, "Unknown node: #{sym}" unless @nodes.include?(sym)
+
+      subtree = walk(@adjacency, sym)
+      reachable_without = reachable_blocking(sym)
+      exclusive = subtree - reachable_without
+      exclusive << sym if include_self
+      exclusive
+    end
+
+    # Descendants of `root_id` that are also reachable from at least one path
+    # NOT going through `root_id`. Complement of `exclusive_descendants_of`
+    # within the strict descendant set (root itself is never shared).
+    def shared_descendants_of(root_id)
+      sym = root_id.to_sym
+      raise UnknownNodeError, "Unknown node: #{sym}" unless @nodes.include?(sym)
+
+      walk(@adjacency, sym) & reachable_blocking(sym)
+    end
 
     def path?(from, to)
       from_sym = from.to_sym
@@ -308,6 +296,11 @@ module DAG
       return @cached_sort if frozen?
       topological_layers.flatten
     end
+
+    # Deterministic topological order with `id.to_s` ASCII tie-break at every
+    # in-degree-zero frontier. Aliased from `topological_sort`, which already
+    # sorts each Kahn frontier; exposed under the R1 roadmap name.
+    def topological_order = topological_sort
 
     # Shortest path from `from` to `to` as `{cost:, path:}`, or `nil` if
     # `to` is unreachable. Edge cost comes from the `:weight` metadata key
@@ -403,9 +396,10 @@ module DAG
     end
 
     def to_h
+      sorted_edges = edges.to_a.sort_by { |e| [e.from.to_s, e.to.to_s] }
       {
-        nodes: @nodes.to_a.sort,
-        edges: edges.map { |e|
+        nodes: @nodes.to_a.sort_by(&:to_s),
+        edges: sorted_edges.map { |e|
           h = {from: e.from, to: e.to}
           h[:metadata] = e.metadata unless e.metadata.empty?
           h
@@ -629,6 +623,21 @@ module DAG
 
     def reachable?(from, to)
       walk(@adjacency, from, target: to)
+    end
+
+    # Set of nodes reachable from any graph root *without* entering `blocked`.
+    # Used by `exclusive_descendants_of` and `shared_descendants_of` to detect
+    # paths that bypass a given subtree root.
+    def reachable_blocking(blocked)
+      visited = Set.new
+      stack = roots.reject { |r| r == blocked }.to_a
+      until stack.empty?
+        current = stack.pop
+        next if visited.include?(current) || current == blocked
+        visited << current
+        fetch_set(@adjacency, current).each { |succ| stack << succ unless succ == blocked }
+      end
+      visited
     end
 
     def validate_edge_nodes!(from, to)

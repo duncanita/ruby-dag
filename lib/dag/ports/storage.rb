@@ -2,6 +2,9 @@
 
 module DAG
   module Ports
+    # Storage port — 15 documented methods (Roadmap v3.4 §C / Appendix I)
+    # plus 1 documented extension (`prepare_workflow_retry`) needed for
+    # `Runner#retry_workflow` per R1 DoD. Adapters must implement all 16.
     module Storage
       def create_workflow(id:, initial_definition:, initial_context:, runtime_profile:)
         raise PortNotImplementedError
@@ -60,6 +63,16 @@ module DAG
       end
 
       def read_events(workflow_id:, after_seq: nil, limit: nil)
+        raise PortNotImplementedError
+      end
+
+      # Port extension (see CLAUDE.md "Port extensions"). Atomically:
+      # (a) find :failed nodes for the workflow's current revision,
+      # (b) mark each corresponding :failed attempt as :aborted,
+      # (c) transition those nodes back to :pending,
+      # (d) increment the workflow's retry-count tracking.
+      # Returns {reset: [node_id, ...], workflow_retry_count: Integer}.
+      def prepare_workflow_retry(id:)
         raise PortNotImplementedError
       end
     end

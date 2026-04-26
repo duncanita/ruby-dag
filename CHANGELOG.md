@@ -2,11 +2,49 @@
 
 ## Unreleased
 
-### Added
+### Added — Roadmap v3.4 R1: deterministic core runner and default adapters
 
-- R0 foundation files: `require "ruby-dag"` entrypoint, boundary port
-  contracts, immutable tagged types, JSON-safety helpers, custom DAG cops,
-  `CONTRACT.md`, and CI scaffolding for Ruby 3.4/head.
+- `DAG::Runner` — frozen kernel runner with seven injected ports
+  (`storage`, `event_bus`, `registry`, `clock`, `id_generator`,
+  `fingerprint`, `serializer`). `#call(workflow_id)` runs the layered
+  algorithm from the roadmap; `#retry_workflow(workflow_id)` resets
+  failed nodes and retries until `WorkflowRetryExhaustedError`.
+- `DAG::Workflow::Definition` — immutable, chainable. `add_node(id,
+  type:, config: {})` and `add_edge(from, to, **metadata)` return new
+  frozen instances. `revision` starts at 1; `fingerprint(via:)` defers to
+  the fingerprint port; `to_h` is canonical and ASCII-sorted.
+- `DAG::ExecutionContext` — deep-frozen copy-on-write context.
+  `merge` returns a new context; `to_h` returns a fresh deep-dup.
+- `DAG::StepProtocol`, `DAG::Step::Base`, `DAG::StepTypeRegistry`.
+  Re-registering the same step type with a different
+  `fingerprint_payload` raises `FingerprintMismatchError`; lookup of an
+  unknown step type raises `UnknownStepTypeError`.
+- Built-in step types: `:noop` and `:passthrough` (no `:branch` in R1).
+- Default adapters under `DAG::Adapters`:
+  - `Stdlib::{Clock, IdGenerator, Fingerprint, Serializer}`
+  - `Null::EventBus`
+  - `Memory::EventBus` (single-process, bounded, deep-frozen reads)
+  - `Memory::Storage` (single-process, full lifecycle: workflow CAS,
+    revisions, node states, attempts with `:aborted` exclusion in
+    `count_attempts`, append-only event log with monotonic `seq`)
+- `Graph#descendants_of`, `#exclusive_descendants_of`,
+  `#shared_descendants_of`, `#topological_order`, canonical
+  ASCII-sorted `#to_h` for fingerprint-friendly serialization.
+
+### Removed
+
+- Legacy `DAG::Workflow::{Runner, Loader, Dumper, Registry, Validator,
+  Condition, Mutation, Invalidation, ScheduledPolicy, ...}` and the
+  whole `Workflow::Parallel` / `Workflow::Steps` trees. The legacy
+  YAML CLI (`bin/dag`), the `examples/` directory, the legacy
+  benchmarks, and ~30 legacy spec files are gone. R1 replaces them
+  with a clean kernel; subsequent phases (R2/R3/Release) build on it.
+
+### Added — Roadmap v3.4 R0 (landed as part of #122)
+
+- `require "ruby-dag"` entrypoint, boundary port contracts, immutable
+  tagged types, JSON-safety helpers, custom DAG cops, `CONTRACT.md`,
+  and CI scaffolding for Ruby 3.4/head.
 
 ## 0.4.0
 

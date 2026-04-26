@@ -2,58 +2,83 @@
 
 module DAG
   module Workflow
-    # Bundles a Graph + Registry into a complete workflow definition.
-    # Returned by Loader, consumed by Runner.
-    #
-    #   definition = DAG::Loader.from_file("workflow.yml")
-    #   result = DAG::Runner.new(definition.graph, definition.registry).call
+    # Immutable, chainable workflow definition. Each `add_node` / `add_edge`
+    # returns a new frozen Definition with a fresh frozen Graph and
+    # step-type mapping. R3's mutation service will return Definitions with
+    # incremented revisions; R1 always uses revision 1.
+    class Definition
+      attr_reader :graph, :revision
 
-    Definition = Data.define(:graph, :registry, :source_path) do
-      def initialize(graph:, registry:, source_path: nil)
-        super(graph: graph, registry: registry, source_path: source_path&.to_s)
+      def initialize(graph: DAG::Graph.new.freeze, step_types: {}, revision: 1)
+        raise ArgumentError, "revision must be a positive Integer" unless revision.is_a?(Integer) && revision.positive?
+
+        @graph = graph.frozen? ? graph : graph.dup.freeze
+        @step_types = DAG.deep_freeze(DAG.deep_dup(step_types))
+        @revision = revision
+        freeze
       end
 
-      def size = graph.size
-      def empty? = graph.empty? && registry.empty?
-      def steps = registry.steps
+      def add_node(id, type:, config: {})
+        sym = id.to_sym
+        raise ArgumentError, "type must be a Symbol" unless type.is_a?(Symbol)
 
-      def execution_order = graph.topological_layers
-
-      def step(name) = registry[name]
-
-      def source_dir = source_path && File.dirname(source_path)
-
-      def replace_step(old_name, new_step)
-        old_sym = old_name.to_sym
-        renaming = old_sym != new_step.name
-
-        new_graph = renaming ? graph.with_node_replaced(old_sym, new_step.name) : graph
-        new_registry = registry.dup
-        if renaming
-          new_registry.remove(old_sym)
-          new_registry.register(new_step)
-          rewrite_run_if_refs(new_registry, old_sym, new_step.name)
-        else
-          new_registry.replace(new_step)
-        end
-
-        Definition.new(graph: new_graph, registry: new_registry, source_path: source_path)
+        new_graph = @graph.with_node(sym)
+        new_step_types = @step_types.merge(sym => {type: type, config: DAG.deep_freeze(DAG.deep_dup(config))})
+        Definition.new(graph: new_graph, step_types: new_step_types, revision: @revision)
       end
 
-      private
-
-      def rewrite_run_if_refs(registry, old_sym, new_sym)
-        registry.steps.each do |step|
-          run_if = step.config[:run_if]
-          next unless run_if
-
-          rewritten = Condition.rename_from(run_if, old_sym, new_sym)
-          registry.replace(Step.new(name: step.name, type: step.type,
-            **step.config.merge(run_if: rewritten)))
-        end
+      def add_edge(from, to, **metadata)
+        new_graph = @graph.with_edge(from, to, **metadata)
+        Definition.new(graph: new_graph, step_types: @step_types, revision: @revision)
       end
 
-      def inspect = "#<DAG::Workflow::Definition nodes=#{graph.size} steps=#{registry.size}>"
+      def with_revision(new_revision)
+        Definition.new(graph: @graph, step_types: @step_types, revision: new_revision)
+      end
+
+      def step_type_for(id)
+        sym = id.to_sym
+        raise UnknownNodeError, "Unknown node: #{sym}" unless @step_types.key?(sym)
+        @step_types.fetch(sym)
+      end
+
+      def has_node?(id) = @graph.node?(id)
+      def nodes = @graph.nodes
+      def topological_order = @graph.topological_order
+      def predecessors(id) = @graph.predecessors(id)
+      def successors(id) = @graph.successors(id)
+      def each_node(&block) = @graph.each_node(&block)
+      def each_edge(&block) = @graph.each_edge(&block)
+      def each_predecessor(id, &block) = @graph.each_predecessor(id, &block)
+      def each_successor(id, &block) = @graph.each_successor(id, &block)
+      def descendants_of(id, **opts) = @graph.descendants_of(id, **opts)
+      def exclusive_descendants_of(id, **opts) = @graph.exclusive_descendants_of(id, **opts)
+      def shared_descendants_of(id) = @graph.shared_descendants_of(id)
+
+      def to_h
+        graph_hash = @graph.to_h
+        {
+          revision: @revision,
+          nodes: graph_hash[:nodes].map { |id|
+            entry = @step_types.fetch(id)
+            {id: id, type: entry[:type], config: entry[:config]}
+          },
+          edges: graph_hash[:edges]
+        }
+      end
+
+      def fingerprint(via:)
+        via.compute(to_h)
+      end
+
+      def ==(other)
+        other.is_a?(Definition) && to_h == other.to_h
+      end
+      alias_method :eql?, :==
+
+      def hash = to_h.hash
+
+      def inspect = "#<DAG::Workflow::Definition revision=#{@revision} nodes=#{@graph.node_count} edges=#{@graph.edge_count}>"
       alias_method :to_s, :inspect
     end
   end
