@@ -2,27 +2,16 @@
 
 module DAG
   class MutationService
-    ApplyResult = Data.define(:workflow_id, :revision, :definition, :invalidated_node_ids, :event) do
-      def initialize(workflow_id:, revision:, definition:, invalidated_node_ids:, event:)
-        super(
-          workflow_id: workflow_id,
-          revision: revision,
-          definition: definition,
-          invalidated_node_ids: DAG.deep_freeze(invalidated_node_ids.map(&:to_sym).sort_by(&:to_s)),
-          event: event
-        )
-      end
-    end
+    MUTABLE_STATES = %i[paused waiting].freeze
 
-    def initialize(storage:, event_bus:, clock:, definition_editor: DAG::DefinitionEditor.new)
-      missing = {storage: storage, event_bus: event_bus, clock: clock, definition_editor: definition_editor}
-        .select { |_, value| value.nil? }.keys
+    def initialize(storage:, event_bus:, clock:)
+      missing = {storage:, event_bus:, clock:}.select { |_, v| v.nil? }.keys
       raise ArgumentError, "MutationService requires: #{missing.join(", ")}" unless missing.empty?
 
       @storage = storage
       @event_bus = event_bus
       @clock = clock
-      @definition_editor = definition_editor
+      @definition_editor = DAG::DefinitionEditor.new
       freeze
     end
 
@@ -46,10 +35,10 @@ module DAG
       event = result[:event]
       @event_bus.publish(event) if event
 
-      ApplyResult.new(
+      DAG::ApplyResult.new(
         workflow_id: workflow_id,
         revision: result.fetch(:revision),
-        definition: @storage.load_current_definition(id: workflow_id),
+        definition: plan.new_definition.with_revision(result.fetch(:revision)),
         invalidated_node_ids: plan.invalidated_node_ids,
         event: event
       )
@@ -58,10 +47,13 @@ module DAG
     private
 
     def guard_workflow_state!(workflow_id, state)
-      raise DAG::ConcurrentMutationError, "workflow #{workflow_id} is running" if state == :running
-      return if state == :paused || state == :waiting
-
-      raise DAG::StaleStateError, "workflow #{workflow_id} cannot be mutated from #{state.inspect}"
+      case state
+      when *MUTABLE_STATES then nil
+      when :running
+        raise DAG::ConcurrentMutationError, "workflow #{workflow_id} is running"
+      else
+        raise DAG::StaleStateError, "workflow #{workflow_id} cannot be mutated from #{state.inspect}"
+      end
     end
 
     def guard_expected_revision!(workflow_id, current_revision, expected_revision)

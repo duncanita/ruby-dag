@@ -1,29 +1,6 @@
 # frozen_string_literal: true
 
 module DAG
-  PlanResult = Data.define(:valid, :new_definition, :invalidated_node_ids, :reason) do
-    class << self
-      def valid(new_definition:, invalidated_node_ids:)
-        new(valid: true, new_definition: new_definition, invalidated_node_ids: invalidated_node_ids, reason: nil)
-      end
-
-      def invalid(reason)
-        new(valid: false, new_definition: nil, invalidated_node_ids: [], reason: reason)
-      end
-    end
-
-    def initialize(valid:, new_definition:, invalidated_node_ids:, reason:)
-      super(
-        valid: valid,
-        new_definition: new_definition,
-        invalidated_node_ids: DAG.deep_freeze(invalidated_node_ids.map(&:to_sym).sort_by(&:to_s)),
-        reason: reason
-      )
-    end
-
-    def valid? = valid
-  end
-
   class DefinitionEditor
     DEFAULT_REPLACEMENT_STEP = {type: :noop, config: {}}.freeze
 
@@ -62,8 +39,13 @@ module DAG
 
       removed = definition.exclusive_descendants_of(target, include_self: true)
       impacted = definition.descendants_of(target, include_self: true) - removed
-      new_graph = replaced_graph(definition, target, removed, replacement)
-      step_types = replaced_step_types(definition, removed, replacement)
+      kept_nodes = definition.nodes - removed
+      replacement_nodes = replacement.graph.nodes
+      conflicts = kept_nodes & replacement_nodes
+      raise ArgumentError, "replacement nodes collide with preserved nodes: #{sorted(conflicts).inspect}" unless conflicts.empty?
+
+      new_graph = build_replaced_graph(definition, target, removed, kept_nodes, replacement, replacement_nodes)
+      step_types = build_step_types(definition, kept_nodes, replacement_nodes)
       new_definition = DAG::Workflow::Definition.new(
         graph: new_graph,
         step_types: step_types,
@@ -76,85 +58,80 @@ module DAG
     def validate_replacement_graph!(replacement)
       raise ArgumentError, "replacement_graph must be a DAG::ReplacementGraph" unless replacement.is_a?(DAG::ReplacementGraph)
       raise ArgumentError, "replacement graph must be a DAG::Graph" unless replacement.graph.is_a?(DAG::Graph)
+      validate_node_id_list!(replacement.entry_node_ids, "entry_node_ids", replacement.graph)
+      validate_node_id_list!(replacement.exit_node_ids, "exit_node_ids", replacement.graph)
+    end
 
-      replacement.entry_node_ids.each do |node_id|
-        raise ArgumentError, "replacement entry node is not in graph: #{node_id}" unless replacement.graph.node?(node_id)
-      end
-      replacement.exit_node_ids.each do |node_id|
-        raise ArgumentError, "replacement exit node is not in graph: #{node_id}" unless replacement.graph.node?(node_id)
+    def validate_node_id_list!(ids, label, graph)
+      raise ArgumentError, "#{label} must be an Array" unless ids.is_a?(Array)
+      raise ArgumentError, "#{label} cannot be empty" if ids.empty?
+
+      ids.each do |id|
+        raise ArgumentError, "#{label} entries must be Symbol or String, got #{id.class}: #{id.inspect}" unless id.is_a?(Symbol) || id.is_a?(String)
+        raise ArgumentError, "replacement #{label.sub("_node_ids", "")} node is not in graph: #{id}" unless graph.node?(id)
       end
     end
 
-    def replaced_graph(definition, target, removed, replacement)
-      graph = DAG::Graph.new
-      kept_nodes = definition.nodes - removed
-      replacement_nodes = replacement.graph.nodes
-      conflicts = kept_nodes & replacement_nodes
-      raise ArgumentError, "replacement nodes collide with preserved nodes: #{sorted(conflicts).inspect}" unless conflicts.empty?
+    def build_replaced_graph(definition, target, removed, kept_nodes, replacement, replacement_nodes)
+      entries_sorted = sorted(replacement.entry_node_ids)
+      exits_sorted = sorted(replacement.exit_node_ids)
 
+      graph = DAG::Graph.new
       sorted(kept_nodes).each { |node_id| graph.add_node(node_id) }
       sorted(replacement_nodes).each { |node_id| graph.add_node(node_id) }
-      add_preserved_edges(graph, definition, removed)
-      add_replacement_edges(graph, replacement.graph)
-      add_entry_edges(graph, definition, target, replacement)
-      add_exit_edges(graph, definition, removed, replacement)
+      copy_preserved_edges(graph, definition.graph, removed)
+      copy_replacement_edges(graph, replacement.graph)
+      copy_entry_edges(graph, definition, target, entries_sorted)
+      copy_exit_edges(graph, definition, removed, exits_sorted)
       graph.freeze
     end
 
-    def add_preserved_edges(graph, definition, removed)
-      sorted_edges(definition.graph).each do |edge|
+    def copy_preserved_edges(graph, source_graph, removed)
+      sorted_edges(source_graph).each do |edge|
         next if removed.include?(edge.from) || removed.include?(edge.to)
 
         graph.add_edge(edge.from, edge.to, **edge.metadata)
       end
     end
 
-    def add_replacement_edges(graph, replacement_graph)
-      sorted_edges(replacement_graph).each do |edge|
+    def copy_replacement_edges(graph, source_graph)
+      sorted_edges(source_graph).each do |edge|
         graph.add_edge(edge.from, edge.to, **edge.metadata)
       end
     end
 
-    def add_entry_edges(graph, definition, target, replacement)
-      sorted(definition.predecessors(target)).each do |predecessor|
+    def copy_entry_edges(graph, definition, target, entries_sorted)
+      sorted(definition.each_predecessor(target)).each do |predecessor|
         metadata = definition.graph.edge_metadata(predecessor, target)
-        sorted(replacement.entry_node_ids).each do |entry|
-          graph.add_edge(predecessor, entry, **metadata)
-        end
+        entries_sorted.each { |entry| graph.add_edge(predecessor, entry, **metadata) }
       end
     end
 
-    def add_exit_edges(graph, definition, removed, replacement)
+    def copy_exit_edges(graph, definition, removed, exits_sorted)
       external_edges = sorted(removed).flat_map do |node_id|
-        sorted(definition.successors(node_id)).filter_map do |successor|
+        sorted(definition.each_successor(node_id)).filter_map do |successor|
           next if removed.include?(successor)
 
           [successor, definition.graph.edge_metadata(node_id, successor)]
         end
       end
 
-      sorted(replacement.exit_node_ids).each do |exit_node|
-        external_edges.each do |successor, metadata|
-          graph.add_edge(exit_node, successor, **metadata)
-        end
+      exits_sorted.each do |exit_node|
+        external_edges.each { |successor, metadata| graph.add_edge(exit_node, successor, **metadata) }
       end
     end
 
-    def replaced_step_types(definition, removed, replacement)
+    def build_step_types(definition, kept_nodes, replacement_nodes)
       step_types = {}
-      sorted(definition.nodes - removed).each do |node_id|
-        step_types[node_id] = definition.step_type_for(node_id)
-      end
-      sorted(replacement.graph.nodes).each do |node_id|
-        step_types[node_id] = DEFAULT_REPLACEMENT_STEP
-      end
+      sorted(kept_nodes).each { |node_id| step_types[node_id] = definition.step_type_for(node_id) }
+      sorted(replacement_nodes).each { |node_id| step_types[node_id] = DEFAULT_REPLACEMENT_STEP }
       step_types
     end
 
-    def sorted(values) = values.to_a.sort_by(&:to_s)
+    def sorted(values) = values.sort_by(&:to_s)
 
     def sorted_edges(graph)
-      graph.edges.to_a.sort_by { |edge| [edge.from.to_s, edge.to.to_s] }
+      graph.edges.sort_by { |edge| [edge.from.to_s, edge.to.to_s] }
     end
   end
 end

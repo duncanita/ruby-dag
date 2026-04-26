@@ -57,32 +57,4 @@ class R3ReplaceSubtreePreservesParallelTest < Minitest::Test
       .add_edge(:b, :d)
       .add_edge(:c, :d)
   end
-
-  def create_committed_workflow(storage, definition)
-    workflow_id = create_workflow(storage, definition)
-    definition.topological_order.each do |node_id|
-      attempt_id = storage.begin_attempt(
-        workflow_id: workflow_id,
-        revision: definition.revision,
-        node_id: node_id,
-        expected_node_state: :pending
-      )
-      storage.commit_attempt(
-        attempt_id: attempt_id,
-        result: DAG::Success[value: node_id, context_patch: {node_id => true}],
-        node_state: :committed,
-        event: DAG::Event[
-          type: :node_committed,
-          workflow_id: workflow_id,
-          revision: definition.revision,
-          node_id: node_id,
-          attempt_id: attempt_id,
-          at_ms: 0,
-          payload: {}
-        ]
-      )
-    end
-    storage.transition_workflow_state(id: workflow_id, from: :pending, to: :paused)
-    workflow_id
-  end
 end
