@@ -88,7 +88,9 @@ module DAG
           previous_states = state[:node_states][[id, parent_revision]] || {}
           invalidated = invalidated_node_ids.map(&:to_sym)
           new_states = stored_definition.nodes.each_with_object({}) do |node_id, acc|
-            acc[node_id] = if invalidated.include?(node_id) || !previous_states.key?(node_id)
+            acc[node_id] = if invalidated.include?(node_id)
+              :invalidated
+            elsif !previous_states.key?(node_id)
               :pending
             else
               previous_states[node_id]

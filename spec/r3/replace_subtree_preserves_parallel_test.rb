@@ -40,7 +40,7 @@ class R3ReplaceSubtreePreservesParallelTest < Minitest::Test
     assert_equal :committed, states[:a]
     assert_equal :committed, states[:c]
     assert_equal :pending, states[:b_prime]
-    assert_equal :pending, states[:d]
+    assert_equal :invalidated, states[:d]
     refute_includes states.keys, :b
   end
 

@@ -48,7 +48,7 @@ module StorageContract
 
       states = storage.load_node_states(workflow_id: workflow_id, revision: 2)
       assert_equal :committed, states[:a]
-      assert_equal :pending, states[:b]
+      assert_equal :invalidated, states[:b]
       assert_equal :pending, states[:c]
       assert_equal 2, storage.load_current_definition(id: workflow_id).revision
       assert_equal :mutation_applied, result[:event].type

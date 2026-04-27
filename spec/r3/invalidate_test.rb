@@ -24,9 +24,9 @@ class R3InvalidateTest < Minitest::Test
 
     states = storage.load_node_states(workflow_id: workflow_id, revision: 2)
     assert_equal :committed, states[:a]
-    assert_equal :pending, states[:b]
-    assert_equal :pending, states[:c]
-    assert_equal :pending, states[:d]
+    assert_equal :invalidated, states[:b]
+    assert_equal :invalidated, states[:c]
+    assert_equal :invalidated, states[:d]
 
     stored_event = storage.read_events(workflow_id: workflow_id).last
     assert_equal :mutation_applied, stored_event.type

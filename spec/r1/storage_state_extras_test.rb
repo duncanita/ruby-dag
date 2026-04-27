@@ -79,7 +79,7 @@ class StorageStateExtrasTest < Minitest::Test
     )
     assert_equal 2, result[:revision]
     states = @storage.load_node_states(workflow_id: workflow_id, revision: 2)
-    assert_equal :pending, states[:a]
+    assert_equal :invalidated, states[:a]
     assert_equal :pending, states[:c]
   end
 

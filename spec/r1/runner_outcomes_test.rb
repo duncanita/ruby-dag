@@ -130,12 +130,12 @@ class RunnerOutcomesTest < Minitest::Test
     runner = build_runner(storage: storage, event_bus: event_bus)
     workflow_id = create_workflow(storage, simple_definition)
 
-    # Park `a` in :invalidated (R3-territory state). For R1 there is no
-    # natural transition that produces this without a mutation, so we cheat
-    # via the storage CAS for the test only.
-    storage.transition_node_state(workflow_id: workflow_id, revision: 1, node_id: :a, from: :pending, to: :invalidated)
-    # `b`'s predecessor `a` is :invalidated (not :committed) so eligibility
-    # never lights up, but `b` is still :pending and no node is :waiting.
+    # Park `a` in :running. Mimics an orphan attempt left over by an unclean
+    # crash: under #call (no abort_running_attempts) the runner finds no
+    # eligible nodes (`:running` is not eligible, and `b`'s predecessor is
+    # not `:committed`) and no node is `:waiting`, so finalize must surface
+    # `:failed` with the diagnostic rather than silently succeed.
+    storage.transition_node_state(workflow_id: workflow_id, revision: 1, node_id: :a, from: :pending, to: :running)
 
     result = runner.call(workflow_id)
     assert_equal :failed, result.state

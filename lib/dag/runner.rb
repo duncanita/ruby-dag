@@ -69,8 +69,8 @@ module DAG
         eligible = eligible_nodes(run)
         break if eligible.empty?
 
-        eligible.each do |node_id|
-          case execute_node(run, node_id)
+        eligible.each do |node_id, current_state|
+          case execute_node(run, node_id, current_state)
           when :paused
             paused = true
             break
@@ -129,14 +129,21 @@ module DAG
         payload: {initial_context: run.base_context.to_h})
     end
 
+    ELIGIBLE_NODE_STATES = %i[pending invalidated].freeze
+    private_constant :ELIGIBLE_NODE_STATES
+
     def eligible_nodes(run)
       states = @storage.load_node_states(workflow_id: run.workflow_id, revision: run.revision)
-      run.definition.topological_order.select do |node_id|
-        states[node_id] == :pending && run.predecessors_by_node[node_id].all? { |pred| states[pred] == :committed }
+      run.definition.topological_order.filter_map do |node_id|
+        current = states[node_id]
+        next unless ELIGIBLE_NODE_STATES.include?(current)
+        next unless run.predecessors_by_node[node_id].all? { |pred| states[pred] == :committed }
+
+        [node_id, current]
       end
     end
 
-    def execute_node(run, node_id)
+    def execute_node(run, node_id, current_state)
       attempt_number = @storage.count_attempts(
         workflow_id: run.workflow_id,
         revision: run.revision,
@@ -147,7 +154,7 @@ module DAG
         workflow_id: run.workflow_id,
         revision: run.revision,
         node_id: node_id,
-        expected_node_state: :pending,
+        expected_node_state: current_state,
         attempt_number: attempt_number
       )
 
@@ -255,7 +262,7 @@ module DAG
 
       states = @storage.load_node_states(workflow_id: run.workflow_id, revision: run.revision).values
 
-      if states.all? { |s| s == :committed || s == :invalidated }
+      if states.all? { |s| s == :committed }
         transition_and_emit_terminal(run, :completed, :workflow_completed, {})
       elsif states.any? { |s| s == :waiting }
         transition_and_emit_terminal(run, :waiting, :workflow_waiting, {})
