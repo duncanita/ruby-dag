@@ -13,7 +13,12 @@ module DAG
         raise PortNotImplementedError
       end
 
-      def transition_workflow_state(id:, from:, to:)
+      # Atomically transitions the workflow row from `from` to `to`, and if a
+      # non-nil event is supplied, appends it durably in the same step. The
+      # atomicity is required so that durable terminal state and its
+      # corresponding terminal event cannot diverge under crash. Returns
+      # {id:, state:, event: stamped_event_or_nil}.
+      def transition_workflow_state(id:, from:, to:, event: nil)
         raise PortNotImplementedError
       end
 

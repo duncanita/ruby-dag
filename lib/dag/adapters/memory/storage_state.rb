@@ -65,13 +65,14 @@ module DAG
           fetch_workflow!(state, id).dup
         end
 
-        def transition_workflow_state(state, id:, from:, to:)
+        def transition_workflow_state(state, id:, from:, to:, event: nil)
           row = fetch_workflow!(state, id)
           unless row[:state] == from
             raise StaleStateError, "workflow #{id} state is #{row[:state].inspect}, expected #{from.inspect}"
           end
           row[:state] = to
-          {id: id, state: to}
+          stamped = event ? append_event_internal(state, id, event) : nil
+          {id: id, state: to, event: stamped}
         end
 
         def append_revision(state, id:, parent_revision:, definition:, invalidated_node_ids:, event:)
