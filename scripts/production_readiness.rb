@@ -5,11 +5,47 @@ require "json"
 require "optparse"
 require "securerandom"
 require "time"
+require "yaml"
 
 require_relative "../lib/dag"
 
 module ProductionReadiness
   class Failure < StandardError
+  end
+
+  # Test-only Clock: immutable, deterministic, advance via #at(ms) which
+  # returns a new instance. Used by the determinism scenarios.
+  class FixedClock
+    include DAG::Ports::Clock
+
+    def initialize(ms: 0)
+      @ms = ms
+      freeze
+    end
+
+    def now_ms = @ms
+
+    def monotonic_ms = @ms
+
+    def now = Time.at(@ms / 1000.0).utc
+
+    def at(new_ms) = FixedClock.new(ms: new_ms)
+  end
+
+  # Test-only IdGenerator: deterministic counter with a configurable
+  # prefix. Stateful, so not frozen — restricted to scripts/.
+  class DeterministicIdGenerator
+    include DAG::Ports::IdGenerator
+
+    def initialize(prefix:)
+      @prefix = prefix
+      @n = 0
+    end
+
+    def call
+      @n += 1
+      "#{@prefix}-#{@n.to_s.rjust(8, "0")}"
+    end
   end
 
   class ProbeStep < DAG::Step::Base
@@ -109,9 +145,40 @@ module ProductionReadiness
       @serializer = DAG::Adapters::Stdlib::Serializer.new
       @clock = DAG::Adapters::Stdlib::Clock.new
       @id_generator = DAG::Adapters::Stdlib::IdGenerator.new
+      @thresholds = load_thresholds(options[:thresholds_path])
+    end
+
+    def load_thresholds(path)
+      return {profile: {}, breach_factor: BUDGET_BREACH_FACTOR} unless path
+
+      unless File.exist?(path)
+        warn("[#{Time.now.utc.iso8601}] WARN thresholds file not found: #{path} — perf budgets will be skipped")
+        return {profile: {}, breach_factor: BUDGET_BREACH_FACTOR}
+      end
+
+      raw = YAML.safe_load_file(path, permitted_classes: [Symbol])
+      profile_key = @options[:fast] ? "fast" : "full"
+      profile = raw.dig("profiles", profile_key) || {}
+      {
+        profile: profile.fetch("scenarios", {}),
+        breach_factor: profile.fetch("breach_factor", BUDGET_BREACH_FACTOR)
+      }
+    rescue => e
+      warn("[#{Time.now.utc.iso8601}] WARN failed to load thresholds (#{path}): #{e.class}: #{e.message} — perf budgets will be skipped")
+      {profile: {}, breach_factor: BUDGET_BREACH_FACTOR}
+    end
+
+    def threshold_wall_ms_for(scenario_key)
+      entry = @thresholds[:profile][scenario_key.to_s]
+      entry&.fetch("wall_ms", nil)
+    end
+
+    def threshold_breach_factor
+      @thresholds[:breach_factor]
     end
 
     DEFAULT_SEED = 1
+    DEFAULT_THRESHOLDS_PATH = File.expand_path("production_readiness.thresholds.yml", __dir__)
 
     def self.parse(argv)
       options = {
@@ -119,11 +186,12 @@ module ProductionReadiness
         duration: nil,
         seed: DEFAULT_SEED,
         progress_interval: 10,
-        report_file: nil
+        report_file: nil,
+        thresholds_path: DEFAULT_THRESHOLDS_PATH
       }
 
       parser = OptionParser.new do |opts|
-        opts.banner = "Usage: scripts/production_readiness.rb [--fast] [--duration SECONDS] [--seed INTEGER|random] [--report-file PATH]"
+        opts.banner = "Usage: scripts/production_readiness.rb [--fast] [--duration SECONDS] [--seed INTEGER|random] [--report-file PATH] [--thresholds PATH]"
         opts.on("--fast", "Run the short profile. Defaults to #{DEFAULT_FAST_SECONDS}s.") do
           options[:fast] = true
         end
@@ -138,6 +206,9 @@ module ProductionReadiness
         end
         opts.on("--report-file PATH", "Write a machine-readable JSON report to PATH on exit.") do |path|
           options[:report_file] = path
+        end
+        opts.on("--thresholds PATH", "Override perf budgets file (default #{DEFAULT_THRESHOLDS_PATH}).") do |path|
+          options[:thresholds_path] = path
         end
         opts.on("-h", "--help", "Show help.") do
           puts opts
@@ -223,7 +294,9 @@ module ProductionReadiness
         -> { large_graph_scenario(shape: :chain_1000) },
         -> { large_graph_scenario(shape: :fanout_500) },
         -> { large_graph_scenario(shape: :diamond_50x50) },
-        -> { long_lived_storage_scenario }
+        -> { long_lived_storage_scenario },
+        -> { crash_matrix_scenario },
+        -> { determinism_scenario }
       ].each do |scenario|
         break if expired?
         scenario.call
@@ -627,9 +700,9 @@ module ProductionReadiness
     # of the budget fails the run — catches O(N^2) regressions that the
     # rest of the harness would only show as slowness.
     LARGE_GRAPH_SHAPES = {
-      chain_1000: {nodes: 1_000, soft_ms: 5_500, build: :chain},
-      fanout_500: {nodes: 500, soft_ms: 1_500, build: :fanout},
-      diamond_50x50: {nodes: 50, soft_ms: 6_000, build: :diamond}
+      chain_1000: {nodes: 1_000, build: :chain},
+      fanout_500: {nodes: 500, build: :fanout},
+      diamond_50x50: {nodes: 50, build: :diamond}
     }.freeze
     BUDGET_BREACH_FACTOR = 5.0
 
@@ -649,13 +722,21 @@ module ProductionReadiness
       assert_equal(:completed, result.state, "#{shape} did not complete")
       assert_committed(storage, workflow_id, definition)
 
-      hard_budget = spec[:soft_ms] * BUDGET_BREACH_FACTOR
-      if elapsed_ms > hard_budget
-        raise Failure, "#{shape} elapsed #{elapsed_ms}ms exceeds #{hard_budget.to_i}ms (#{BUDGET_BREACH_FACTOR}x soft budget #{spec[:soft_ms]}ms)"
-      end
+      enforce_perf_budget("large_graph_#{shape}", elapsed_ms)
 
       @metrics[:large_graph_runs] += 1
       @metrics[:large_graph_nodes] += definition.nodes.size
+    end
+
+    def enforce_perf_budget(scenario_key, elapsed_ms)
+      soft_ms = threshold_wall_ms_for(scenario_key)
+      return unless soft_ms
+
+      factor = threshold_breach_factor
+      hard_budget = soft_ms * factor
+      return if elapsed_ms <= hard_budget
+
+      raise Failure, "#{scenario_key} elapsed #{elapsed_ms}ms exceeds #{hard_budget.to_i}ms (#{factor}x soft budget #{soft_ms}ms)"
     end
 
     def build_large_graph(kind, nodes)
@@ -731,6 +812,213 @@ module ProductionReadiness
 
     def monotonic_ms
       (Process.clock_gettime(Process::CLOCK_MONOTONIC) * 1000).to_i
+    end
+
+    # Exhaustive crash-injection matrix: every supported (method, phase)
+    # tuple of CrashableStorage, on every meaningful node position of
+    # three representative graph shapes. Each cell runs the workflow
+    # until the crash, snapshots to a healthy storage, drives the
+    # workflow to completion via call/resume, and asserts (a) the
+    # workflow ends :completed, (b) workflow_started is not duplicated.
+    CRASH_MATRIX = [
+      # chain_3 (a -> b -> c) — every method × phase × representative node
+      [:chain3, :begin_attempt, :before, {node_id: :a}],
+      [:chain3, :begin_attempt, :after, {node_id: :a}],
+      [:chain3, :begin_attempt, :before, {node_id: :b}],
+      [:chain3, :begin_attempt, :after, {node_id: :b}],
+      [:chain3, :begin_attempt, :before, {node_id: :c}],
+      [:chain3, :begin_attempt, :after, {node_id: :c}],
+      [:chain3, :commit_attempt, :before, {node_id: :a}],
+      [:chain3, :commit_attempt, :after, {node_id: :a}],
+      [:chain3, :commit_attempt, :before, {node_id: :b}],
+      [:chain3, :commit_attempt, :after, {node_id: :b}],
+      [:chain3, :commit_attempt, :before, {node_id: :c}],
+      [:chain3, :commit_attempt, :after, {node_id: :c}],
+      # CrashableStorage#append_event only intercepts the public Storage#append_event
+      # path; per-attempt :node_* events go via append_event_internal during
+      # commit_attempt (already covered by the commit_attempt rows above).
+      # Workflow-lifecycle events (:workflow_started, :workflow_completed,
+      # :workflow_failed, :workflow_paused, :workflow_waiting) are the ones
+      # that actually flow through the public method and are crash-relevant.
+      [:chain3, :append_event, :before, {event_type: :workflow_started}],
+      [:chain3, :append_event, :after, {event_type: :workflow_started}],
+      [:chain3, :append_event, :before, {event_type: :workflow_completed}],
+      [:chain3, :append_event, :after, {event_type: :workflow_completed}],
+      [:chain3, :transition_workflow_state, :before, {from: :pending, to: :running}],
+      [:chain3, :transition_workflow_state, :after, {from: :pending, to: :running}],
+      # single-node — only_node coverage
+      [:single, :begin_attempt, :before, {node_id: :a}],
+      [:single, :begin_attempt, :after, {node_id: :a}],
+      [:single, :commit_attempt, :before, {node_id: :a}],
+      [:single, :commit_attempt, :after, {node_id: :a}],
+      # diamond (a -> {b,c} -> d) — join-leaf coverage
+      [:diamond, :begin_attempt, :before, {node_id: :d}],
+      [:diamond, :begin_attempt, :after, {node_id: :d}]
+    ].freeze
+
+    def crash_matrix_scenario
+      CRASH_MATRIX.each { |cell| crash_matrix_cell(*cell) }
+    end
+
+    def crash_matrix_cell(shape, method, phase, criteria)
+      label = "#{shape}/#{method}/#{phase}/#{criteria.inspect}"
+      crash_on = {:method => method, phase => true}.merge(criteria)
+      storage = DAG::Adapters::Memory::CrashableStorage.new(crash_on: crash_on)
+      definition = build_crash_shape(shape)
+      workflow_id = create_workflow(storage, definition)
+
+      crashed = false
+      begin
+        runner(storage).call(workflow_id)
+      rescue DAG::Adapters::Memory::SimulatedCrash
+        crashed = true
+      end
+      raise Failure, "crash[#{label}] expected SimulatedCrash but none fired" unless crashed
+
+      healthy = storage.snapshot_to_healthy
+      drive_to_terminal(healthy, workflow_id, label)
+
+      final_state = healthy.load_workflow(id: workflow_id)[:state]
+      unless final_state == :completed
+        raise Failure, "crash[#{label}] workflow ended in #{final_state.inspect}, expected :completed"
+      end
+      assert_committed(healthy, workflow_id, definition)
+      assert_no_duplicate_workflow_started(healthy, workflow_id, label)
+
+      @metrics[:crash_matrix_cells] += 1
+    end
+
+    def drive_to_terminal(storage, workflow_id, label, max_steps: 4)
+      max_steps.times do
+        state = storage.load_workflow(id: workflow_id)[:state]
+        case state
+        when :pending then runner(storage).call(workflow_id)
+        when :running, :waiting, :paused then runner(storage).resume(workflow_id)
+        when :completed then return
+        else raise Failure, "crash[#{label}] cannot drive workflow from #{state.inspect}"
+        end
+      end
+      raise Failure, "crash[#{label}] workflow did not converge in #{max_steps} steps"
+    end
+
+    def assert_no_duplicate_workflow_started(storage, workflow_id, label)
+      events = storage.read_events(workflow_id: workflow_id)
+      starts = events.count { |e| e.type == :workflow_started }
+      return if starts == 1
+
+      raise Failure, "crash[#{label}] :workflow_started emitted #{starts} times, expected 1"
+    end
+
+    # Determinism harness: two runs with identical inputs (same seed,
+    # same FixedClock, same workflow_id, same definition) must produce
+    # byte-identical normalized event logs. Catches non-determinism
+    # introduced by Hash ordering, time leaks, accidental Random calls,
+    # and similar.
+    def determinism_scenario
+      determinism_plain_run
+      determinism_flaky_run
+      determinism_waiting_resume_run
+      @metrics[:determinism_runs] += 1
+    end
+
+    def determinism_plain_run
+      definition = chain_definition(%i[a b c d e], type: :probe)
+      run_a = run_for_determinism("plain-A", definition) { |runner, wid| runner.call(wid) }
+      run_b = run_for_determinism("plain-A", definition) { |runner, wid| runner.call(wid) }
+      assert_event_logs_equal(run_a, run_b, "determinism plain")
+    end
+
+    def determinism_flaky_run
+      definition = DAG::Workflow::Definition.new
+        .add_node(:a, type: :flaky, config: {fail_until: 2})
+      runtime = runtime_profile(max_attempts_per_node: 3, max_workflow_retries: 1)
+      run_a = run_for_determinism("flaky-A", definition, runtime_profile: runtime) { |runner, wid| runner.call(wid) }
+      run_b = run_for_determinism("flaky-A", definition, runtime_profile: runtime) { |runner, wid| runner.call(wid) }
+      assert_event_logs_equal(run_a, run_b, "determinism flaky")
+    end
+
+    def determinism_waiting_resume_run
+      definition = DAG::Workflow::Definition.new.add_node(:a, type: :waiting)
+      run_a = run_for_determinism("waiting-A", definition) do |runner_first, wid, build_runner|
+        first_result = runner_first.call(wid)
+        raise Failure, "determinism waiting setup: workflow did not enter :waiting" unless first_result.state == :waiting
+        runner_second = build_runner.call(1500)
+        runner_second.resume(wid)
+      end
+      run_b = run_for_determinism("waiting-A", definition) do |runner_first, wid, build_runner|
+        runner_first.call(wid)
+        runner_second = build_runner.call(1500)
+        runner_second.resume(wid)
+      end
+      assert_event_logs_equal(run_a, run_b, "determinism waiting+resume")
+    end
+
+    def run_for_determinism(workflow_id, definition, runtime_profile: nil)
+      storage = DAG::Adapters::Memory::Storage.new
+      event_bus = DAG::Adapters::Memory::EventBus.new(buffer_size: 256)
+      clock = FixedClock.new(ms: 0)
+      id_gen = DeterministicIdGenerator.new(prefix: workflow_id)
+
+      build_runner = ->(at_ms) {
+        DAG::Runner.new(
+          storage: storage,
+          event_bus: event_bus,
+          registry: registry,
+          clock: clock.at(at_ms),
+          id_generator: id_gen,
+          fingerprint: @fingerprint,
+          serializer: @serializer
+        )
+      }
+
+      storage.create_workflow(
+        id: workflow_id,
+        initial_definition: definition,
+        initial_context: {},
+        runtime_profile: runtime_profile || self.runtime_profile
+      )
+      yield(build_runner.call(0), workflow_id, build_runner)
+
+      storage.read_events(workflow_id: workflow_id).map { |e| event_to_h_for_compare(e) }
+    end
+
+    def event_to_h_for_compare(event)
+      {
+        seq: event.seq,
+        type: event.type,
+        revision: event.revision,
+        node_id: event.node_id,
+        at_ms: event.at_ms,
+        payload: event.payload
+      }
+    end
+
+    def assert_event_logs_equal(run_a, run_b, label)
+      return if run_a == run_b
+
+      diff = []
+      [run_a.size, run_b.size].max.times do |i|
+        a = run_a[i]
+        b = run_b[i]
+        next if a == b
+        diff << "[#{i}] A=#{a.inspect} B=#{b.inspect}"
+        break if diff.size >= 3
+      end
+      raise Failure, "#{label}: event logs diverged (#{run_a.size} vs #{run_b.size}) — #{diff.join(" | ")}"
+    end
+
+    def build_crash_shape(shape)
+      case shape
+      when :chain3 then chain_definition(%i[a b c], type: :probe)
+      when :single then DAG::Workflow::Definition.new.add_node(:a, type: :probe)
+      when :diamond
+        DAG::Workflow::Definition.new
+          .add_node(:a, type: :probe).add_node(:b, type: :probe)
+          .add_node(:c, type: :probe).add_node(:d, type: :probe)
+          .add_edge(:a, :b).add_edge(:a, :c)
+          .add_edge(:b, :d).add_edge(:c, :d)
+      else raise ArgumentError, "unknown crash shape: #{shape}"
+      end
     end
 
     def random_definition(nodes:, edge_probability:)
@@ -962,7 +1250,9 @@ module ProductionReadiness
       subscriber_failures: 0.1,
       bus_overflows: 0.1,
       large_graph_runs: 0.0, # always >=1 from fixed_scenarios (3 shapes); duration-independent
-      long_lived_runs: 0.0   # always >=1 from fixed_scenarios; duration-independent
+      long_lived_runs: 0.0,  # always >=1 from fixed_scenarios; duration-independent
+      crash_matrix_cells: 0.0, # always >= |CRASH_MATRIX| from fixed_scenarios; duration-independent
+      determinism_runs: 0.0  # always >=1 from fixed_scenarios; duration-independent
     }.freeze
 
     def assert_minimum_metrics

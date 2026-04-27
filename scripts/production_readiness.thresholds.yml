@@ -1,0 +1,31 @@
+---
+# Performance budgets consumed by scripts/production_readiness.rb. The
+# script measures wallclock per scenario and FAILs if a scenario exceeds
+# `wall_ms` × `breach_factor`. A missing scenario entry is silently
+# skipped (so adding a scenario does not require updating this file
+# in the same PR). Override with --thresholds PATH.
+#
+# Calibrated against Mac dev wallclock; breach_factor leaves headroom
+# for slower CI runners. Tighten the `full` profile when CI hardware
+# stabilizes.
+
+profiles:
+  fast:
+    breach_factor: 5.0
+    scenarios:
+      large_graph_chain_1000:
+        wall_ms: 5500
+      large_graph_fanout_500:
+        wall_ms: 1500
+      large_graph_diamond_50x50:
+        wall_ms: 6000
+
+  full:
+    breach_factor: 3.0
+    scenarios:
+      large_graph_chain_1000:
+        wall_ms: 5500
+      large_graph_fanout_500:
+        wall_ms: 1500
+      large_graph_diamond_50x50:
+        wall_ms: 6000
