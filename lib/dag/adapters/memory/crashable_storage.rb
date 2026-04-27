@@ -16,8 +16,13 @@ module DAG
           @crashed = false
         end
 
-        def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:)
-          context = {workflow_id: workflow_id, revision: revision, node_id: node_id}
+        def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:)
+          context = {
+            workflow_id: workflow_id,
+            revision: revision,
+            node_id: node_id,
+            attempt_number: attempt_number
+          }
           crash_if!(:before, :begin_attempt, context)
           attempt_id = super
           crash_if!(:after, :begin_attempt, context.merge(attempt_id: attempt_id))
@@ -59,7 +64,8 @@ module DAG
             attempt_id: attempt_id,
             workflow_id: attempt[:workflow_id],
             revision: attempt[:revision],
-            node_id: attempt[:node_id]
+            node_id: attempt[:node_id],
+            attempt_number: attempt[:attempt_number]
           }
         end
 
@@ -78,7 +84,7 @@ module DAG
         end
 
         def trigger_context_matches?(context)
-          %i[workflow_id revision node_id attempt_id node_state event_type].all? do |key|
+          %i[workflow_id revision node_id attempt_id attempt_number node_state event_type].all? do |key|
             !@crash_on.key?(key) || @crash_on[key] == context[key]
           end
         end

@@ -2,3 +2,4 @@
 /vendor/bundle
 /coverage/
 /.ruby-lsp/
+/.rubocop_cache/

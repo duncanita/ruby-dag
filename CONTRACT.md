@@ -116,6 +116,23 @@ together. If a process crashes before that boundary, the step may be invoked
 again on resume. If it crashes after the boundary, resume starts from the next
 eligible node.
 
+The Runner owns attempt numbering. It computes:
+
+```ruby
+storage.count_attempts(workflow_id:, revision:, node_id:) + 1
+```
+
+and passes that value to:
+
+```ruby
+storage.begin_attempt(workflow_id:, revision:, node_id:,
+                      expected_node_state:, attempt_number:)
+```
+
+Storage must persist the supplied `attempt_number`; it must not recalculate it.
+`commit_attempt` is one-shot: adapters must reject a second commit for the same
+attempt after it has left `:running`.
+
 ## Proposed Mutations
 
 Consumers may propose mutations with:

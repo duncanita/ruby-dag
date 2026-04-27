@@ -11,7 +11,8 @@ module StorageContract
         workflow_id: workflow_id,
         revision: 1,
         node_id: :a,
-        expected_node_state: :pending
+        expected_node_state: :pending,
+        attempt_number: 1
       )
 
       stamped = storage.commit_attempt(
@@ -35,7 +36,8 @@ module StorageContract
         workflow_id: workflow_id,
         revision: 1,
         node_id: :a,
-        expected_node_state: :pending
+        expected_node_state: :pending,
+        attempt_number: 1
       )
 
       assert_equal [attempt_id], storage.abort_running_attempts(workflow_id: workflow_id)
@@ -44,6 +46,48 @@ module StorageContract
       assert_equal :aborted, attempt[:state]
       assert_equal :pending, storage.load_node_states(workflow_id: workflow_id, revision: 1)[:a]
       assert_equal 0, storage.count_attempts(workflow_id: workflow_id, revision: 1, node_id: :a)
+    end
+
+    def test_contract_begin_attempt_persists_supplied_attempt_number
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      storage.begin_attempt(
+        workflow_id: workflow_id,
+        revision: 1,
+        node_id: :a,
+        expected_node_state: :pending,
+        attempt_number: 7
+      )
+
+      attempt = storage.list_attempts(workflow_id: workflow_id, revision: 1, node_id: :a).first
+      assert_equal 7, attempt[:attempt_number]
+    end
+
+    def test_contract_commit_attempt_is_one_shot
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      attempt_id = storage.begin_attempt(
+        workflow_id: workflow_id,
+        revision: 1,
+        node_id: :a,
+        expected_node_state: :pending,
+        attempt_number: 1
+      )
+      storage.commit_attempt(
+        attempt_id: attempt_id,
+        result: DAG::Success[value: :a, context_patch: {}],
+        node_state: :committed,
+        event: contract_event(workflow_id: workflow_id, node_id: :a, attempt_id: attempt_id)
+      )
+
+      assert_raises(DAG::StaleStateError) do
+        storage.commit_attempt(
+          attempt_id: attempt_id,
+          result: DAG::Failure[error: {code: :late}],
+          node_state: :failed,
+          event: contract_event(type: :node_failed, workflow_id: workflow_id, node_id: :a, attempt_id: attempt_id)
+        )
+      end
     end
   end
 end

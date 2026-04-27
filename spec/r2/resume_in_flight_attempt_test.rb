@@ -14,7 +14,8 @@ class ResumeInFlightAttemptTest < Minitest::Test
       workflow_id: workflow_id,
       revision: 1,
       node_id: :a,
-      expected_node_state: :pending
+      expected_node_state: :pending,
+      attempt_number: 1
     )
 
     result = build_runner(storage: storage, registry: registry).resume(workflow_id)

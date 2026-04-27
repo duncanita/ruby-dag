@@ -125,7 +125,11 @@ module DAG
           {workflow_id: workflow_id, revision: revision, node_id: node_id, state: to}
         end
 
-        def begin_attempt(state, workflow_id:, revision:, node_id:, expected_node_state:)
+        def begin_attempt(state, workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:)
+          unless attempt_number.is_a?(Integer) && attempt_number.positive?
+            raise ArgumentError, "attempt_number must be a positive Integer"
+          end
+
           states_for_rev = fetch_node_states!(state, workflow_id, revision)
           current = states_for_rev[node_id]
           unless current == expected_node_state
@@ -134,7 +138,6 @@ module DAG
 
           state[:attempt_seq][workflow_id] += 1
           attempt_id = "#{workflow_id}/#{state[:attempt_seq][workflow_id]}"
-          attempt_number = count_attempts_internal(state, workflow_id, revision, node_id, exclude: [:aborted]) + 1
 
           states_for_rev[node_id] = :running
           state[:attempts][attempt_id] = {
@@ -154,10 +157,20 @@ module DAG
           attempt = state[:attempts].fetch(attempt_id) do
             raise ArgumentError, "Unknown attempt: #{attempt_id}"
           end
-          attempt[:result] = result
-          attempt[:state] = attempt_terminal_state_for(result)
+          unless attempt[:state] == :running
+            raise StaleStateError, "attempt #{attempt_id} state is #{attempt[:state].inspect}, expected :running"
+          end
+          terminal_state = attempt_terminal_state_for(result)
+          validate_node_state_for_result!(result, node_state)
 
           rev_states = state[:node_states][[attempt[:workflow_id], attempt[:revision]]]
+          current_node_state = rev_states[attempt[:node_id]]
+          unless current_node_state == :running
+            raise StaleStateError, "node #{attempt[:node_id]} state is #{current_node_state.inspect}, expected :running"
+          end
+
+          attempt[:result] = result
+          attempt[:state] = terminal_state
           rev_states[attempt[:node_id]] = node_state
 
           append_event_internal(state, attempt[:workflow_id], event)
@@ -249,6 +262,17 @@ module DAG
           else
             raise ArgumentError, "unexpected attempt result type: #{result.class}"
           end
+        end
+
+        def validate_node_state_for_result!(result, node_state)
+          allowed = case result
+          when DAG::Success then [:committed]
+          when DAG::Waiting then [:waiting]
+          when DAG::Failure then %i[failed pending]
+          end
+          return if allowed.include?(node_state)
+
+          raise ArgumentError, "node_state #{node_state.inspect} is invalid for #{result.class}"
         end
       end
     end

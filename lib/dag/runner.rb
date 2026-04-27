@@ -4,7 +4,7 @@ module DAG
   REQUIRED_RUNNER_DEPENDENCIES = %i[storage event_bus registry clock id_generator fingerprint serializer].freeze
 
   class Runner
-    CALL_FROM_STATES = %i[pending waiting paused].freeze
+    CALL_FROM_STATES = %i[pending].freeze
     RESUME_FROM_STATES = %i[running waiting paused].freeze
 
     RunContext = Data.define(
@@ -147,7 +147,8 @@ module DAG
         workflow_id: run.workflow_id,
         revision: run.revision,
         node_id: node_id,
-        expected_node_state: :pending
+        expected_node_state: :pending,
+        attempt_number: attempt_number
       )
 
       append_event(run,

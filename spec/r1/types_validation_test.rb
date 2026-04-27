@@ -70,9 +70,57 @@ class TypesValidationTest < Minitest::Test
     end
   end
 
+  def test_event_new_rejects_unknown_type
+    assert_raises(ArgumentError) do
+      DAG::Event.new(type: :nope, workflow_id: "x", revision: 1, at_ms: 0)
+    end
+  end
+
+  def test_data_factories_reject_positional_arguments
+    graph = DAG::Graph.new.add_node(:a).freeze
+    cases = [
+      -> { DAG::Success[1] },
+      -> { DAG::Failure[{code: :x}] },
+      -> { DAG::Waiting[:external] },
+      -> { DAG::Event[:workflow_started, "wf", 1, 0] },
+      -> { DAG::RuntimeProfile[:ephemeral, 1, 0, :null] },
+      -> { DAG::StepInput[DAG::ExecutionContext.new, :a] },
+      -> { DAG::ReplacementGraph[graph, [:a], [:a]] },
+      -> { DAG::RunResult[:completed] }
+    ]
+
+    cases.each do |factory_call|
+      assert_raises(ArgumentError) { factory_call.call }
+    end
+  end
+
+  def test_data_with_revalidates_through_initialize
+    assert_raises(ArgumentError) do
+      DAG::Success[value: 1].with(value: Time.now)
+    end
+  end
+
   def test_success_factory_rejects_non_mutation_in_proposed_mutations
     assert_raises(ArgumentError) do
       DAG::Success[value: 1, proposed_mutations: ["not a mutation"]]
+    end
+  end
+
+  def test_success_new_rejects_non_json_safe_value
+    assert_raises(ArgumentError) do
+      DAG::Success.new(value: Time.now)
+    end
+  end
+
+  def test_success_factory_defaults_value_to_nil
+    result = DAG::Success[]
+    assert_nil result.value
+    assert_equal({}, result.context_patch)
+  end
+
+  def test_failure_new_rejects_non_json_safe_error
+    assert_raises(ArgumentError) do
+      DAG::Failure.new(error: {time: Time.now})
     end
   end
 
