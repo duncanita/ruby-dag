@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require "json"
 require "optparse"
 require "securerandom"
 require "time"
@@ -110,27 +111,33 @@ module ProductionReadiness
       @id_generator = DAG::Adapters::Stdlib::IdGenerator.new
     end
 
+    DEFAULT_SEED = 1
+
     def self.parse(argv)
       options = {
         fast: false,
         duration: nil,
-        seed: Random.new_seed,
-        progress_interval: 10
+        seed: DEFAULT_SEED,
+        progress_interval: 10,
+        report_file: nil
       }
 
       parser = OptionParser.new do |opts|
-        opts.banner = "Usage: scripts/production_readiness.rb [--fast] [--duration SECONDS] [--seed INTEGER]"
+        opts.banner = "Usage: scripts/production_readiness.rb [--fast] [--duration SECONDS] [--seed INTEGER|random] [--report-file PATH]"
         opts.on("--fast", "Run the short profile. Defaults to #{DEFAULT_FAST_SECONDS}s.") do
           options[:fast] = true
         end
         opts.on("--duration SECONDS", Integer, "Override duration in seconds.") do |seconds|
           options[:duration] = seconds
         end
-        opts.on("--seed INTEGER", Integer, "Deterministic random seed.") do |seed|
-          options[:seed] = seed
+        opts.on("--seed VALUE", "Deterministic random seed (Integer, default #{DEFAULT_SEED}). Pass `random` to opt back in to a fresh seed.") do |value|
+          options[:seed] = (value.casecmp("random") == 0) ? Random.new_seed : Integer(value)
         end
         opts.on("--progress-interval SECONDS", Integer, "Progress print interval.") do |seconds|
           options[:progress_interval] = seconds
+        end
+        opts.on("--report-file PATH", "Write a machine-readable JSON report to PATH on exit.") do |path|
+          options[:report_file] = path
         end
         opts.on("-h", "--help", "Show help.") do
           puts opts
@@ -147,44 +154,70 @@ module ProductionReadiness
     end
 
     def run
+      @started_at = Time.now.utc
       log("ruby-dag production readiness: duration=#{@options[:duration]}s seed=#{@options[:seed]} fast=#{@options[:fast]}")
 
       fixed_scenarios
-      until expired?
-        random_completed_workflow_scenario
-        graph_fuzz_scenario
-        flaky_retry_scenario
-        terminal_failure_scenario
-        waiting_idempotence_scenario
-        bad_step_boundary_scenario
-        crash_resume_scenario(:before_commit)
-        crash_resume_scenario(:after_commit)
-        mutation_pause_resume_scenario
-        replace_subtree_resume_scenario
-        storage_contract_edge_scenario
-        progress_if_due
-      end
+      run_random_loop
 
+      finished_at = Time.now.utc
+      assert_minimum_metrics
+      write_report(status: "pass", started_at: @started_at, finished_at: finished_at)
       log("PASS #{summary}")
       true
+    rescue => e
+      finished_at = Time.now.utc
+      write_report(status: "fail", started_at: @started_at || finished_at, finished_at: finished_at, error: {class: e.class.name, message: e.message})
+      raise
     end
 
     private
 
+    def random_scenarios
+      @random_scenarios ||= [
+        -> { random_completed_workflow_scenario },
+        -> { graph_fuzz_scenario },
+        -> { flaky_retry_scenario },
+        -> { terminal_failure_scenario },
+        -> { waiting_idempotence_scenario },
+        -> { bad_step_boundary_scenario },
+        -> { crash_resume_scenario(:before_commit) },
+        -> { crash_resume_scenario(:after_commit) },
+        -> { mutation_pause_resume_scenario },
+        -> { replace_subtree_resume_scenario },
+        -> { storage_contract_edge_scenario }
+      ].freeze
+    end
+
+    def run_random_loop
+      return if expired?
+
+      random_scenarios.cycle do |scenario|
+        break if expired?
+        scenario.call
+        progress_if_due
+      end
+    end
+
     def fixed_scenarios
-      random_completed_workflow_scenario(nodes: 1, edge_probability: 0.0)
-      random_completed_workflow_scenario(nodes: 2, edge_probability: 1.0)
-      random_completed_workflow_scenario(nodes: 48, edge_probability: 0.08)
-      graph_fuzz_scenario(nodes: 80, edge_probability: 0.05)
-      flaky_retry_scenario(fail_until: 2, max_attempts: 3)
-      terminal_failure_scenario(max_attempts: 2)
-      waiting_idempotence_scenario
-      bad_step_boundary_scenario
-      crash_resume_scenario(:before_commit)
-      crash_resume_scenario(:after_commit)
-      mutation_pause_resume_scenario
-      replace_subtree_resume_scenario
-      storage_contract_edge_scenario
+      [
+        -> { random_completed_workflow_scenario(nodes: 1, edge_probability: 0.0) },
+        -> { random_completed_workflow_scenario(nodes: 2, edge_probability: 1.0) },
+        -> { random_completed_workflow_scenario(nodes: 48, edge_probability: 0.08) },
+        -> { graph_fuzz_scenario(nodes: 80, edge_probability: 0.05) },
+        -> { flaky_retry_scenario(fail_until: 2, max_attempts: 3) },
+        -> { terminal_failure_scenario(max_attempts: 2) },
+        -> { waiting_idempotence_scenario },
+        -> { bad_step_boundary_scenario },
+        -> { crash_resume_scenario(:before_commit) },
+        -> { crash_resume_scenario(:after_commit) },
+        -> { mutation_pause_resume_scenario },
+        -> { replace_subtree_resume_scenario },
+        -> { storage_contract_edge_scenario }
+      ].each do |scenario|
+        break if expired?
+        scenario.call
+      end
     end
 
     def random_completed_workflow_scenario(nodes: nil, edge_probability: nil)
@@ -658,17 +691,67 @@ module ProductionReadiness
       raise Failure, "expected #{error_class}, nothing was raised"
     rescue error_class
       true
+    rescue Failure
+      raise
     rescue => e
-      raise Failure, "expected #{error_class}, got #{e.class}: #{e.message}"
+      raise Failure.new("expected #{error_class}, got #{e.class}: #{e.message}").tap { |f| f.set_backtrace(e.backtrace) }
+    end
+
+    METRIC_FLOORS = {
+      completed_workflows: 1.0,
+      retry_recoveries: 0.2,
+      terminal_failures: 0.2,
+      waiting_workflows: 0.2,
+      boundary_failures: 0.2,
+      crash_resumes: 0.2,
+      mutations: 0.2,
+      storage_edges: 0.2
+    }.freeze
+
+    def assert_minimum_metrics
+      duration = @options.fetch(:duration)
+      shortfalls = METRIC_FLOORS.filter_map do |metric, per_second|
+        floor = [(per_second * duration).floor, 1].max
+        actual = @metrics[metric]
+        next if actual >= floor
+
+        "#{metric}=#{actual} (floor #{floor})"
+      end
+      return if shortfalls.empty?
+
+      raise Failure, "metric coverage below floor: #{shortfalls.join(", ")}"
+    end
+
+    def write_report(status:, started_at:, finished_at:, error: nil)
+      path = @options[:report_file]
+      return unless path
+
+      report = {
+        status: status,
+        seed: @options[:seed],
+        duration_s: @options.fetch(:duration),
+        fast: @options[:fast],
+        started_at: started_at.iso8601,
+        finished_at: finished_at.iso8601,
+        elapsed_s: (finished_at - started_at).round(3),
+        metrics: @metrics.sort.to_h
+      }
+      report[:error] = error if error
+
+      File.write(path, JSON.pretty_generate(report) + "\n")
+    rescue => e
+      warn("[#{Time.now.utc.iso8601}] WARN failed to write --report-file #{path}: #{e.class}: #{e.message}")
     end
   end
 end
 
-begin
-  options = ProductionReadiness::Harness.parse(ARGV)
-  ProductionReadiness::Harness.new(options).run
-rescue => e
-  warn("[#{Time.now.utc.iso8601}] FAIL #{e.class}: #{e.message}")
-  warn(e.backtrace.join("\n")) if e.backtrace
-  exit 1
+if __FILE__ == $0
+  begin
+    options = ProductionReadiness::Harness.parse(ARGV)
+    ProductionReadiness::Harness.new(options).run
+  rescue => e
+    warn("[#{Time.now.utc.iso8601}] FAIL #{e.class}: #{e.message}")
+    warn(e.backtrace.join("\n")) if e.backtrace
+    exit 1
+  end
 end
