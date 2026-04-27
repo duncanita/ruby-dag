@@ -219,7 +219,11 @@ module ProductionReadiness
         -> { storage_contract_edge_scenario },
         -> { retry_workflow_scenario },
         -> { subscriber_failure_scenario },
-        -> { bus_overflow_scenario }
+        -> { bus_overflow_scenario },
+        -> { large_graph_scenario(shape: :chain_1000) },
+        -> { large_graph_scenario(shape: :fanout_500) },
+        -> { large_graph_scenario(shape: :diamond_50x50) },
+        -> { long_lived_storage_scenario }
       ].each do |scenario|
         break if expired?
         scenario.call
@@ -619,6 +623,116 @@ module ProductionReadiness
       @metrics[:bus_overflows] += 1
     end
 
+    # Three large-graph shapes with soft wallclock budgets. A 5x breach
+    # of the budget fails the run — catches O(N^2) regressions that the
+    # rest of the harness would only show as slowness.
+    LARGE_GRAPH_SHAPES = {
+      chain_1000: {nodes: 1_000, soft_ms: 5_500, build: :chain},
+      fanout_500: {nodes: 500, soft_ms: 1_500, build: :fanout},
+      diamond_50x50: {nodes: 50, soft_ms: 6_000, build: :diamond}
+    }.freeze
+    BUDGET_BREACH_FACTOR = 5.0
+
+    def large_graph_scenario(shape: nil)
+      shape ||= LARGE_GRAPH_SHAPES.keys.sample(random: @rng)
+      spec = LARGE_GRAPH_SHAPES.fetch(shape)
+      definition = build_large_graph(spec[:build], spec[:nodes])
+
+      storage = DAG::Adapters::Memory::Storage.new
+      event_bus = DAG::Adapters::Memory::EventBus.new(buffer_size: definition.nodes.size * 4)
+      workflow_id = create_workflow(storage, definition)
+
+      started_ms = monotonic_ms
+      result = runner(storage, event_bus: event_bus).call(workflow_id)
+      elapsed_ms = monotonic_ms - started_ms
+
+      assert_equal(:completed, result.state, "#{shape} did not complete")
+      assert_committed(storage, workflow_id, definition)
+
+      hard_budget = spec[:soft_ms] * BUDGET_BREACH_FACTOR
+      if elapsed_ms > hard_budget
+        raise Failure, "#{shape} elapsed #{elapsed_ms}ms exceeds #{hard_budget.to_i}ms (#{BUDGET_BREACH_FACTOR}x soft budget #{spec[:soft_ms]}ms)"
+      end
+
+      @metrics[:large_graph_runs] += 1
+      @metrics[:large_graph_nodes] += definition.nodes.size
+    end
+
+    def build_large_graph(kind, nodes)
+      case kind
+      when :chain
+        chain_definition((0...nodes).map { |i| :"n#{i}" }, type: :noop)
+      when :fanout
+        definition = DAG::Workflow::Definition.new.add_node(:root, type: :noop)
+        (0...nodes - 1).each do |i|
+          leaf = :"l#{i}"
+          definition = definition.add_node(leaf, type: :noop).add_edge(:root, leaf)
+        end
+        definition
+      when :diamond
+        definition = DAG::Workflow::Definition.new.add_node(:root, type: :noop)
+        layer_a = (0...nodes).map { |i| :"a#{i}" }
+        layer_b = (0...nodes).map { |i| :"b#{i}" }
+        layer_a.each { |id| definition = definition.add_node(id, type: :noop).add_edge(:root, id) }
+        layer_b.each { |id| definition = definition.add_node(id, type: :noop) }
+        layer_a.each do |a|
+          layer_b.each { |b| definition = definition.add_edge(a, b) }
+        end
+        definition = definition.add_node(:sink, type: :noop)
+        layer_b.each { |b| definition = definition.add_edge(b, :sink) }
+        definition
+      else
+        raise ArgumentError, "unknown large-graph kind: #{kind}"
+      end
+    end
+
+    # Same Memory::Storage reused across N workflows. Memory::Storage retains
+    # all events forever by design; the leak check is on Ruby heap (live
+    # slots), not on the deliberate event retention. A leak would show up as
+    # super-linear growth of live_slots per completed workflow.
+    LONG_LIVED_BATCHES = 4
+    LONG_LIVED_BATCH_SIZE = 50
+    LONG_LIVED_LINEAR_RATIO = 6.0
+
+    def long_lived_storage_scenario
+      storage = DAG::Adapters::Memory::Storage.new
+      definition = chain_definition(%i[a b c d e], type: :noop)
+
+      GC.start
+      slots_initial = GC.stat[:heap_live_slots]
+      slots_after_first_batch = nil
+      slots_after_last_batch = nil
+
+      LONG_LIVED_BATCHES.times do |batch_index|
+        LONG_LIVED_BATCH_SIZE.times do
+          workflow_id = create_workflow(storage, definition)
+          result = runner(storage).call(workflow_id)
+          assert_equal(:completed, result.state, "long-lived batch workflow did not complete")
+        end
+        GC.start
+        slots = GC.stat[:heap_live_slots]
+        slots_after_first_batch ||= slots if batch_index == 0
+        slots_after_last_batch = slots if batch_index == LONG_LIVED_BATCHES - 1
+      end
+
+      delta_initial = slots_after_first_batch - slots_initial
+      delta_post = slots_after_last_batch - slots_after_first_batch
+      growth_ratio = delta_initial.zero? ? 0.0 : delta_post.to_f / delta_initial
+
+      assert(growth_ratio <= LONG_LIVED_LINEAR_RATIO,
+        "long-lived storage shows super-linear heap growth: ratio=#{growth_ratio.round(2)} (delta_initial=#{delta_initial}, delta_post=#{delta_post}, threshold=#{LONG_LIVED_LINEAR_RATIO})")
+
+      total_workflows = LONG_LIVED_BATCHES * LONG_LIVED_BATCH_SIZE
+      total_events = storage.read_events(workflow_id: storage.instance_variable_get(:@state)[:workflows].keys.first).size
+      assert(total_events.positive?, "first workflow's event log is empty after long-lived run")
+      @metrics[:long_lived_runs] += 1
+      @metrics[:long_lived_workflows] += total_workflows
+    end
+
+    def monotonic_ms
+      (Process.clock_gettime(Process::CLOCK_MONOTONIC) * 1000).to_i
+    end
+
     def random_definition(nodes:, edge_probability:)
       definition = DAG::Workflow::Definition.new
       node_ids = Array.new(nodes) { |index| :"n#{index}" }
@@ -846,7 +960,9 @@ module ProductionReadiness
       retries_exhausted: 0.1,
       commit_mismatches: 0.3,
       subscriber_failures: 0.1,
-      bus_overflows: 0.1
+      bus_overflows: 0.1,
+      large_graph_runs: 0.0, # always >=1 from fixed_scenarios (3 shapes); duration-independent
+      long_lived_runs: 0.0   # always >=1 from fixed_scenarios; duration-independent
     }.freeze
 
     def assert_minimum_metrics
