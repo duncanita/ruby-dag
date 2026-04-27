@@ -835,17 +835,20 @@ module ProductionReadiness
       [:chain3, :commit_attempt, :before, {node_id: :c}],
       [:chain3, :commit_attempt, :after, {node_id: :c}],
       # CrashableStorage#append_event only intercepts the public Storage#append_event
-      # path; per-attempt :node_* events go via append_event_internal during
-      # commit_attempt (already covered by the commit_attempt rows above).
-      # Workflow-lifecycle events (:workflow_started, :workflow_completed,
-      # :workflow_failed, :workflow_paused, :workflow_waiting) are the ones
-      # that actually flow through the public method and are crash-relevant.
+      # path. Per-attempt :node_* events go via append_event_internal during
+      # commit_attempt (covered by commit_attempt rows). Terminal lifecycle
+      # events (:workflow_completed, :workflow_failed, :workflow_paused,
+      # :workflow_waiting) are now atomic with their state transition (issue
+      # #138 fix): they ride inside transition_workflow_state(event:), not
+      # through public append_event. So append_event crash cells target only
+      # :workflow_started, which still uses the standalone path; the rest are
+      # covered by the transition_workflow_state rows below.
       [:chain3, :append_event, :before, {event_type: :workflow_started}],
       [:chain3, :append_event, :after, {event_type: :workflow_started}],
-      [:chain3, :append_event, :before, {event_type: :workflow_completed}],
-      [:chain3, :append_event, :after, {event_type: :workflow_completed}],
       [:chain3, :transition_workflow_state, :before, {from: :pending, to: :running}],
       [:chain3, :transition_workflow_state, :after, {from: :pending, to: :running}],
+      [:chain3, :transition_workflow_state, :before, {from: :running, to: :completed}],
+      [:chain3, :transition_workflow_state, :after, {from: :running, to: :completed}],
       # single-node — only_node coverage
       [:single, :begin_attempt, :before, {node_id: :a}],
       [:single, :begin_attempt, :after, {node_id: :a}],
@@ -884,8 +887,34 @@ module ProductionReadiness
       end
       assert_committed(healthy, workflow_id, definition)
       assert_no_duplicate_workflow_started(healthy, workflow_id, label)
+      assert_terminal_event_consistency(healthy, workflow_id, label)
 
       @metrics[:crash_matrix_cells] += 1
+    end
+
+    TERMINAL_STATE_TO_EVENT = {
+      completed: :workflow_completed,
+      failed: :workflow_failed,
+      waiting: :workflow_waiting,
+      paused: :workflow_paused
+    }.freeze
+
+    # If the workflow row is durable in a terminal state, the event log MUST
+    # contain the corresponding terminal event. Without this check the harness
+    # accepts a partial commit where the row transition succeeded but the
+    # terminal event was lost — a real crash hazard before the storage made
+    # the two atomic.
+    def assert_terminal_event_consistency(storage, workflow_id, label)
+      state = storage.load_workflow(id: workflow_id)[:state]
+      expected_event = TERMINAL_STATE_TO_EVENT[state]
+      return unless expected_event
+
+      events = storage.read_events(workflow_id: workflow_id)
+      count = events.count { |e| e.type == expected_event }
+      return if count == 1
+
+      raise Failure,
+        "crash[#{label}] workflow row is :#{state} but event log has #{count} :#{expected_event} events (expected exactly 1)"
     end
 
     def drive_to_terminal(storage, workflow_id, label, max_steps: 4)

@@ -45,7 +45,7 @@ module DAG
           stamped
         end
 
-        def transition_workflow_state(id:, from:, to:)
+        def transition_workflow_state(id:, from:, to:, event: nil)
           context = {workflow_id: id, from: from, to: to}
           crash_if!(:before, :transition_workflow_state, context)
           row = super

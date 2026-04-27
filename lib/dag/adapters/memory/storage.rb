@@ -21,8 +21,8 @@ module DAG
           frozen StorageState.load_workflow(@state, id: id)
         end
 
-        def transition_workflow_state(id:, from:, to:)
-          frozen StorageState.transition_workflow_state(@state, id: id, from: from, to: to)
+        def transition_workflow_state(id:, from:, to:, event: nil)
+          frozen StorageState.transition_workflow_state(@state, id: id, from: from, to: to, event: event)
         end
 
         def append_revision(id:, parent_revision:, definition:, invalidated_node_ids:, event:)

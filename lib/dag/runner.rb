@@ -176,8 +176,13 @@ module DAG
         commit_and_emit(run, node_id, attempt_id, attempt_number, result, :committed, :node_committed, {})
         return :continue if result.proposed_mutations.empty?
 
-        @storage.transition_workflow_state(id: run.workflow_id, from: :running, to: :paused)
-        append_event(run, type: :workflow_paused, payload: {by_node: node_id, mutation_count: result.proposed_mutations.size})
+        atomic_transition_with_event(
+          run,
+          from: :running,
+          to: :paused,
+          event_type: :workflow_paused,
+          payload: {by_node: node_id, mutation_count: result.proposed_mutations.size}
+        )
         :paused
 
       when DAG::Waiting
@@ -194,8 +199,13 @@ module DAG
 
         commit_and_emit(run, node_id, attempt_id, attempt_number, result, :failed, :node_failed,
           {retriable: false, error: result.error})
-        @storage.transition_workflow_state(id: run.workflow_id, from: :running, to: :failed)
-        append_event(run, type: :workflow_failed, payload: {failed_node: node_id, error: result.error})
+        atomic_transition_with_event(
+          run,
+          from: :running,
+          to: :failed,
+          event_type: :workflow_failed,
+          payload: {failed_node: node_id, error: result.error}
+        )
         :failed_terminal
       end
     end
@@ -272,9 +282,18 @@ module DAG
     end
 
     def transition_and_emit_terminal(run, state, event_type, payload)
-      @storage.transition_workflow_state(id: run.workflow_id, from: :running, to: state)
-      append_event(run, type: event_type, payload: payload)
+      atomic_transition_with_event(run, from: :running, to: state, event_type: event_type, payload: payload)
       build_run_result(run, state)
+    end
+
+    # Atomic at the storage layer: the row transition and the event append
+    # cannot diverge under crash. The event_bus publish happens after the
+    # storage call returns and is best-effort (non-durable).
+    def atomic_transition_with_event(run, from:, to:, event_type:, payload:)
+      event = build_event(run, type: event_type, payload: payload)
+      result = @storage.transition_workflow_state(id: run.workflow_id, from: from, to: to, event: event)
+      stamped = result.is_a?(Hash) ? result[:event] : nil
+      @event_bus.publish(stamped) if stamped
     end
 
     def build_run_result(run, state)
