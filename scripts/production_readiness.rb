@@ -391,9 +391,17 @@ module ProductionReadiness
       assert(apply.definition.has_node?(:b_prime), "replacement node missing")
       refute(apply.definition.has_node?(:b), "replaced node still present")
 
+      states_after_apply = storage.load_node_states(workflow_id: workflow_id, revision: 2)
+      assert_equal(:committed, states_after_apply.fetch(:a), "preserved root drifted from :committed")
+      assert_equal(:committed, states_after_apply.fetch(:c), "preserved parallel branch drifted from :committed")
+      assert_equal(:invalidated, states_after_apply.fetch(:d), "preserved-impacted node must be :invalidated post-apply")
+      assert_equal(:pending, states_after_apply.fetch(:b_prime), "newly introduced replacement node must be :pending post-apply")
+
       result = runner(storage, event_bus: event_bus).resume(workflow_id)
       assert_equal(:completed, result.state, "resume after replace_subtree did not complete")
-      assert_equal(:committed, storage.load_node_states(workflow_id: workflow_id, revision: 2).fetch(:b_prime), "replacement node did not run")
+      states_after_resume = storage.load_node_states(workflow_id: workflow_id, revision: 2)
+      assert_equal(:committed, states_after_resume.fetch(:b_prime), "replacement node did not run")
+      assert_equal(:committed, states_after_resume.fetch(:d), "invalidated join did not re-execute")
 
       @metrics[:mutations] += 1
     end
