@@ -1,0 +1,59 @@
+name: Production Readiness
+
+on:
+  schedule:
+    # Nightly at 03:00 UTC. Catches regressions invisible to the per-PR
+    # rake gate (e.g. timing-sensitive crash recovery, GC growth,
+    # determinism drift) without slowing every PR by ~2 minutes.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: 'Run duration in seconds (default 120 = --fast profile).'
+        required: false
+        default: '120'
+      seed:
+        description: 'Deterministic seed (Integer). Pass `random` to opt into a fresh seed.'
+        required: false
+        default: '1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-readiness-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prodready:
+    name: production_readiness.rb
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+          bundler-cache: true
+
+      - name: Run production_readiness.rb
+        run: |
+          ruby scripts/production_readiness.rb \
+            --fast \
+            --seed "${SEED}" \
+            --duration "${DURATION}" \
+            --report-file prodready.json
+        env:
+          SEED: ${{ github.event.inputs.seed || '1' }}
+          DURATION: ${{ github.event.inputs.duration || '120' }}
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prodready-report
+          path: prodready.json
+          if-no-files-found: warn
+          retention-days: 30
