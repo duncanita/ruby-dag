@@ -45,6 +45,14 @@ module DAG
           stamped
         end
 
+        def transition_workflow_state(id:, from:, to:)
+          context = {workflow_id: id, from: from, to: to}
+          crash_if!(:before, :transition_workflow_state, context)
+          row = super
+          crash_if!(:after, :transition_workflow_state, context)
+          row
+        end
+
         def snapshot_to_healthy
           Storage.new(initial_state: DAG.deep_dup(@state))
         end
@@ -84,7 +92,7 @@ module DAG
         end
 
         def trigger_context_matches?(context)
-          %i[workflow_id revision node_id attempt_id attempt_number node_state event_type].all? do |key|
+          %i[workflow_id revision node_id attempt_id attempt_number node_state event_type from to].all? do |key|
             !@crash_on.key?(key) || @crash_on[key] == context[key]
           end
         end
