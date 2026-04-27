@@ -185,7 +185,10 @@ module ProductionReadiness
         -> { crash_resume_scenario(:after_commit) },
         -> { mutation_pause_resume_scenario },
         -> { replace_subtree_resume_scenario },
-        -> { storage_contract_edge_scenario }
+        -> { storage_contract_edge_scenario },
+        -> { retry_workflow_scenario },
+        -> { subscriber_failure_scenario },
+        -> { bus_overflow_scenario }
       ].freeze
     end
 
@@ -213,7 +216,10 @@ module ProductionReadiness
         -> { crash_resume_scenario(:after_commit) },
         -> { mutation_pause_resume_scenario },
         -> { replace_subtree_resume_scenario },
-        -> { storage_contract_edge_scenario }
+        -> { storage_contract_edge_scenario },
+        -> { retry_workflow_scenario },
+        -> { subscriber_failure_scenario },
+        -> { bus_overflow_scenario }
       ].each do |scenario|
         break if expired?
         scenario.call
@@ -477,9 +483,140 @@ module ProductionReadiness
           attempt_number: 8
         )
       end
+      commit_state_mismatch_probes(storage, workflow_id)
       assert_storage_returns_are_isolated(storage, workflow_id)
 
       @metrics[:storage_edges] += 1
+    end
+
+    # Storage#commit_attempt enforces (result, node_state) coherence via
+    # validate_node_state_for_result!. A bug there could let the runner
+    # park a node in a state that contradicts the attempt outcome — a
+    # silent durability hazard. Probe each forbidden combination on a
+    # fresh in-flight attempt for node :b.
+    def commit_state_mismatch_probes(storage, workflow_id)
+      [
+        [DAG::Success[value: :b], :failed],
+        [DAG::Waiting[reason: :external], :committed],
+        [DAG::Failure[error: {code: :synthetic}, retriable: false], :waiting]
+      ].each do |result, bad_node_state|
+        attempt_id = storage.begin_attempt(
+          workflow_id: workflow_id,
+          revision: 1,
+          node_id: :b,
+          expected_node_state: :pending,
+          attempt_number: 1
+        )
+        assert_raises(ArgumentError) do
+          storage.commit_attempt(
+            attempt_id: attempt_id,
+            result: result,
+            node_state: bad_node_state,
+            event: event(:node_committed, workflow_id: workflow_id, node_id: :b, attempt_id: attempt_id)
+          )
+        end
+        # Recover: storage left node :b in :running. Reset for the next probe.
+        storage.abort_running_attempts(workflow_id: workflow_id)
+        @metrics[:commit_mismatches] += 1
+      end
+    end
+
+    # Roadmap §R1 line 586 mandates Runner#retry_workflow resets :failed
+    # nodes and "ricrea attempt nuovi". Group A added the harness; Group B
+    # actually exercises it. The flaky step always fails, so we don't aim
+    # for recovery — we verify the contract: prior :failed attempts get
+    # marked :aborted (count_attempts excludes them so the per-node budget
+    # restarts), workflow_retry_count increments, and a second exhaustion
+    # raises WorkflowRetryExhaustedError.
+    def retry_workflow_scenario
+      definition = DAG::Workflow::Definition.new
+        .add_node(:a, type: :flaky, config: {fail_until: 1_000})
+      storage = DAG::Adapters::Memory::Storage.new
+      workflow_id = create_workflow(storage, definition,
+        runtime_profile: runtime_profile(max_attempts_per_node: 2, max_workflow_retries: 1))
+
+      first = runner(storage).call(workflow_id)
+      assert_equal(:failed, first.state, "initial run did not terminally fail")
+      assert_equal(2, storage.count_attempts(workflow_id: workflow_id, revision: 1, node_id: :a),
+        "first run did not exhaust per-node budget")
+
+      second = runner(storage).retry_workflow(workflow_id)
+      assert_equal(:failed, second.state, "retry did not re-fail terminally")
+      assert_equal(1, storage.load_workflow(id: workflow_id)[:workflow_retry_count],
+        "workflow_retry_count did not increment")
+
+      attempts = storage.list_attempts(workflow_id: workflow_id, revision: 1, node_id: :a)
+      aborted = attempts.count { |a| a[:state] == :aborted }
+      failed = attempts.count { |a| a[:state] == :failed }
+      assert_equal(2, aborted, "prior failed attempts were not aborted on retry")
+      assert_equal(2, failed, "second run did not produce 2 fresh failed attempts")
+      assert_equal(2, storage.count_attempts(workflow_id: workflow_id, revision: 1, node_id: :a),
+        "count_attempts did not exclude :aborted (per-node budget did not reset)")
+
+      assert_raises(DAG::WorkflowRetryExhaustedError) { runner(storage).retry_workflow(workflow_id) }
+
+      @metrics[:retries_exhausted] += 1
+    end
+
+    # Memory::EventBus#publish appends to the internal buffer first, then
+    # iterates subscribers. A subscriber that raises propagates out through
+    # the runner. The contract verified here:
+    # - the storage event log already contains the event (publish-after-append),
+    # - the runner surfaces the subscriber's exception (no swallowing),
+    # - subsequent subscribers do not see the event (each-loop short-circuits).
+    def subscriber_failure_scenario
+      storage = DAG::Adapters::Memory::Storage.new
+      event_bus = DAG::Adapters::Memory::EventBus.new
+      tail_subscriber_seen = []
+      raised_event_types = []
+
+      event_bus.subscribe do |evt|
+        raised_event_types << evt.type
+        raise "synthetic subscriber failure"
+      end
+      event_bus.subscribe { |evt| tail_subscriber_seen << evt.type }
+
+      definition = chain_definition(%i[a b], type: :probe)
+      workflow_id = create_workflow(storage, definition)
+
+      assert_raises(RuntimeError) { runner(storage, event_bus: event_bus).call(workflow_id) }
+
+      assert_equal(1, raised_event_types.size, "raising subscriber received more than one event")
+      assert_equal(:workflow_started, raised_event_types.first,
+        "raising subscriber did not see the first published event")
+      assert(tail_subscriber_seen.empty?, "downstream subscriber received an event after a prior raise")
+      stored = storage.read_events(workflow_id: workflow_id)
+      assert(stored.any? { |e| e.type == :workflow_started },
+        "storage event log lost the event whose publish raised")
+
+      @metrics[:subscriber_failures] += 1
+    end
+
+    # EventBus is a bounded ring buffer with FIFO drop. With a buffer
+    # smaller than the workflow's event count, the runner must keep
+    # running, the storage event log must remain whole, and only the
+    # most recent N events must be retained on the bus.
+    def bus_overflow_scenario
+      buffer_size = 8
+      storage = DAG::Adapters::Memory::Storage.new
+      event_bus = DAG::Adapters::Memory::EventBus.new(buffer_size: buffer_size)
+      definition = chain_definition(%i[a b c d e f g h], type: :probe)
+      workflow_id = create_workflow(storage, definition)
+
+      result = runner(storage, event_bus: event_bus).call(workflow_id)
+      assert_equal(:completed, result.state, "overflow caused workflow not to complete")
+
+      bus_events = event_bus.events
+      stored_events = storage.read_events(workflow_id: workflow_id)
+
+      assert(bus_events.size <= buffer_size, "bus retained more than buffer_size events: #{bus_events.size}")
+      assert(stored_events.size > buffer_size,
+        "test setup is wrong: storage produced fewer than buffer_size events")
+      tail_of_storage = stored_events.last(bus_events.size).map(&:seq)
+      assert_equal(tail_of_storage, bus_events.map(&:seq),
+        "bus did not retain the most recent events (FIFO drop violated)")
+
+      @metrics[:bus_overflows] += 1
     end
 
     def random_definition(nodes:, edge_probability:)
@@ -705,7 +842,11 @@ module ProductionReadiness
       boundary_failures: 0.2,
       crash_resumes: 0.2,
       mutations: 0.2,
-      storage_edges: 0.2
+      storage_edges: 0.2,
+      retries_exhausted: 0.1,
+      commit_mismatches: 0.3,
+      subscriber_failures: 0.1,
+      bus_overflows: 0.1
     }.freeze
 
     def assert_minimum_metrics
