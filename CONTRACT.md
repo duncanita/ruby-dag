@@ -116,6 +116,29 @@ together. If a process crashes before that boundary, the step may be invoked
 again on resume. If it crashes after the boundary, resume starts from the next
 eligible node.
 
+`transition_workflow_state` is the equivalent atomic durability boundary for
+**workflow-level** state changes. It accepts an optional `event:` keyword:
+
+```ruby
+storage.transition_workflow_state(id:, from:, to:, event: nil)
+# returns {id:, state:, event: stamped_or_nil}
+```
+
+When `event:` is supplied, the row transition and the event append happen in
+the same atomic step. The Runner uses this for every terminal and
+quasi-terminal transition (`:running -> :completed`, `:running -> :failed`,
+`:running -> :paused`, `:running -> :waiting`) so that a crash can never
+leave the workflow row in a terminal state without its corresponding
+terminal event in the log. The `event:`-less form is reserved for internal
+transitions that have no associated event (e.g. `:pending -> :running` in
+`acquire_running`, where `:workflow_started` is emitted later by an
+idempotent path that scans the event log).
+
+This is a port extension over the canonical roadmap signature
+`(id:, from:, to:)`. See `CLAUDE.md` "Port extensions" for the full
+justification. SQLite (S0) implements the same atomicity via a single
+transaction.
+
 The Runner owns attempt numbering. It computes:
 
 ```ruby

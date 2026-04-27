@@ -52,18 +52,37 @@ expressed via the 15 documented primitives:
   retry-count tracking. Returns `{reset: [node_id, ...],
   workflow_retry_count:}`.
 
-This is the only documented extension. It is justified by R1 DoD line 586
-which mandates `Runner#retry_workflow` resets `:failed` nodes and
-"ricrea attempt nuovi"; with only the 15 documented primitives the budget
-restart is not achievable.
+This is justified by R1 DoD line 586 which mandates
+`Runner#retry_workflow` resets `:failed` nodes and "ricrea attempt nuovi";
+with only the 15 documented primitives the budget restart is not achievable.
 
-R2 clarifies the existing `abort_running_attempts(workflow_id:)` port method:
-adapters must mark in-flight attempts as `:aborted` and reset matching
-current-revision nodes still in `:running` back to `:pending`. This is not a
-new method, but it is required so `Runner#resume` can recompute eligibility
-after a process crash.
+A second extension widens an existing canonical method:
 
-All other R1/R2 work uses the documented methods.
+- **`transition_workflow_state(id:, from:, to:, event: nil)`** — the
+  roadmap signature is `(id:, from:, to:)` (Appendix C/I, line 2609). The
+  optional `event:` kwarg is added so a workflow-level state transition
+  can durably append the corresponding terminal event in the same atomic
+  step. When `event:` is `nil` the behavior is identical to the canonical
+  signature; the return value becomes `{id:, state:, event: stamped_or_nil}`.
+
+  This is justified by R2's crash-resume durability invariant. Without the
+  extension, `Runner#transition_and_emit_terminal` had to make two
+  separate storage calls (`transition_workflow_state` then `append_event`),
+  and a crash between them durably leaves the workflow row in a terminal
+  state (`:completed` / `:failed` / `:waiting` / `:paused`) with no
+  matching terminal event — a state from which `Runner#resume` cannot
+  recover (`acquire_running` rejects terminal states). The same pattern
+  already exists on `commit_attempt(event:)` and `append_revision(event:)`;
+  this brings workflow-level transitions in line with attempt-level and
+  revision-level ones.
+
+R2 also clarifies the existing `abort_running_attempts(workflow_id:)` port
+method: adapters must mark in-flight attempts as `:aborted` and reset
+matching current-revision nodes still in `:running` back to `:pending`.
+This is not a new method, but it is required so `Runner#resume` can
+recompute eligibility after a process crash.
+
+All other R1/R2/R3 work uses the documented methods.
 
 ## Commands
 
