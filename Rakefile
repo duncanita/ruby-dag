@@ -14,14 +14,26 @@ RuboCop::RakeTask.new(:rubocop) do |t|
   t.options = ["--display-cop-names"]
 end
 
-# YARD documentation gate. Runs `yard stats` and fails if the documented
-# percentage drops below the v1.0 readiness floor. Keeps the public API
-# surface from regressing into undocumented territory.
-YARD_DOC_THRESHOLD = 95.0
+# YARD documentation gate. Two-part check:
+#
+# 1. `yard doc --fail-on-warning` actually parses the public surface and
+#    fails on malformed tags, undefined cross-references, broken
+#    `(see ...)` chains, and any other YARD warning. Without this, a
+#    typo'd `@param` name or a stale `(see Ports::Storage#renamed)`
+#    would silently degrade the docs while `yard stats` still reports
+#    100%.
+# 2. `yard stats` enforces a hard floor on the documented percentage so
+#    a new public method cannot land without docs. The threshold is
+#    pinned at the current state (locked in by the v1.0 readiness gate)
+#    rather than a soft floor — any regression must either be repaired
+#    or call out the loosening explicitly here.
+YARD_DOC_THRESHOLD = 99.0
 
-desc "Run YARD docs gate (fail if documentation < #{YARD_DOC_THRESHOLD}%)"
+desc "Run YARD docs gate (no warnings + documentation >= #{YARD_DOC_THRESHOLD}%)"
 task :yard do
-  output = `bundle exec yard stats 2>&1`
+  sh "bundle exec yard doc --no-output --no-progress --fail-on-warning"
+
+  output = `bundle exec yard stats`
   puts output
   abort "YARD failed to produce stats" unless $?.success?
   match = output.match(/(\d+\.\d+)% documented/)
