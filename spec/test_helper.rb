@@ -5,10 +5,11 @@ if ENV["COVERAGE"]
   SimpleCov.start do
     add_filter "/spec/"
     enable_coverage :branch
-    # Line coverage stays at 100% (alpha-stage hard gate). Branch coverage
-    # is 90% during R1 — defensive guard branches that R1 doesn't yet
-    # exercise will be tightened to 100% as part of the Release gate
-    # (#74). Don't lower this further without an explicit reason.
+    # Line coverage is a 100% hard gate. Branch coverage floor is 90%
+    # (currently sits around 91-92%). The remaining uncovered branches
+    # are defensive guards behind argument-validation `unless` clauses;
+    # tightening to 100% is tracked as a follow-up to the v1.0 gate
+    # (see CHANGELOG 1.0.0). Don't lower these without an explicit reason.
     minimum_coverage line: 100, branch: 90
   end
 end

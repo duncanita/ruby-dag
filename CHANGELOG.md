@@ -1,6 +1,26 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 — 2026-04-28
+
+Roadmap v3.4 complete (R0-R3). Deterministic kernel, durable in-memory
+resume, and structural mutation are in. Zero runtime dependencies; Ruby
+≥ 3.4. The Memory adapters are single-process; SQLite (S0) and the
+`delphic` consumer (approvals/budgets) are the next phases.
+
+This release closes the v1.0 readiness gate (#74). Highlights:
+
+- The four kernel pillars from Roadmap v3.4 §2 are enforced: pure DAG;
+  immutable workflow definitions and tagged types; dependency-injected
+  frozen Runner with seven ports; closed event types and durable
+  append-only event log.
+- `bundle exec rake` runs Minitest, Standard, and the four custom DAG
+  RuboCop cops (`NoThreadOrRactor`, `NoMutableAccessors`,
+  `NoInPlaceMutation`, `NoExternalRequires`) on every PR.
+- Public API surface is documented with YARD; `bundle exec yard stats`
+  reports ≥ 99 % documented.
+- README ships a ≤10-line hello-world plus a minimal resume example.
+  `DAG::Toolkit.in_memory_kit(registry:)` wires the four stdlib ports
+  + memory storage + memory event bus for examples and tests.
 
 ### Added — Roadmap v3.4 R2/R3: resume and structural mutation
 
