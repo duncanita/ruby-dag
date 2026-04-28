@@ -1,10 +1,19 @@
 # frozen_string_literal: true
 
 module DAG
+  # Step result indicating the step is waiting on an external condition.
+  # `reason` is a Symbol, `resume_token` is JSON-safe, `not_before_ms` is
+  # an optional wall-clock millisecond hint.
+  # @api public
   Waiting = Data.define(:reason, :resume_token, :not_before_ms, :metadata) do
     class << self
       remove_method :[]
 
+      # @param reason [Symbol]
+      # @param resume_token [Object, nil] JSON-safe
+      # @param not_before_ms [Integer, nil] wall-clock ms hint
+      # @param metadata [Hash] JSON-safe
+      # @return [Waiting]
       def [](reason:, resume_token: nil, not_before_ms: nil, metadata: {})
         new(
           reason: reason,
@@ -15,6 +24,13 @@ module DAG
       end
     end
 
+    # Build a Waiting whose `not_before_ms` is derived from a `Time`-like
+    # value.
+    # @param reason [Symbol]
+    # @param time [#to_f] seconds since epoch
+    # @param resume_token [Object, nil]
+    # @param metadata [Hash]
+    # @return [Waiting]
     def self.at(reason:, time:, resume_token: nil, metadata: {})
       self[
         reason: reason,

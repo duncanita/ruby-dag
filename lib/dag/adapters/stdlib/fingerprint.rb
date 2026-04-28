@@ -10,6 +10,7 @@ module DAG
       # symbols stringified, hash keys deduplicated and sorted, arrays kept in
       # order, floats rejected if non-finite. The same value always produces
       # the same digest regardless of insertion order.
+      # @api public
       class Fingerprint
         include Ports::Fingerprint
 
@@ -17,6 +18,9 @@ module DAG
           freeze
         end
 
+        # @param value [Object] JSON-safe input
+        # @return [String] hex digest
+        # @raise [ArgumentError] when `value` is not JSON-safe
         def compute(value)
           DAG.json_safe!(value)
           Digest::SHA256.hexdigest(JSON.generate(canonicalize(value)))

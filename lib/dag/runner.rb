@@ -1,12 +1,23 @@
 # frozen_string_literal: true
 
 module DAG
+  # The seven keyword arguments required by `Runner.new`.
   REQUIRED_RUNNER_DEPENDENCIES = %i[storage event_bus registry clock id_generator fingerprint serializer].freeze
 
+  # Frozen, dependency-injected execution kernel. The Runner runs the
+  # layered algorithm from Roadmap v3.4 §R1 against the seven injected
+  # ports; it never holds mutable state and never spawns threads.
+  #
+  # @api public
   class Runner
+    # Workflow states from which `#call` is allowed.
     CALL_FROM_STATES = %i[pending].freeze
+
+    # Workflow states from which `#resume` is allowed.
     RESUME_FROM_STATES = %i[running waiting paused].freeze
 
+    # Internal carrier for per-call run context.
+    # @api private
     RunContext = Data.define(
       :workflow_id,
       :revision,
@@ -16,8 +27,29 @@ module DAG
       :predecessors_by_node
     )
 
-    attr_reader :storage, :event_bus, :registry, :clock, :id_generator, :fingerprint, :serializer
+    # @return [Object] injected port (see {Ports::Storage})
+    attr_reader :storage
+    # @return [Object] injected port (see {Ports::EventBus})
+    attr_reader :event_bus
+    # @return [DAG::StepTypeRegistry]
+    attr_reader :registry
+    # @return [Object] injected port (see {Ports::Clock})
+    attr_reader :clock
+    # @return [Object] injected port (see {Ports::IdGenerator})
+    attr_reader :id_generator
+    # @return [Object] injected port (see {Ports::Fingerprint})
+    attr_reader :fingerprint
+    # @return [Object] injected port (see {Ports::Serializer})
+    attr_reader :serializer
 
+    # @param storage [Object] adapter implementing `Ports::Storage`
+    # @param event_bus [Object] adapter implementing `Ports::EventBus`
+    # @param registry [DAG::StepTypeRegistry] frozen registry of step types
+    # @param clock [Object] adapter implementing `Ports::Clock`
+    # @param id_generator [Object] adapter implementing `Ports::IdGenerator`
+    # @param fingerprint [Object] adapter implementing `Ports::Fingerprint`
+    # @param serializer [Object] adapter implementing `Ports::Serializer`
+    # @raise [ArgumentError] when any keyword is missing or `nil`
     def initialize(storage:, event_bus:, registry:, clock:, id_generator:, fingerprint:, serializer:)
       missing = {storage:, event_bus:, registry:, clock:, id_generator:, fingerprint:, serializer:}
         .select { |_, v| v.nil? }.keys
@@ -33,17 +65,32 @@ module DAG
       freeze
     end
 
+    # Run a `:pending` workflow to a terminal state.
+    # @param workflow_id [String]
+    # @return [DAG::RunResult]
+    # @raise [DAG::StaleStateError] when the workflow is not in `:pending`
     def call(workflow_id)
       workflow = acquire_running(workflow_id, allowed_from: CALL_FROM_STATES)
       run_workflow(workflow_id, workflow)
     end
 
+    # Resume a `:running` (crashed), `:waiting`, or `:paused` workflow.
+    # Aborts in-flight attempts before recomputing eligibility.
+    # @param workflow_id [String]
+    # @return [DAG::RunResult]
+    # @raise [DAG::StaleStateError] when the workflow is not resumable
     def resume(workflow_id)
       workflow = acquire_running(workflow_id, allowed_from: RESUME_FROM_STATES)
       @storage.abort_running_attempts(workflow_id: workflow_id)
       run_workflow(workflow_id, workflow)
     end
 
+    # Reset `:failed` nodes for the workflow's current revision and run
+    # the workflow again; subject to `runtime_profile.max_workflow_retries`.
+    # @param workflow_id [String]
+    # @return [DAG::RunResult]
+    # @raise [DAG::StaleStateError] when the workflow is not `:failed`
+    # @raise [DAG::WorkflowRetryExhaustedError] when the budget is spent
     def retry_workflow(workflow_id)
       workflow = @storage.load_workflow(id: workflow_id)
       raise StaleStateError, "workflow not in :failed state (#{workflow[:state].inspect})" unless workflow[:state] == :failed

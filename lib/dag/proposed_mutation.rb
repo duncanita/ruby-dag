@@ -1,6 +1,10 @@
 # frozen_string_literal: true
 
 module DAG
+  # Proposal a step emits to ask the application to mutate the workflow
+  # structurally. `kind` is one of {ProposedMutation::KINDS}; for
+  # `:replace_subtree`, `replacement_graph` is required.
+  # @api public
   ProposedMutation = Data.define(
     :kind,
     :target_node_id,
@@ -12,6 +16,8 @@ module DAG
     class << self
       remove_method :[]
 
+      # Build a ProposedMutation with optional defaults.
+      # @return [ProposedMutation]
       def [](kind:, target_node_id:, replacement_graph: nil, rationale: nil, confidence: 1.0, metadata: {})
         new(
           kind: kind,
@@ -48,5 +54,6 @@ module DAG
     end
   end
 
+  # Closed set of mutation kinds.
   ProposedMutation::KINDS = %i[replace_subtree invalidate].freeze
 end

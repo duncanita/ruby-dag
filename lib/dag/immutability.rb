@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 
 module DAG
+  # Allowed key classes for JSON-safe Hashes.
   JSON_KEY_CLASSES = [String, Symbol].freeze
+  # Allowed scalar classes for JSON-safe values.
   JSON_SCALAR_CLASSES = [String, Integer, Float, TrueClass, FalseClass, NilClass, Symbol].freeze
 
   module_function

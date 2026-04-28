@@ -7,9 +7,13 @@ module DAG
       # spot in `lib/dag/**` allowed to mutate hashes in place — the cop
       # path-allowlists `lib/dag/adapters/memory/**`. The facade always
       # deep-dups returns, so callers never see a mutable reference.
+      # @!visibility private
+      # @api private
       module StorageState
         module_function
 
+        # Internal initial state hash.
+        # @api private
         def fresh_state
           {
             workflows: {},
@@ -23,16 +27,22 @@ module DAG
           }
         end
 
+        # Internal: lookup-or-raise for a workflow row.
+        # @api private
         def fetch_workflow!(state, id)
           state[:workflows].fetch(id) { raise UnknownWorkflowError, "Unknown workflow: #{id}" }
         end
 
+        # Internal: lookup-or-raise for a revision's node-state map.
+        # @api private
         def fetch_node_states!(state, id, revision)
           state[:node_states].fetch([id, revision]) do
             raise StaleRevisionError, "no node states for #{id} revision #{revision}"
           end
         end
 
+        # Implements `Ports::Storage#create_workflow`.
+        # @api private
         def create_workflow(state, id:, initial_definition:, initial_context:, runtime_profile:)
           raise ArgumentError, "workflow #{id} already exists" if state[:workflows].key?(id)
           unless initial_definition.is_a?(DAG::Workflow::Definition)
@@ -61,10 +71,14 @@ module DAG
           {id: id, current_revision: revision}
         end
 
+        # Implements `Ports::Storage#load_workflow`.
+        # @api private
         def load_workflow(state, id:)
           fetch_workflow!(state, id).dup
         end
 
+        # Implements `Ports::Storage#transition_workflow_state`.
+        # @api private
         def transition_workflow_state(state, id:, from:, to:, event: nil)
           row = fetch_workflow!(state, id)
           unless row[:state] == from
@@ -75,6 +89,8 @@ module DAG
           {id: id, state: to, event: stamped}
         end
 
+        # Implements `Ports::Storage#append_revision`.
+        # @api private
         def append_revision(state, id:, parent_revision:, definition:, invalidated_node_ids:, event:)
           row = fetch_workflow!(state, id)
           unless row[:current_revision] == parent_revision
@@ -103,21 +119,29 @@ module DAG
           {id: id, revision: new_revision, event: stamped}
         end
 
+        # Implements `Ports::Storage#load_revision`.
+        # @api private
         def load_revision(state, id:, revision:)
           state[:definitions].fetch([id, revision]) do
             raise StaleRevisionError, "no revision #{revision} for #{id}"
           end
         end
 
+        # Implements `Ports::Storage#load_current_definition`.
+        # @api private
         def load_current_definition(state, id:)
           row = fetch_workflow!(state, id)
           state[:definitions].fetch([id, row[:current_revision]])
         end
 
+        # Implements `Ports::Storage#load_node_states`.
+        # @api private
         def load_node_states(state, workflow_id:, revision:)
           fetch_node_states!(state, workflow_id, revision).dup
         end
 
+        # Implements `Ports::Storage#transition_node_state`.
+        # @api private
         def transition_node_state(state, workflow_id:, revision:, node_id:, from:, to:)
           states_for_rev = fetch_node_states!(state, workflow_id, revision)
           current = states_for_rev[node_id]
@@ -128,6 +152,8 @@ module DAG
           {workflow_id: workflow_id, revision: revision, node_id: node_id, state: to}
         end
 
+        # Implements `Ports::Storage#begin_attempt`.
+        # @api private
         def begin_attempt(state, workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:)
           unless attempt_number.is_a?(Integer) && attempt_number.positive?
             raise ArgumentError, "attempt_number must be a positive Integer"
@@ -156,6 +182,8 @@ module DAG
           attempt_id
         end
 
+        # Implements `Ports::Storage#commit_attempt`.
+        # @api private
         def commit_attempt(state, attempt_id:, result:, node_state:, event:)
           attempt = state[:attempts].fetch(attempt_id) do
             raise ArgumentError, "Unknown attempt: #{attempt_id}"
@@ -179,6 +207,8 @@ module DAG
           append_event_internal(state, attempt[:workflow_id], event)
         end
 
+        # Implements `Ports::Storage#abort_running_attempts`.
+        # @api private
         def abort_running_attempts(state, workflow_id:)
           row = fetch_workflow!(state, workflow_id)
           current_revision = row[:current_revision]
@@ -199,6 +229,8 @@ module DAG
           aborted
         end
 
+        # Implements `Ports::Storage#list_attempts`.
+        # @api private
         def list_attempts(state, workflow_id:, revision: nil, node_id: nil)
           state[:attempts_index].fetch(workflow_id, []).map { |aid| state[:attempts][aid] }.select do |attempt|
             (revision.nil? || attempt[:revision] == revision) &&
@@ -206,14 +238,20 @@ module DAG
           end
         end
 
+        # Implements `Ports::Storage#count_attempts` (excluding `:aborted`).
+        # @api private
         def count_attempts(state, workflow_id:, revision:, node_id:)
           count_attempts_internal(state, workflow_id, revision, node_id, exclude: [:aborted])
         end
 
+        # Implements `Ports::Storage#append_event`.
+        # @api private
         def append_event(state, workflow_id:, event:)
           append_event_internal(state, workflow_id, event)
         end
 
+        # Internal: stamp seq + push to event log.
+        # @api private
         def append_event_internal(state, workflow_id, event)
           state[:seq][workflow_id] ||= 0
           state[:seq][workflow_id] += 1
@@ -223,6 +261,8 @@ module DAG
           stamped
         end
 
+        # Implements `Ports::Storage#read_events`.
+        # @api private
         def read_events(state, workflow_id:, after_seq: nil, limit: nil)
           events = state[:events].fetch(workflow_id, [])
           events = events.select { |e| e.seq > after_seq } if after_seq
@@ -230,8 +270,10 @@ module DAG
           events
         end
 
-        # Port extension. Atomic: abort prior :failed attempts, reset their
-        # nodes to :pending, increment workflow_retry_count.
+        # Implements `Ports::Storage#prepare_workflow_retry` (port extension).
+        # Atomic: abort prior `:failed` attempts, reset their nodes to
+        # `:pending`, increment `workflow_retry_count`.
+        # @api private
         def prepare_workflow_retry(state, id:)
           row = fetch_workflow!(state, id)
           revision = row[:current_revision]
@@ -250,6 +292,8 @@ module DAG
           {reset: failed_node_ids, workflow_retry_count: row[:workflow_retry_count]}
         end
 
+        # Internal helper used by `count_attempts` and friends.
+        # @api private
         def count_attempts_internal(state, id, revision, node_id, exclude: [])
           state[:attempts_index].fetch(id, []).count do |aid|
             a = state[:attempts][aid]
@@ -257,6 +301,8 @@ module DAG
           end
         end
 
+        # Internal: map a step result type to its attempt terminal state.
+        # @api private
         def attempt_terminal_state_for(result)
           case result
           when DAG::Success then :committed
@@ -267,6 +313,8 @@ module DAG
           end
         end
 
+        # Internal: assert the requested `node_state` is allowed for the result.
+        # @api private
         def validate_node_state_for_result!(result, node_state)
           allowed = case result
           when DAG::Success then [:committed]

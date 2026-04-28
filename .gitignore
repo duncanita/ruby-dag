@@ -3,3 +3,5 @@
 /coverage/
 /.ruby-lsp/
 /.rubocop_cache/
+/doc/
+/.yardoc/

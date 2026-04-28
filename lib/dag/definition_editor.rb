@@ -1,9 +1,20 @@
 # frozen_string_literal: true
 
 module DAG
+  # Pure planner for structural mutations. Does not read storage, publish
+  # events, or mutate the supplied definition; returns a {DAG::PlanResult}.
+  # @api public
   class DefinitionEditor
+    # Default step type for replacement nodes introduced by `:replace_subtree`.
     DEFAULT_REPLACEMENT_STEP = {type: :noop, config: {}}.freeze
 
+    # Build a {DAG::PlanResult} for the requested `mutation` against
+    # `definition`. The result is `valid?: true` only when the mutation
+    # can be applied; structural errors are returned as `invalid` results
+    # with a human-readable `reason`.
+    # @param definition [DAG::Workflow::Definition]
+    # @param mutation [DAG::ProposedMutation]
+    # @return [DAG::PlanResult]
     def plan(definition, mutation)
       raise ArgumentError, "definition must be a DAG::Workflow::Definition" unless definition.is_a?(DAG::Workflow::Definition)
       raise ArgumentError, "mutation must be a DAG::ProposedMutation" unless mutation.is_a?(DAG::ProposedMutation)
