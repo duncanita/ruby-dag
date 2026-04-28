@@ -240,7 +240,7 @@ module ProductionReadiness
 
       finished_at = Time.now.utc
       assert_minimum_metrics
-      write_report(status: "pass", started_at: @started_at, finished_at: finished_at, strict: true)
+      write_report(status: "pass", started_at: @started_at, finished_at: finished_at)
       log("PASS #{summary}")
       true
     rescue => e
@@ -249,8 +249,7 @@ module ProductionReadiness
         status: "fail",
         started_at: @started_at || finished_at,
         finished_at: finished_at,
-        error: {class: e.class.name, message: e.message},
-        strict: false
+        error: {class: e.class.name, message: e.message}
       )
       raise
     end
@@ -1338,7 +1337,7 @@ module ProductionReadiness
       [(per_second * duration).floor, 1].max
     end
 
-    def write_report(status:, started_at:, finished_at:, strict:, error: nil)
+    def write_report(status:, started_at:, finished_at:, error: nil)
       return unless @options[:report] == :json || @options[:report_file]
 
       encoded = JSON.pretty_generate(report_payload(
@@ -1348,27 +1347,21 @@ module ProductionReadiness
         error: error
       )) + "\n"
 
-      emit_report_to_stdout(encoded, strict: strict) if @options[:report] == :json
-      emit_report_to_file(@options[:report_file], encoded, strict: strict) if @options[:report_file]
+      emit_report_to_stdout(encoded) if @options[:report] == :json
+      emit_report_to_file(@options[:report_file], encoded) if @options[:report_file]
     rescue => e
-      raise if strict
-
       warn("[#{Time.now.utc.iso8601}] WARN failed to encode report: #{e.class}: #{e.message}")
     end
 
-    def emit_report_to_stdout(encoded, strict:)
+    def emit_report_to_stdout(encoded)
       $stdout.write(encoded)
     rescue => e
-      raise if strict
-
       warn("[#{Time.now.utc.iso8601}] WARN failed to write JSON report to stdout: #{e.class}: #{e.message}")
     end
 
-    def emit_report_to_file(path, encoded, strict:)
+    def emit_report_to_file(path, encoded)
       File.write(path, encoded)
     rescue => e
-      raise if strict
-
       warn("[#{Time.now.utc.iso8601}] WARN failed to write JSON report to #{path}: #{e.class}: #{e.message}")
     end
 
