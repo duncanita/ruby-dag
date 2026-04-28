@@ -186,12 +186,13 @@ module ProductionReadiness
         duration: nil,
         seed: DEFAULT_SEED,
         progress_interval: 10,
+        report: nil,
         report_file: nil,
         thresholds_path: DEFAULT_THRESHOLDS_PATH
       }
 
       parser = OptionParser.new do |opts|
-        opts.banner = "Usage: scripts/production_readiness.rb [--fast] [--duration SECONDS] [--seed INTEGER|random] [--report-file PATH] [--thresholds PATH]"
+        opts.banner = "Usage: scripts/production_readiness.rb [--fast] [--duration SECONDS] [--seed INTEGER|random] [--report json] [--report-file PATH] [--thresholds PATH]"
         opts.on("--fast", "Run the short profile. Defaults to #{DEFAULT_FAST_SECONDS}s.") do
           options[:fast] = true
         end
@@ -203,6 +204,12 @@ module ProductionReadiness
         end
         opts.on("--progress-interval SECONDS", Integer, "Progress print interval.") do |seconds|
           options[:progress_interval] = seconds
+        end
+        opts.on("--report FORMAT", "Write a machine-readable report to stdout. Supported: json.") do |format|
+          normalized = format.downcase
+          raise OptionParser::InvalidArgument, "--report supports only json" unless normalized == "json"
+
+          options[:report] = :json
         end
         opts.on("--report-file PATH", "Write a machine-readable JSON report to PATH on exit.") do |path|
           options[:report_file] = path
@@ -238,7 +245,12 @@ module ProductionReadiness
       true
     rescue => e
       finished_at = Time.now.utc
-      write_report(status: "fail", started_at: @started_at || finished_at, finished_at: finished_at, error: {class: e.class.name, message: e.message})
+      write_report(
+        status: "fail",
+        started_at: @started_at || finished_at,
+        finished_at: finished_at,
+        error: {class: e.class.name, message: e.message}
+      )
       raise
     end
 
@@ -274,6 +286,20 @@ module ProductionReadiness
     end
 
     def fixed_scenarios
+      core_fixed_scenarios.each do |scenario|
+        break if expired?
+        scenario.call
+      end
+
+      return if short_duration?
+
+      expensive_fixed_scenarios.each do |scenario|
+        break if expired?
+        scenario.call
+      end
+    end
+
+    def core_fixed_scenarios
       [
         -> { random_completed_workflow_scenario(nodes: 1, edge_probability: 0.0) },
         -> { random_completed_workflow_scenario(nodes: 2, edge_probability: 1.0) },
@@ -290,17 +316,19 @@ module ProductionReadiness
         -> { storage_contract_edge_scenario },
         -> { retry_workflow_scenario },
         -> { subscriber_failure_scenario },
-        -> { bus_overflow_scenario },
+        -> { bus_overflow_scenario }
+      ]
+    end
+
+    def expensive_fixed_scenarios
+      [
         -> { large_graph_scenario(shape: :chain_1000) },
         -> { large_graph_scenario(shape: :fanout_500) },
         -> { large_graph_scenario(shape: :diamond_50x50) },
         -> { long_lived_storage_scenario },
         -> { crash_matrix_scenario },
         -> { determinism_scenario }
-      ].each do |scenario|
-        break if expired?
-        scenario.call
-      end
+      ]
     end
 
     def random_completed_workflow_scenario(nodes: nil, edge_probability: nil)
@@ -1214,6 +1242,10 @@ module ProductionReadiness
       @options[:fast] ? FAST_NODE_RANGE : FULL_NODE_RANGE
     end
 
+    def short_duration?
+      @options.fetch(:duration) < DEFAULT_FAST_SECONDS
+    end
+
     def expired?
       monotonic_seconds >= @deadline
     end
@@ -1237,7 +1269,8 @@ module ProductionReadiness
     end
 
     def log(message)
-      puts("[#{Time.now.utc.iso8601}] #{message}")
+      io = (@options[:report] == :json) ? $stderr : $stdout
+      io.puts("[#{Time.now.utc.iso8601}] #{message}")
     end
 
     def assert(condition, message)
@@ -1287,7 +1320,7 @@ module ProductionReadiness
     def assert_minimum_metrics
       duration = @options.fetch(:duration)
       shortfalls = METRIC_FLOORS.filter_map do |metric, per_second|
-        floor = [(per_second * duration).floor, 1].max
+        floor = metric_floor(per_second, duration)
         actual = @metrics[metric]
         next if actual >= floor
 
@@ -1298,14 +1331,45 @@ module ProductionReadiness
       raise Failure, "metric coverage below floor: #{shortfalls.join(", ")}"
     end
 
-    def write_report(status:, started_at:, finished_at:, error: nil)
-      path = @options[:report_file]
-      return unless path
+    def metric_floor(per_second, duration)
+      return short_duration? ? 0 : 1 if per_second.zero?
 
+      [(per_second * duration).floor, 1].max
+    end
+
+    def write_report(status:, started_at:, finished_at:, error: nil)
+      return unless @options[:report] == :json || @options[:report_file]
+
+      encoded = JSON.pretty_generate(report_payload(
+        status: status,
+        started_at: started_at,
+        finished_at: finished_at,
+        error: error
+      )) + "\n"
+
+      emit_report_to_stdout(encoded) if @options[:report] == :json
+      emit_report_to_file(@options[:report_file], encoded) if @options[:report_file]
+    rescue => e
+      warn("[#{Time.now.utc.iso8601}] WARN failed to encode report: #{e.class}: #{e.message}")
+    end
+
+    def emit_report_to_stdout(encoded)
+      $stdout.write(encoded)
+    rescue => e
+      warn("[#{Time.now.utc.iso8601}] WARN failed to write JSON report to stdout: #{e.class}: #{e.message}")
+    end
+
+    def emit_report_to_file(path, encoded)
+      File.write(path, encoded)
+    rescue => e
+      warn("[#{Time.now.utc.iso8601}] WARN failed to write JSON report to #{path}: #{e.class}: #{e.message}")
+    end
+
+    def report_payload(status:, started_at:, finished_at:, error:)
       report = {
         status: status,
         seed: @options[:seed],
-        duration_s: @options.fetch(:duration),
+        duration: @options.fetch(:duration),
         fast: @options[:fast],
         started_at: started_at.iso8601,
         finished_at: finished_at.iso8601,
@@ -1314,9 +1378,7 @@ module ProductionReadiness
       }
       report[:error] = error if error
 
-      File.write(path, JSON.pretty_generate(report) + "\n")
-    rescue => e
-      warn("[#{Time.now.utc.iso8601}] WARN failed to write --report-file #{path}: #{e.class}: #{e.message}")
+      report
     end
   end
 end
