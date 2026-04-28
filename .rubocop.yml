@@ -1,3 +1,9 @@
+# Style is owned by Standard (`bundle exec standardrb`). RuboCop in this
+# project runs the four custom `DAG/*` cops only — they enforce the
+# kernel anti-patterns from Roadmap v3.4 §9.1 (no Thread/Ractor, no
+# mutable accessors, no in-place mutation in the pure kernel, no
+# non-stdlib runtime requires).
+
 require:
   - ./rubocop/cop/dag/no_thread_or_ractor
   - ./rubocop/cop/dag/no_mutable_accessors
@@ -6,7 +12,8 @@ require:
 
 AllCops:
   TargetRubyVersion: 3.4
-  NewCops: enable
+  DisabledByDefault: true
+  SuggestExtensions: false
 
 DAG/NoThreadOrRactor:
   Enabled: true
