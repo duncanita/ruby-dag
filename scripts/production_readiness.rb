@@ -1348,13 +1348,28 @@ module ProductionReadiness
         error: error
       )) + "\n"
 
-      path = @options[:report_file]
-      File.write(path, encoded) if path
-      $stdout.write(encoded) if @options[:report] == :json
+      emit_report_to_stdout(encoded, strict: strict) if @options[:report] == :json
+      emit_report_to_file(@options[:report_file], encoded, strict: strict) if @options[:report_file]
     rescue => e
       raise if strict
 
-      warn("[#{Time.now.utc.iso8601}] WARN failed to write report: #{e.class}: #{e.message}")
+      warn("[#{Time.now.utc.iso8601}] WARN failed to encode report: #{e.class}: #{e.message}")
+    end
+
+    def emit_report_to_stdout(encoded, strict:)
+      $stdout.write(encoded)
+    rescue => e
+      raise if strict
+
+      warn("[#{Time.now.utc.iso8601}] WARN failed to write JSON report to stdout: #{e.class}: #{e.message}")
+    end
+
+    def emit_report_to_file(path, encoded, strict:)
+      File.write(path, encoded)
+    rescue => e
+      raise if strict
+
+      warn("[#{Time.now.utc.iso8601}] WARN failed to write JSON report to #{path}: #{e.class}: #{e.message}")
     end
 
     def report_payload(status:, started_at:, finished_at:, error:)
