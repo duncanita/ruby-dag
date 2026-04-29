@@ -46,3 +46,6 @@ require_relative "dag/adapters/memory/event_bus"
 require_relative "dag/adapters/memory/storage_state"
 require_relative "dag/adapters/memory/storage"
 require_relative "dag/adapters/memory/crashable_storage"
+
+# Convenience factory for examples, tests, and quick-start scripts
+require_relative "dag/toolkit"

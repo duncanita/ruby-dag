@@ -8,7 +8,10 @@ module DAG
   #
   # Call `freeze!` after registration is complete. Looking up an unknown
   # name raises `UnknownStepTypeError`.
+  # @api public
   class StepTypeRegistry
+    # Internal carrier for one registration entry.
+    # @api private
     Entry = Data.define(:klass, :fingerprint_payload, :config)
 
     def initialize
@@ -50,8 +53,12 @@ module DAG
     end
 
     def registered?(name) = @entries.key?(name.to_sym)
+
+    # @return [Array<Symbol>] registered step-type names
     def names = @entries.keys
 
+    # Freeze the registry to lock the set of registered step types.
+    # @return [self]
     def freeze!
       @entries.freeze
       freeze

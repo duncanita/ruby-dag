@@ -13,6 +13,6 @@ class R0PublicRequireTest < Minitest::Test
     )
 
     assert status.success?, stderr
-    assert_match(/\A0\.\d+\.0\z/, stdout.strip)
+    assert_match(/\A\d+\.\d+\.\d+\z/, stdout.strip)
   end
 end

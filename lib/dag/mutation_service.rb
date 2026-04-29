@@ -1,7 +1,12 @@
 # frozen_string_literal: true
 
 module DAG
+  # Applies structural mutations to a workflow durably. Requires the
+  # workflow to be in `:paused` or `:waiting`; mutating a `:running`
+  # workflow raises {DAG::ConcurrentMutationError}.
+  # @api public
   class MutationService
+    # Workflow states from which mutations may be applied.
     MUTABLE_STATES = %i[paused waiting].freeze
 
     def initialize(storage:, event_bus:, clock:)

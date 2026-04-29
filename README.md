@@ -3,55 +3,65 @@
 Deterministic DAG execution kernel for Roadmap v3.4. Zero runtime
 dependencies; Ruby 3.4+.
 
-> The legacy v0.x runtime (`Workflow::Runner`, YAML loader, parallel
-> strategies, `:exec` / `:ruby_script` / `:sub_workflow` step types) was
-> removed during R1. The current state of the kernel is the deterministic
-> in-memory runtime described below. Durable in-memory resume and adaptive
-> structural mutation are present; SQLite storage arrives in S0.
-
 ## Quick start
 
 ```ruby
 require "ruby-dag"
+registry = DAG::StepTypeRegistry.new
+registry.register(name: :passthrough, klass: DAG::BuiltinSteps::Passthrough, fingerprint_payload: {v: 1})
+registry.freeze!
+kit = DAG::Toolkit.in_memory_kit(registry: registry)
+definition = DAG::Workflow::Definition.new.add_node(:a, type: :passthrough).add_node(:b, type: :passthrough).add_edge(:a, :b)
+id = kit.runner.id_generator.call
+kit.storage.create_workflow(id: id, initial_definition: definition, initial_context: {hello: "world"}, runtime_profile: DAG::RuntimeProfile.default)
+kit.runner.call(id).state # => :completed
+```
 
-storage     = DAG::Adapters::Memory::Storage.new
-event_bus   = DAG::Adapters::Memory::EventBus.new
-clock       = DAG::Adapters::Stdlib::Clock.new
-id_gen      = DAG::Adapters::Stdlib::IdGenerator.new
-fingerprint = DAG::Adapters::Stdlib::Fingerprint.new
-serializer  = DAG::Adapters::Stdlib::Serializer.new
+`DAG::Toolkit.in_memory_kit` is a convenience for examples and tests; production
+callers construct the seven `DAG::Runner` ports explicitly so production-grade
+adapters can be injected.
+
+## Resume after waiting
+
+A step that returns `Waiting` parks the workflow at `:waiting`. Once the
+external condition is satisfied, `Runner#resume` drives the workflow to
+completion without re-running already-committed nodes:
+
+```ruby
+class GateStep < DAG::Step::Base
+  GATE = []
+  def call(_input)
+    if GATE.any?
+      DAG::Success[value: :ok]
+    else
+      DAG::Waiting[reason: :external_dependency]
+    end
+  end
+end
 
 registry = DAG::StepTypeRegistry.new
-registry.register(name: :passthrough,
-                  klass: DAG::BuiltinSteps::Passthrough,
-                  fingerprint_payload: { v: 1 })
+registry.register(name: :gate, klass: GateStep, fingerprint_payload: {v: 1})
 registry.freeze!
 
-definition = DAG::Workflow::Definition.new
-  .add_node(:a, type: :passthrough)
-  .add_node(:b, type: :passthrough)
-  .add_node(:c, type: :passthrough)
-  .add_edge(:a, :b)
-  .add_edge(:b, :c)
+kit = DAG::Toolkit.in_memory_kit(registry: registry)
+definition = DAG::Workflow::Definition.new.add_node(:gate, type: :gate)
+id = kit.runner.id_generator.call
+kit.storage.create_workflow(id: id, initial_definition: definition,
+  initial_context: {}, runtime_profile: DAG::RuntimeProfile.default)
 
-workflow_id = id_gen.call
-storage.create_workflow(
-  id: workflow_id,
-  initial_definition: definition,
-  initial_context: { hello: "world" },
-  runtime_profile: DAG::RuntimeProfile.default
-)
-
-runner = DAG::Runner.new(
-  storage: storage, event_bus: event_bus, registry: registry,
-  clock: clock, id_generator: id_gen,
-  fingerprint: fingerprint, serializer: serializer
-)
-
-result = runner.call(workflow_id)
-result.state
-# => :completed
+kit.runner.call(id).state    # => :waiting
+GateStep::GATE << :open      # external signal arrives
+kit.storage.transition_node_state(workflow_id: id, revision: 1,
+  node_id: :gate, from: :waiting, to: :pending)
+kit.runner.resume(id).state  # => :completed
 ```
+
+`:waiting` nodes are not retried automatically — the consumer signals that
+the wait condition is satisfied by transitioning the node back to
+`:pending`. `Runner#resume` also recovers crashed processes: a workflow
+left in `:running` is unwedged by aborting in-flight attempts before
+recomputing eligibility. Already-committed nodes are not rerun in the
+same revision.
 
 ## Architecture
 
@@ -77,8 +87,8 @@ for the R1 implementation notes.
 
 ## Status
 
-R0-R3 have landed. Next: S0 SQLite storage and the Release v1.0 readiness
-gate (#74).
+R0-R3 have landed. The `1.0.0` release gate is tracked in #74; `S0`
+introduces the SQLite storage adapter once the gate closes.
 
 Roadmap board: <https://github.com/users/duncanita/projects/2>.
 
@@ -86,10 +96,14 @@ Roadmap board: <https://github.com/users/duncanita/projects/2>.
 
 ```bash
 bundle install
-bundle exec rake          # test + standardrb
+bundle exec rake          # tests + Standard + custom DAG cops
 ```
 
-## Production Readiness Stress
+The default rake task runs Minitest, Standard, and the four custom
+`DAG/*` RuboCop cops (`NoThreadOrRactor`, `NoMutableAccessors`,
+`NoInPlaceMutation`, `NoExternalRequires`).
+
+## Production readiness stress
 
 ```bash
 scripts/production_readiness.rb --fast

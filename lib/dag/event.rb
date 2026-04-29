@@ -1,6 +1,10 @@
 # frozen_string_literal: true
 
 module DAG
+  # Durable kernel event. Frozen `Data` value with a JSON-safe payload.
+  # `type` must be one of {Event::TYPES}. `seq` is assigned by storage at
+  # append time (`nil` until then).
+  # @api public
   Event = Data.define(
     :seq,
     :type,
@@ -14,6 +18,9 @@ module DAG
     class << self
       remove_method :[]
 
+      # Build an `Event` with default `seq: nil`, `node_id: nil`,
+      # `attempt_id: nil`, `payload: {}`.
+      # @return [Event]
       def [](type:, workflow_id:, revision:, at_ms:, seq: nil, node_id: nil, attempt_id: nil, payload: {})
         new(
           type: type,
@@ -45,6 +52,7 @@ module DAG
     end
   end
 
+  # Closed set of event type symbols emitted by the kernel.
   Event::TYPES = %i[
     workflow_started
     node_started

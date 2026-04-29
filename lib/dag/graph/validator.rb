@@ -28,10 +28,18 @@ module DAG
       def valid? = errors.empty?
     end
 
+    # Validates a Graph for structural issues beyond basic acyclicity.
+    # @api public
     class Validator
+      # Names of all rule slots the validator knows about.
       AVAILABLE_RULES = %i[no_isolated].freeze
+      # Rule slots active when `defaults:` is not overridden.
       DEFAULT_RULES = %i[no_isolated].freeze
 
+      # @param graph [Graph]
+      # @param defaults [Array<Symbol>] rules from {AVAILABLE_RULES}
+      # @yieldparam validator [Validator] used to register custom `rule`s
+      # @return [Report]
       def self.validate(graph, defaults: DEFAULT_RULES, &block)
         validator = new(graph, defaults: defaults)
         block&.call(validator)
@@ -50,10 +58,16 @@ module DAG
         @custom_rules = []
       end
 
+      # Register a custom rule. The block receives the graph and must
+      # return a truthy value when the rule is satisfied.
+      # @param message [String] error message used when the rule fails
+      # @return [void]
       def rule(message, &block)
         @custom_rules << [message, block]
       end
 
+      # Apply default + custom rules and return a {Report}.
+      # @return [Report]
       def run
         errors = []
         check_isolated_nodes(errors) if @defaults.include?(:no_isolated)

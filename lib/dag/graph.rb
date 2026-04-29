@@ -3,6 +3,7 @@
 module DAG
   # Pure DAG. Nodes are Symbols (anything `to_sym`able on input). Edges are
   # `Edge` Data values with optional metadata.
+  # @api public
   #
   # ## Iteration
   #
@@ -142,22 +143,32 @@ module DAG
 
     # --- Immutable builders ---
 
+    # Return a new frozen Graph with `name` added.
+    # @return [Graph]
     def with_node(name)
       dup.add_node(name).freeze
     end
 
+    # Return a new frozen Graph with the edge added.
+    # @return [Graph]
     def with_edge(from, to, **metadata)
       dup.add_edge(from, to, **metadata).freeze
     end
 
+    # Return a new frozen Graph with `name` (and its incident edges) removed.
+    # @return [Graph]
     def without_node(name)
       dup.tap { |g| g.remove_node(name) }.freeze
     end
 
+    # Return a new frozen Graph with the edge `from -> to` removed.
+    # @return [Graph]
     def without_edge(from, to)
       dup.tap { |g| g.remove_edge(from, to) }.freeze
     end
 
+    # Return a new frozen Graph with `old_name` renamed to `new_name`.
+    # @return [Graph]
     def with_node_replaced(old_name, new_name)
       dup.tap { |g| g.replace_node(old_name, new_name) }.freeze
     end
@@ -191,12 +202,14 @@ module DAG
     # measuring. `size` aliases `node_count` for symmetry with collection types.
     def node_count = @nodes.size
 
+    # @return [Integer]
     def edge_count
       n = 0
       @adjacency.each_value { |s| n += s.size }
       n
     end
 
+    # @return [Integer] alias for `node_count`
     def size = @nodes.size
     def empty? = @nodes.empty?
     def node?(name) = @nodes.include?(name.to_sym)
@@ -205,7 +218,10 @@ module DAG
       fetch_set(@adjacency, from.to_sym).include?(to.to_sym)
     end
 
+    # @return [Integer]
     def indegree(name) = fetch_set(@reverse, name.to_sym).size
+
+    # @return [Integer]
     def outdegree(name) = fetch_set(@adjacency, name.to_sym).size
 
     # --- Edge objects ---
@@ -215,6 +231,7 @@ module DAG
       compute_edges
     end
 
+    # @return [Set<Edge>]
     def incoming_edges(node)
       sym = node.to_sym
       fetch_set(@reverse, sym).each_with_object(Set.new) do |from, set|
@@ -222,26 +239,38 @@ module DAG
       end
     end
 
+    # @return [Hash] frozen edge metadata or an empty frozen hash
     def edge_metadata(from, to)
       @edge_metadata.dig(from.to_sym, to.to_sym) || EMPTY_HASH
     end
 
     # --- Neighbor queries ---
 
+    # @return [Set<Symbol>]
     def successors(name) = fetch_set(@adjacency, name.to_sym).dup
+
+    # @return [Set<Symbol>]
     def predecessors(name) = fetch_set(@reverse, name.to_sym).dup
 
+    # @return [Set<Symbol>] nodes with no predecessors
     def roots = frozen? ? @cached_roots : nodes_with_no(@reverse)
+
+    # @return [Set<Symbol>] nodes with no successors
     def leaves = frozen? ? @cached_leaves : nodes_with_no(@adjacency)
 
     # Root/leaf iteration convenience. Useful when the caller wants ordered
     # iteration (insertion order) rather than a Set.
     def each_root(&block) = roots.each(&block)
+
+    # @see #each_root
     def each_leaf(&block) = leaves.each(&block)
 
     # --- Transitive queries ---
 
+    # @return [Set<Symbol>] strict ancestors of `name`
     def ancestors(name) = walk(@reverse, name.to_sym)
+
+    # @return [Set<Symbol>] strict descendants of `name`
     def descendants(name) = walk(@adjacency, name.to_sym)
 
     # Descendants of `root_id` as a Set, optionally including the root itself.
@@ -294,6 +323,7 @@ module DAG
       compute_topological_layers
     end
 
+    # @return [Array<Symbol>] flat deterministic topological order
     def topological_sort
       return @cached_sort if frozen?
       topological_layers.flatten
@@ -347,6 +377,8 @@ module DAG
       @nodes.each(&block)
     end
 
+    # @yieldparam edge [DAG::Edge]
+    # @return [Enumerator] when no block is given
     def each_edge(&block)
       return enum_for(:each_edge) unless block
       edges.each(&block)
@@ -397,6 +429,8 @@ module DAG
       lines.join("\n")
     end
 
+    # Canonical, ASCII-sorted hash representation suitable for fingerprinting.
+    # @return [Hash]
     def to_h
       sorted_edges = edges.to_a.sort_by { |e| [e.from.to_s, e.to.to_s] }
       {
@@ -424,10 +458,12 @@ module DAG
     end
     alias_method :eql?, :==
 
+    # @return [Integer]
     def hash
       [@nodes, edges].hash
     end
 
+    # @return [String]
     def inspect
       "#<DAG::Graph nodes=#{@nodes.to_a} edges=#{edges.size}>"
     end

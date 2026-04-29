@@ -1,10 +1,19 @@
 # frozen_string_literal: true
 
 module DAG
+  # Carrier the Runner passes to each step's `#call`. `context` is a
+  # deep-frozen `ExecutionContext`; `metadata` carries `workflow_id` and
+  # `revision`.
+  # @api public
   StepInput = Data.define(:context, :node_id, :attempt_number, :metadata) do
     class << self
       remove_method :[]
 
+      # @param context [DAG::ExecutionContext]
+      # @param node_id [Symbol]
+      # @param attempt_number [Integer]
+      # @param metadata [Hash]
+      # @return [StepInput]
       def [](context:, node_id:, attempt_number: 1, metadata: {})
         new(
           context: context,

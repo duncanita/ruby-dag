@@ -1,10 +1,18 @@
 # frozen_string_literal: true
 
 module DAG
+  # Structural replacement graph used by `:replace_subtree` mutations.
+  # Carries graph shape plus explicit entry and exit node ids; entry/exit
+  # are not inferred from roots/leaves.
+  # @api public
   ReplacementGraph = Data.define(:graph, :entry_node_ids, :exit_node_ids) do
     class << self
       remove_method :[]
 
+      # @param graph [DAG::Graph]
+      # @param entry_node_ids [Array<Symbol, String>] non-empty
+      # @param exit_node_ids [Array<Symbol, String>] non-empty
+      # @return [ReplacementGraph]
       def [](graph:, entry_node_ids:, exit_node_ids:)
         new(graph: graph, entry_node_ids: entry_node_ids, exit_node_ids: exit_node_ids)
       end
