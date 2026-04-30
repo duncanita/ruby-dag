@@ -39,9 +39,10 @@ workflows.
 `proposed_effects` is an Array of `DAG::Effects::Intent`. On `Success`, effects
 are detached: they describe external work that does not block committing the
 node. On `Waiting`, effects are blocking: they describe external work that must
-finish before the step can produce its final result. PR2 adds durable storage
-reservation for the prepared effect intents; dispatch and concrete handlers
-remain outside the runner.
+finish before the step can produce its final result. The Runner prepares these
+intents with execution coordinates and payload fingerprints, then storage
+reserves them atomically with the attempt commit. Dispatch and concrete
+handlers remain outside the runner.
 
 ## Effects Value Layer
 
@@ -96,6 +97,51 @@ or the effect is still pending/retriable, it returns
 is `:succeeded`, it yields the durable effect result to the continuation and
 requires the continuation to return a legal step result. If the snapshot is
 `:failed_terminal`, it returns a non-retriable `Failure`.
+
+## Runner Effect Integration
+
+Every step input includes an effect snapshot scoped to the current workflow
+revision and current node:
+
+```ruby
+input.metadata[:effects]
+```
+
+The snapshot is a JSON-safe Hash keyed by effect `ref`. Values are plain frozen
+Hashes, not `DAG::Effects::Record` objects, so `StepInput` remains durable and
+JSON-safe. The snapshot contains stable effect data:
+
+```text
+id
+ref
+type
+key
+payload
+payload_fingerprint
+blocking
+status
+result
+error
+external_ref
+not_before_ms
+metadata
+```
+
+Lease fields and storage timestamps are intentionally excluded from
+`StepInput`; they are dispatcher coordination data, not step input data.
+
+When a step returns `Success` or `Waiting` with `proposed_effects`, the Runner
+converts each `Intent` into a `PreparedIntent` before calling storage. It uses
+the injected fingerprint port to compute `payload_fingerprint` from
+`intent.payload`, fills in workflow/revision/node/attempt coordinates, and sets
+`blocking: true` for `Waiting` and `blocking: false` for `Success`.
+
+For `:node_waiting` events, the durable event payload includes:
+
+```ruby
+effect_refs: [...]
+effect_count: Integer
+```
 
 ## Effect Storage Contract
 
