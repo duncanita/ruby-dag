@@ -16,7 +16,10 @@ Steps should be frozen. Durable workflow inputs and outputs must be JSON-safe.
 Steps are idempotent functions of their `StepInput`: the same input should
 produce the same `Success`, `Waiting`, or `Failure`, excluding trace metadata.
 The kernel guarantees at-most-once result commit, not at-most-once invocation.
-Consumers must protect external effects with their own ledgers.
+For abstract effects, the storage contract guarantees durable intent
+reservation. Consumers still own exactly-once protection against concrete
+external systems through remote idempotency keys, reconciliation, or equivalent
+application logic.
 
 ## Step Result Contract
 
@@ -36,9 +39,9 @@ workflows.
 `proposed_effects` is an Array of `DAG::Effects::Intent`. On `Success`, effects
 are detached: they describe external work that does not block committing the
 node. On `Waiting`, effects are blocking: they describe external work that must
-finish before the step can produce its final result. PR1 validates and
-transports these values only; durable reservation and dispatch are storage and
-dispatcher concerns introduced by later effect-aware phases.
+finish before the step can produce its final result. PR2 adds durable storage
+reservation for the prepared effect intents; dispatch and concrete handlers
+remain outside the runner.
 
 ## Effects Value Layer
 
@@ -93,6 +96,62 @@ or the effect is still pending/retriable, it returns
 is `:succeeded`, it yields the durable effect result to the continuation and
 requires the continuation to return a legal step result. If the snapshot is
 `:failed_terminal`, it returns a non-retriable `Failure`.
+
+## Effect Storage Contract
+
+Effect reservation is part of the attempt commit atomic boundary:
+
+```ruby
+storage.commit_attempt(attempt_id:, result:, node_state:, event:, effects: [])
+```
+
+`effects` contains `DAG::Effects::PreparedIntent` values. Adapters must persist
+the attempt result, attempt state, node state, durable event, effect records,
+and attempt-effect links in one logical transaction. If effect reservation
+raises, the attempt, node state, event log, and links must remain unchanged.
+
+Effect identity is semantic and global to the storage adapter:
+
+```text
+identity = [type, key]
+ref      = "#{type}:#{key}"
+```
+
+The first reservation for a `ref` creates a durable `DAG::Effects::Record` in
+`:reserved`. A later reservation with the same `ref` and the same
+`payload_fingerprint` reuses the record and adds a new attempt-effect link. A
+later reservation with the same `ref` and a different `payload_fingerprint`
+raises `DAG::Effects::IdempotencyConflictError`.
+
+The storage effect API is:
+
+```ruby
+storage.list_effects_for_node(workflow_id:, revision:, node_id:)
+storage.list_effects_for_attempt(attempt_id:)
+storage.claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:)
+storage.mark_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
+storage.mark_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
+storage.release_nodes_satisfied_by_effect(effect_id:, now_ms:)
+```
+
+`claim_ready_effects` may claim records in `:reserved`, records in
+`:failed_retriable` whose `not_before_ms` is absent or due, and records in
+`:dispatching` whose lease has expired. Claiming sets `status: :dispatching`,
+`lease_owner`, `lease_until_ms`, and `updated_at_ms` atomically. A non-expired
+lease cannot be claimed by another owner.
+
+`mark_effect_succeeded` and `mark_effect_failed` require the current lease
+owner and a non-expired lease; otherwise they raise
+`DAG::Effects::StaleLeaseError`. Success sets `status: :succeeded` and stores
+the JSON-safe result and external reference. Retriable failure sets
+`status: :failed_retriable`, stores the JSON-safe error, and may set
+`not_before_ms`. Terminal failure sets `status: :failed_terminal`.
+
+`:succeeded` and `:failed_terminal` are terminal effect states.
+`release_nodes_satisfied_by_effect` resets linked nodes from `:waiting` to
+`:pending` only when every blocking effect linked to that waiting attempt is
+terminal. Detached effects (`blocking: false`) never hold a node in
+`:waiting`.
 
 ## Execution Context
 
@@ -173,10 +232,10 @@ not rerun automatically; a consumer must make an explicit app-level decision
 and update state/context before retrying them.
 
 `commit_attempt` is the atomic durability boundary for node execution. When it
-returns, result, attempt state, node state, and the durable event are committed
-together. If a process crashes before that boundary, the step may be invoked
-again on resume. If it crashes after the boundary, resume starts from the next
-eligible node.
+returns, result, attempt state, node state, the durable event, and any prepared
+effect reservations are committed together. If a process crashes before that
+boundary, the step may be invoked again on resume. If it crashes after the
+boundary, resume starts from the next eligible node.
 
 `transition_workflow_state` is the equivalent atomic durability boundary for
 **workflow-level** state changes. It accepts an optional `event:` keyword:
