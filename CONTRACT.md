@@ -139,6 +139,26 @@ This is a port extension over the canonical roadmap signature
 justification. SQLite (S0) implements the same atomicity via a single
 transaction.
 
+`prepare_workflow_retry` is the atomic durability boundary for explicit
+workflow retry:
+
+```ruby
+storage.prepare_workflow_retry(id:, from: :failed, to: :pending, event: nil)
+# returns {id:, state:, reset:, workflow_retry_count:, event: stamped_or_nil}
+```
+
+The operation checks the workflow is still in `from` and that
+`workflow_retry_count < max_workflow_retries`, aborts failed attempts
+for failed nodes in the current revision, resets those nodes to `:pending`,
+increments `workflow_retry_count`, transitions the workflow to `to`, and
+optionally appends `event:` in the same storage step. `Runner#retry_workflow`
+must not follow this with a separate `transition_workflow_state`, and must
+not pre-check the budget outside the atomic boundary: a stale read of
+`workflow_retry_count` between two concurrent retries (with the workflow
+re-failing in between) would let both pass the Ruby-level check and bypass
+the budget. The atomic guard inside `prepare_workflow_retry` is the source
+of truth for both the state CAS and the retry budget.
+
 The Runner owns attempt numbering. It computes:
 
 ```ruby
