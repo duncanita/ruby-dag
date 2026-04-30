@@ -271,11 +271,23 @@ module DAG
         end
 
         # Implements `Ports::Storage#prepare_workflow_retry` (port extension).
-        # Atomic: abort prior `:failed` attempts, reset their nodes to
-        # `:pending`, increment `workflow_retry_count`.
+        # Atomic retry boundary: guard workflow state and retry budget, abort
+        # prior `:failed` attempts, reset their nodes to `:pending`, increment
+        # `workflow_retry_count`, transition the workflow, and optionally
+        # append a durable event.
         # @api private
-        def prepare_workflow_retry(state, id:)
+        def prepare_workflow_retry(state, id:, from: :failed, to: :pending, event: nil)
           row = fetch_workflow!(state, id)
+          unless row[:state] == from
+            raise StaleStateError, "workflow #{id} state is #{row[:state].inspect}, expected #{from.inspect}"
+          end
+
+          max_retries = row[:runtime_profile].max_workflow_retries
+          if row[:workflow_retry_count] >= max_retries
+            raise WorkflowRetryExhaustedError,
+              "workflow retries exhausted (#{row[:workflow_retry_count]}/#{max_retries})"
+          end
+
           revision = row[:current_revision]
           states_for_rev = fetch_node_states!(state, id, revision)
           failed_node_ids = states_for_rev.select { |_, s| s == :failed }.keys
@@ -288,8 +300,10 @@ module DAG
           end
           failed_node_ids.each { |node_id| states_for_rev[node_id] = :pending }
           row[:workflow_retry_count] += 1
+          row[:state] = to
+          stamped = event ? append_event_internal(state, id, event) : nil
 
-          {reset: failed_node_ids, workflow_retry_count: row[:workflow_retry_count]}
+          {id: id, state: to, reset: failed_node_ids, workflow_retry_count: row[:workflow_retry_count], event: stamped}
         end
 
         # Internal helper used by `count_attempts` and friends.
