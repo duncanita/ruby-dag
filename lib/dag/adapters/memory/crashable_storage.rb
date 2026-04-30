@@ -62,6 +62,15 @@ module DAG
           row
         end
 
+        # (see Ports::Storage#prepare_workflow_retry)
+        def prepare_workflow_retry(id:, from: :failed, to: :pending, event: nil)
+          context = {workflow_id: id, from: from, to: to}
+          crash_if!(:before, :prepare_workflow_retry, context)
+          row = super
+          crash_if!(:after, :prepare_workflow_retry, context)
+          row
+        end
+
         # Export the underlying state into a fresh `Memory::Storage`
         # without crash injection. Mirrors a process restart after the
         # simulated crash has been observed.

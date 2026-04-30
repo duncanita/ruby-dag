@@ -179,15 +179,27 @@ module DAG
         raise PortNotImplementedError
       end
 
-      # Port extension (see CLAUDE.md "Port extensions"). Atomically:
+      # Port extension (see CLAUDE.md "Port extensions"). With a CAS guard on
+      # workflow state and on the retry budget, atomically:
       # (a) find :failed nodes for the workflow's current revision,
       # (b) mark each corresponding :failed attempt as :aborted,
       # (c) transition those nodes back to :pending,
-      # (d) increment the workflow's retry-count tracking.
+      # (d) increment the workflow's retry-count tracking,
+      # (e) transition the workflow row from `from` to `to`,
+      # (f) append the supplied durable event, when present.
+      #
+      # The retry-budget check (`workflow_retry_count < max_workflow_retries`)
+      # lives inside the atomic boundary so concurrent retries cannot bypass
+      # it via stale reads from outside the transaction.
       #
       # @param id [String]
-      # @return [Hash] {reset: [node_id, ...], workflow_retry_count: Integer}
-      def prepare_workflow_retry(id:)
+      # @param from [Symbol] expected current workflow state
+      # @param to [Symbol] target workflow state
+      # @param event [DAG::Event, nil] optional event to append in the same atomic step
+      # @raise [DAG::StaleStateError] when current state is not `from`
+      # @raise [DAG::WorkflowRetryExhaustedError] when the retry budget is spent
+      # @return [Hash] {id:, state:, reset:, workflow_retry_count:, event: stamped_event_or_nil}
+      def prepare_workflow_retry(id:, from: :failed, to: :pending, event: nil)
         raise PortNotImplementedError
       end
     end

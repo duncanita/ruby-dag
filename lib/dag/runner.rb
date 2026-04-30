@@ -92,15 +92,7 @@ module DAG
     # @raise [DAG::StaleStateError] when the workflow is not `:failed`
     # @raise [DAG::WorkflowRetryExhaustedError] when the budget is spent
     def retry_workflow(workflow_id)
-      workflow = @storage.load_workflow(id: workflow_id)
-      raise StaleStateError, "workflow not in :failed state (#{workflow[:state].inspect})" unless workflow[:state] == :failed
-
-      retry_count = workflow[:workflow_retry_count]
-      max = workflow[:runtime_profile].max_workflow_retries
-      raise WorkflowRetryExhaustedError, "workflow retries exhausted (#{retry_count}/#{max})" if retry_count >= max
-
-      @storage.prepare_workflow_retry(id: workflow_id)
-      @storage.transition_workflow_state(id: workflow_id, from: :failed, to: :pending)
+      @storage.prepare_workflow_retry(id: workflow_id, from: :failed, to: :pending)
       call(workflow_id)
     end
 

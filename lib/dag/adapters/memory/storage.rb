@@ -102,8 +102,8 @@ module DAG
         end
 
         # (see Ports::Storage#prepare_workflow_retry)
-        def prepare_workflow_retry(id:)
-          frozen StorageState.prepare_workflow_retry(@state, id: id)
+        def prepare_workflow_retry(id:, from: :failed, to: :pending, event: nil)
+          frozen StorageState.prepare_workflow_retry(@state, id: id, from: from, to: to, event: event)
         end
 
         private
