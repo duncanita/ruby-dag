@@ -118,14 +118,83 @@ module DAG
       end
 
       # One-shot atomic terminal transition for an attempt. Adapters must reject
-      # commits for attempts that are no longer :running.
+      # commits for attempts that are no longer :running. Effect-aware adapters
+      # also persist/link `effects` in the same atomic step.
       #
       # @param attempt_id [String]
       # @param result [DAG::Success, DAG::Waiting, DAG::Failure]
       # @param node_state [Symbol] target node state after this commit
       # @param event [DAG::Event] durable event to append in the same step
-      # @return [void]
-      def commit_attempt(attempt_id:, result:, node_state:, event:)
+      # @param effects [Array<DAG::Effects::PreparedIntent>] prepared effect intents to reserve/link
+      # @return [DAG::Event] stamped event
+      def commit_attempt(attempt_id:, result:, node_state:, event:, effects: [])
+        raise PortNotImplementedError
+      end
+
+      # List durable effect snapshots linked to a workflow node in a revision.
+      #
+      # @param workflow_id [String]
+      # @param revision [Integer]
+      # @param node_id [Symbol]
+      # @return [Array<DAG::Effects::Record>]
+      def list_effects_for_node(workflow_id:, revision:, node_id:)
+        raise PortNotImplementedError
+      end
+
+      # List durable effect snapshots linked to an attempt.
+      #
+      # @param attempt_id [String]
+      # @return [Array<DAG::Effects::Record>]
+      def list_effects_for_attempt(attempt_id:)
+        raise PortNotImplementedError
+      end
+
+      # Atomically claim ready effect records by assigning a lease.
+      #
+      # @param limit [Integer] maximum number of records to claim
+      # @param owner_id [String] dispatcher owner id
+      # @param lease_ms [Integer] lease duration in milliseconds
+      # @param now_ms [Integer] current wall-clock milliseconds
+      # @return [Array<DAG::Effects::Record>] claimed records
+      def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:)
+        raise PortNotImplementedError
+      end
+
+      # Mark a claimed effect as succeeded.
+      #
+      # @param effect_id [String]
+      # @param owner_id [String] current lease owner
+      # @param result [Object] JSON-safe result
+      # @param external_ref [Object, nil] JSON-safe external reference
+      # @param now_ms [Integer]
+      # @return [DAG::Effects::Record]
+      # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
+      def mark_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
+        raise PortNotImplementedError
+      end
+
+      # Mark a claimed effect as failed, either retriable or terminal.
+      #
+      # @param effect_id [String]
+      # @param owner_id [String] current lease owner
+      # @param error [Object] JSON-safe error
+      # @param retriable [Boolean]
+      # @param not_before_ms [Integer, nil] retry delay hint for retriable failures
+      # @param now_ms [Integer]
+      # @return [DAG::Effects::Record]
+      # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
+      def mark_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
+        raise PortNotImplementedError
+      end
+
+      # Reset waiting nodes linked to `effect_id` once all blocking effects for
+      # the waiting attempt are terminal. The node is reset to :pending; the
+      # waiting attempt remains waiting as durable history.
+      #
+      # @param effect_id [String]
+      # @param now_ms [Integer]
+      # @return [Array<Hash>] released workflow/node coordinates
+      def release_nodes_satisfied_by_effect(effect_id:, now_ms:)
         raise PortNotImplementedError
       end
 

@@ -8,6 +8,7 @@ class MemoryStorageContractTest < Minitest::Test
   include StorageContract::RevisionCAS
   include StorageContract::AttemptAtomicity
   include StorageContract::EventLog
+  include StorageContract::Effects
 
   def build_contract_storage
     DAG::Adapters::Memory::Storage.new

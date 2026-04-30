@@ -36,7 +36,7 @@ module DAG
         end
 
         # (see Ports::Storage#commit_attempt)
-        def commit_attempt(attempt_id:, result:, node_state:, event:)
+        def commit_attempt(attempt_id:, result:, node_state:, event:, effects: [])
           context = attempt_context(attempt_id).merge(node_state: node_state)
           crash_if_any!(%i[before_commit before], :commit_attempt, context)
           stamped = super

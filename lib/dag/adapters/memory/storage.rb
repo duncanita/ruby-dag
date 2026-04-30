@@ -72,8 +72,60 @@ module DAG
         end
 
         # (see Ports::Storage#commit_attempt)
-        def commit_attempt(attempt_id:, result:, node_state:, event:)
-          frozen StorageState.commit_attempt(@state, attempt_id: attempt_id, result: result, node_state: node_state, event: event)
+        def commit_attempt(attempt_id:, result:, node_state:, event:, effects: [])
+          frozen StorageState.commit_attempt(
+            @state,
+            attempt_id: attempt_id,
+            result: result,
+            node_state: node_state,
+            event: event,
+            effects: effects
+          )
+        end
+
+        # (see Ports::Storage#list_effects_for_node)
+        def list_effects_for_node(workflow_id:, revision:, node_id:)
+          frozen StorageState.list_effects_for_node(@state, workflow_id: workflow_id, revision: revision, node_id: node_id)
+        end
+
+        # (see Ports::Storage#list_effects_for_attempt)
+        def list_effects_for_attempt(attempt_id:)
+          frozen StorageState.list_effects_for_attempt(@state, attempt_id: attempt_id)
+        end
+
+        # (see Ports::Storage#claim_ready_effects)
+        def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:)
+          frozen StorageState.claim_ready_effects(@state, limit: limit, owner_id: owner_id, lease_ms: lease_ms, now_ms: now_ms)
+        end
+
+        # (see Ports::Storage#mark_effect_succeeded)
+        def mark_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
+          frozen StorageState.mark_effect_succeeded(
+            @state,
+            effect_id: effect_id,
+            owner_id: owner_id,
+            result: result,
+            external_ref: external_ref,
+            now_ms: now_ms
+          )
+        end
+
+        # (see Ports::Storage#mark_effect_failed)
+        def mark_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
+          frozen StorageState.mark_effect_failed(
+            @state,
+            effect_id: effect_id,
+            owner_id: owner_id,
+            error: error,
+            retriable: retriable,
+            not_before_ms: not_before_ms,
+            now_ms: now_ms
+          )
+        end
+
+        # (see Ports::Storage#release_nodes_satisfied_by_effect)
+        def release_nodes_satisfied_by_effect(effect_id:, now_ms:)
+          frozen StorageState.release_nodes_satisfied_by_effect(@state, effect_id: effect_id, now_ms: now_ms)
         end
 
         # (see Ports::Storage#abort_running_attempts)

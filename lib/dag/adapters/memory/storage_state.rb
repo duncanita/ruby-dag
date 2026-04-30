@@ -22,6 +22,12 @@ module DAG
             attempts: {},    # {attempt_id => attempt_record}
             attempts_index: {}, # {workflow_id => [attempt_id, ...]}
             attempt_seq: {}, # {workflow_id => Integer} monotonic, never reset
+            effects: {}, # {effect_id => DAG::Effects::Record}
+            effects_by_ref: {}, # {ref => effect_id}
+            effect_order: [], # [effect_id, ...] insertion order for deterministic claims
+            effect_seq: 0, # global effect id sequence
+            attempt_effect_links: {}, # {attempt_id => [effect_link, ...]}
+            node_effect_links: {}, # {[workflow_id, revision, node_id] => [effect_link, ...]}
             events: {},      # {workflow_id => [event, ...]}
             seq: {}          # {workflow_id => Integer} event seq
           }
@@ -39,6 +45,18 @@ module DAG
           state[:node_states].fetch([id, revision]) do
             raise StaleRevisionError, "no node states for #{id} revision #{revision}"
           end
+        end
+
+        # Internal: initialize effect-ledger keys for snapshots created before
+        # the effect-aware storage extension existed.
+        # @api private
+        def ensure_effect_state!(state)
+          state[:effects] ||= {}
+          state[:effects_by_ref] ||= {}
+          state[:effect_order] ||= state[:effects].keys
+          state[:effect_seq] ||= state[:effects].size
+          state[:attempt_effect_links] ||= {}
+          state[:node_effect_links] ||= {}
         end
 
         # Implements `Ports::Storage#create_workflow`.
@@ -184,7 +202,7 @@ module DAG
 
         # Implements `Ports::Storage#commit_attempt`.
         # @api private
-        def commit_attempt(state, attempt_id:, result:, node_state:, event:)
+        def commit_attempt(state, attempt_id:, result:, node_state:, event:, effects: [])
           attempt = state[:attempts].fetch(attempt_id) do
             raise ArgumentError, "Unknown attempt: #{attempt_id}"
           end
@@ -200,11 +218,134 @@ module DAG
             raise StaleStateError, "node #{attempt[:node_id]} state is #{current_node_state.inspect}, expected :running"
           end
 
+          reservations = prepare_effect_reservations(state, attempt, effects)
+
           attempt[:result] = result
           attempt[:state] = terminal_state
           rev_states[attempt[:node_id]] = node_state
+          apply_effect_reservations(state, reservations)
 
           append_event_internal(state, attempt[:workflow_id], event)
+        end
+
+        # Implements `Ports::Storage#list_effects_for_node`.
+        # @api private
+        def list_effects_for_node(state, workflow_id:, revision:, node_id:)
+          ensure_effect_state!(state)
+          links = state[:node_effect_links].fetch([workflow_id, revision, node_id.to_sym], [])
+          records_for_links(state, links)
+        end
+
+        # Implements `Ports::Storage#list_effects_for_attempt`.
+        # @api private
+        def list_effects_for_attempt(state, attempt_id:)
+          ensure_effect_state!(state)
+          records_for_links(state, state[:attempt_effect_links].fetch(attempt_id, []))
+        end
+
+        # Implements `Ports::Storage#claim_ready_effects`.
+        # @api private
+        def claim_ready_effects(state, limit:, owner_id:, lease_ms:, now_ms:)
+          ensure_effect_state!(state)
+          validate_nonnegative_integer!(limit, "limit")
+          validate_string!(owner_id, "owner_id")
+          validate_positive_integer!(lease_ms, "lease_ms")
+          validate_integer!(now_ms, "now_ms")
+
+          claimed = []
+          state[:effect_order].each do |effect_id|
+            break if claimed.size >= limit
+
+            record = state[:effects].fetch(effect_id)
+            next unless claimable_effect?(record, now_ms)
+
+            updated = record.with(
+              status: :dispatching,
+              lease_owner: owner_id,
+              lease_until_ms: now_ms + lease_ms,
+              updated_at_ms: now_ms
+            )
+            state[:effects][effect_id] = updated
+            claimed << updated
+          end
+          claimed
+        end
+
+        # Implements `Ports::Storage#mark_effect_succeeded`.
+        # @api private
+        def mark_effect_succeeded(state, effect_id:, owner_id:, result:, external_ref:, now_ms:)
+          ensure_effect_state!(state)
+          validate_string!(owner_id, "owner_id")
+          validate_integer!(now_ms, "now_ms")
+          record = fetch_effect!(state, effect_id)
+          validate_effect_lease!(record, owner_id: owner_id, now_ms: now_ms)
+
+          updated = record.with(
+            status: :succeeded,
+            result: result,
+            error: nil,
+            external_ref: external_ref,
+            not_before_ms: nil,
+            lease_owner: nil,
+            lease_until_ms: nil,
+            updated_at_ms: now_ms
+          )
+          state[:effects][effect_id] = updated
+        end
+
+        # Implements `Ports::Storage#mark_effect_failed`.
+        # @api private
+        def mark_effect_failed(state, effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
+          ensure_effect_state!(state)
+          validate_string!(owner_id, "owner_id")
+          validate_integer!(now_ms, "now_ms")
+          unless retriable == true || retriable == false
+            raise ArgumentError, "retriable must be true or false"
+          end
+          record = fetch_effect!(state, effect_id)
+          validate_effect_lease!(record, owner_id: owner_id, now_ms: now_ms)
+
+          updated = record.with(
+            status: retriable ? :failed_retriable : :failed_terminal,
+            result: nil,
+            error: error,
+            external_ref: nil,
+            not_before_ms: retriable ? not_before_ms : nil,
+            lease_owner: nil,
+            lease_until_ms: nil,
+            updated_at_ms: now_ms
+          )
+          state[:effects][effect_id] = updated
+        end
+
+        # Implements `Ports::Storage#release_nodes_satisfied_by_effect`.
+        # @api private
+        def release_nodes_satisfied_by_effect(state, effect_id:, now_ms:)
+          ensure_effect_state!(state)
+          validate_integer!(now_ms, "now_ms")
+          fetch_effect!(state, effect_id)
+
+          released = []
+          state[:attempt_effect_links].each_value do |links|
+            links.each do |link|
+              next unless link[:effect_id] == effect_id && link[:blocking]
+
+              revision_key = [link[:workflow_id], link[:revision]]
+              states_for_rev = state[:node_states].fetch(revision_key, nil)
+              next unless states_for_rev && states_for_rev[link[:node_id]] == :waiting
+              next unless blocking_effects_terminal?(state, link[:attempt_id])
+
+              states_for_rev[link[:node_id]] = :pending
+              released << {
+                workflow_id: link[:workflow_id],
+                revision: link[:revision],
+                node_id: link[:node_id],
+                attempt_id: link[:attempt_id],
+                released_at_ms: now_ms
+              }
+            end
+          end
+          released
         end
 
         # Implements `Ports::Storage#abort_running_attempts`.
@@ -304,6 +445,207 @@ module DAG
           stamped = event ? append_event_internal(state, id, event) : nil
 
           {id: id, state: to, reset: failed_node_ids, workflow_retry_count: row[:workflow_retry_count], event: stamped}
+        end
+
+        # Internal: validate and stage effect reservations without mutating
+        # storage. This keeps commit_attempt rollback semantics simple: a
+        # fingerprint conflict is raised before attempt/node/event state moves.
+        # @api private
+        def prepare_effect_reservations(state, attempt, effects)
+          ensure_effect_state!(state)
+          raise ArgumentError, "effects must be an Array" unless effects.is_a?(Array)
+
+          next_effect_seq = state[:effect_seq]
+          pending_by_ref = {}
+          new_records = []
+          links = []
+
+          effects.each_with_index do |effect, index|
+            validate_prepared_effect!(effect, attempt, index)
+            existing_id = state[:effects_by_ref][effect.ref]
+            record = existing_id ? state[:effects].fetch(existing_id) : pending_by_ref[effect.ref]
+
+            if record
+              validate_effect_fingerprint!(record, effect)
+              effect_id = record.id
+            else
+              next_effect_seq += 1
+              effect_id = "effect/#{next_effect_seq}"
+              record = DAG::Effects::Record.from_prepared(
+                id: effect_id,
+                prepared_intent: effect,
+                status: :reserved,
+                updated_at_ms: effect.created_at_ms
+              )
+              pending_by_ref[effect.ref] = record
+              new_records << record
+            end
+
+            link = effect_link(effect_id: effect_id, effect: effect)
+            links << link unless links.any? { |existing| same_effect_link?(existing, link) }
+          end
+
+          {new_records: new_records, links: links}
+        end
+
+        # Internal: apply already-validated effect records and links.
+        # @api private
+        def apply_effect_reservations(state, reservations)
+          reservations[:new_records].each do |record|
+            state[:effects][record.id] = record
+            state[:effects_by_ref][record.ref] = record.id
+            state[:effect_order] << record.id
+            state[:effect_seq] += 1
+          end
+
+          reservations[:links].each do |link|
+            attempt_links = (state[:attempt_effect_links][link[:attempt_id]] ||= [])
+            next if attempt_links.any? { |existing| same_effect_link?(existing, link) }
+
+            attempt_links << link
+            node_key = [link[:workflow_id], link[:revision], link[:node_id]]
+            state[:node_effect_links][node_key] ||= []
+            state[:node_effect_links][node_key] << link
+          end
+        end
+
+        # Internal: type/coordinate guard for staged effect intents.
+        # @api private
+        def validate_prepared_effect!(effect, attempt, index)
+          unless effect.is_a?(DAG::Effects::PreparedIntent)
+            raise ArgumentError, "effects[#{index}] must be DAG::Effects::PreparedIntent"
+          end
+          unless effect.workflow_id == attempt[:workflow_id]
+            raise ArgumentError, "effects[#{index}].workflow_id does not match attempt"
+          end
+          unless effect.revision == attempt[:revision]
+            raise ArgumentError, "effects[#{index}].revision does not match attempt"
+          end
+          unless effect.node_id.to_sym == attempt[:node_id].to_sym
+            raise ArgumentError, "effects[#{index}].node_id does not match attempt"
+          end
+          return if effect.attempt_id == attempt[:attempt_id]
+
+          raise ArgumentError, "effects[#{index}].attempt_id does not match attempt"
+        end
+
+        # Internal: idempotency guard for semantic effect identity.
+        # @api private
+        def validate_effect_fingerprint!(record, effect)
+          return if record.payload_fingerprint == effect.payload_fingerprint
+
+          raise DAG::Effects::IdempotencyConflictError,
+            "effect #{effect.ref} was already reserved with a different payload fingerprint"
+        end
+
+        # Internal: attempt-effect link value.
+        # @api private
+        def effect_link(effect_id:, effect:)
+          {
+            effect_id: effect_id,
+            attempt_id: effect.attempt_id,
+            workflow_id: effect.workflow_id,
+            revision: effect.revision,
+            node_id: effect.node_id.to_sym,
+            blocking: effect.blocking
+          }
+        end
+
+        # Internal: link identity is per attempt/effect pair.
+        # @api private
+        def same_effect_link?(left, right)
+          left[:attempt_id] == right[:attempt_id] && left[:effect_id] == right[:effect_id]
+        end
+
+        # Internal: return one projected Record per linked effect. When a node
+        # links the same effect across multiple attempts, the most recent link
+        # supplies the attempt/blocking coordinates while the durable effect
+        # state remains canonical.
+        # @api private
+        def records_for_links(state, links)
+          latest_links_by_effect = {}
+          links.each { |link| latest_links_by_effect[link[:effect_id]] = link }
+          latest_links_by_effect.values.map do |link|
+            project_effect_record(state[:effects].fetch(link[:effect_id]), link)
+          end
+        end
+
+        # Internal: overlay link coordinates onto the canonical effect record.
+        # @api private
+        def project_effect_record(record, link)
+          record.with(
+            workflow_id: link[:workflow_id],
+            revision: link[:revision],
+            node_id: link[:node_id],
+            attempt_id: link[:attempt_id],
+            blocking: link[:blocking]
+          )
+        end
+
+        # Internal: effect lookup.
+        # @api private
+        def fetch_effect!(state, effect_id)
+          state[:effects].fetch(effect_id) do
+            raise DAG::Effects::UnknownEffectError, "Unknown effect: #{effect_id}"
+          end
+        end
+
+        # Internal: dispatch eligibility.
+        # @api private
+        def claimable_effect?(record, now_ms)
+          case record.status
+          when :reserved
+            true
+          when :failed_retriable
+            record.not_before_ms.nil? || record.not_before_ms <= now_ms
+          when :dispatching
+            record.lease_until_ms.nil? || record.lease_until_ms < now_ms
+          else
+            false
+          end
+        end
+
+        # Internal: lease CAS guard.
+        # @api private
+        def validate_effect_lease!(record, owner_id:, now_ms:)
+          return if record.status == :dispatching &&
+            record.lease_owner == owner_id &&
+            !record.lease_until_ms.nil? &&
+            record.lease_until_ms >= now_ms
+
+          raise DAG::Effects::StaleLeaseError, "stale lease for effect #{record.id}"
+        end
+
+        # Internal: whether all blocking effects for an attempt are terminal.
+        # @api private
+        def blocking_effects_terminal?(state, attempt_id)
+          state[:attempt_effect_links].fetch(attempt_id, []).all? do |link|
+            !link[:blocking] || state[:effects].fetch(link[:effect_id]).terminal?
+          end
+        end
+
+        # Internal validations.
+        # @api private
+        def validate_string!(value, label)
+          raise ArgumentError, "#{label} must be String" unless value.is_a?(String)
+        end
+
+        # Internal validations.
+        # @api private
+        def validate_integer!(value, label)
+          raise ArgumentError, "#{label} must be Integer" unless value.is_a?(Integer)
+        end
+
+        # Internal validations.
+        # @api private
+        def validate_positive_integer!(value, label)
+          raise ArgumentError, "#{label} must be a positive Integer" unless value.is_a?(Integer) && value.positive?
+        end
+
+        # Internal validations.
+        # @api private
+        def validate_nonnegative_integer!(value, label)
+          raise ArgumentError, "#{label} must be a non-negative Integer" unless value.is_a?(Integer) && value >= 0
         end
 
         # Internal helper used by `count_attempts` and friends.
