@@ -2,8 +2,8 @@
 
 module DAG
   # Carrier the Runner passes to each step's `#call`. `context` is a
-  # deep-frozen `ExecutionContext`; `metadata` carries `workflow_id` and
-  # `revision`.
+  # deep-frozen `ExecutionContext`; `metadata` carries `workflow_id`,
+  # `revision`, and the node-scoped effect snapshot under `:effects`.
   # @api public
   StepInput = Data.define(:context, :node_id, :attempt_number, :metadata) do
     class << self
