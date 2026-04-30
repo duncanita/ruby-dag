@@ -44,17 +44,21 @@ The roadmap port (Appendix C) lists 15 methods. Implementing R1's
 `Runner#retry_workflow` per its DoD requires one operation that cannot be
 expressed via the 15 documented primitives:
 
-- **`prepare_workflow_retry(id:)`** — atomically (a) finds nodes in state
-  `:failed` for the workflow's current revision, (b) marks each
+- **`prepare_workflow_retry(id:, from: :failed, to: :pending, event: nil)`**
+  — atomically (a) verifies the workflow is still in `from`, (b) verifies
+  `workflow_retry_count < max_workflow_retries`, (c) finds nodes in state
+  `:failed` for the workflow's current revision, (d) marks each
   corresponding `:failed` attempt as `:aborted` so `count_attempts`
-  excludes them and the per-node attempt budget restarts, (c) transitions
-  those nodes back to `:pending`, and (d) increments the workflow's
-  retry-count tracking. Returns `{reset: [node_id, ...],
-  workflow_retry_count:}`.
+  excludes them and the per-node attempt budget restarts, (e) transitions
+  those nodes back to `:pending`, (f) increments the workflow's retry-count
+  tracking, (g) transitions the workflow row to `to`, and (h) optionally
+  appends `event` in the same storage step. Returns
+  `{id:, state:, reset: [node_id, ...], workflow_retry_count:, event:}`.
 
 This is justified by R1 DoD line 586 which mandates
 `Runner#retry_workflow` resets `:failed` nodes and "ricrea attempt nuovi";
-with only the 15 documented primitives the budget restart is not achievable.
+with only the 15 documented primitives the budget restart and stale-read-safe
+workflow retry budget check are not achievable.
 
 A second extension widens an existing canonical method:
 
@@ -122,9 +126,10 @@ Two layers, in order of dependency:
   - Built-ins: `DAG::BuiltinSteps::{Noop, Passthrough}`. `:branch` is
     deferred to a later phase.
   - `DAG::Runner` — frozen kernel. `#call(workflow_id)` runs the layered
-    algorithm; `#retry_workflow(workflow_id)` enforces
-    `max_workflow_retries` and raises `WorkflowRetryExhaustedError` when
-    the budget is spent.
+    algorithm; `#retry_workflow(workflow_id)` delegates the failed-to-pending
+    retry boundary to storage, then calls the workflow again. The storage
+    port enforces `max_workflow_retries` and raises
+    `WorkflowRetryExhaustedError` when the budget is spent.
 
 ## Key files
 
@@ -230,9 +235,10 @@ public surface) without paying ceremony for private scaffolding.
 - `StandardError` raised in `#call` is converted to
   `Failure[error: {code: :step_raised, class:, message:}, retriable: false]`.
   `NoMemoryError`, `SystemExit`, and `Interrupt` propagate.
-- `count_attempts` excludes `:aborted` attempts. `Runner#retry_workflow`
-  marks failed attempts as `:aborted` so the per-node attempt budget
-  resets across workflow retries.
+- `count_attempts` excludes `:aborted` attempts.
+  `Storage#prepare_workflow_retry` marks failed attempts as `:aborted` so
+  the per-node attempt budget resets across workflow retries, and owns the
+  atomic workflow retry-count guard.
 - `Memory::Storage` is single-process only. The mutable bookkeeping lives
   in `DAG::Adapters::Memory::StorageState`, which is the ONLY spot under
   `lib/dag/**` allowed to mutate hashes in place. The
