@@ -16,16 +16,11 @@ class ContextMergeOrderTest < Minitest::Test
     b_class = Class.new(DAG::Step::Base) do
       def call(_input) = DAG::Success[value: :from_b, context_patch: {shared: "b"}]
     end
-    sink_class = Class.new(DAG::Step::Base) do
-      def call(input)
-        DAG::Success[value: input.context.to_h, context_patch: input.context.to_h]
-      end
-    end
 
     registry = DAG::StepTypeRegistry.new
     registry.register(name: :a_step, klass: a_class, fingerprint_payload: {v: 1})
     registry.register(name: :b_step, klass: b_class, fingerprint_payload: {v: 1})
-    registry.register(name: :sink_step, klass: sink_class, fingerprint_payload: {v: 1})
+    registry.register(name: :sink_step, klass: context_dump_step_class, fingerprint_payload: {v: 1})
     registry.freeze!
 
     runner = build_runner(storage: storage, registry: registry)
@@ -56,5 +51,68 @@ class ContextMergeOrderTest < Minitest::Test
       fingerprint.compute(sink[:result].context_patch)
     end
     assert_equal 1, digests.uniq.size, "context fingerprint must be stable across 100 runs"
+  end
+
+  def test_effective_context_uses_highest_committed_attempt_independent_of_storage_order
+    storage_class = Class.new(DAG::Adapters::Memory::Storage) do
+      def initialize(seed:)
+        super()
+        @random = Random.new(seed)
+      end
+
+      def list_attempts(workflow_id:, revision: nil, node_id: nil)
+        attempts = super
+        return attempts unless node_id == :a
+
+        [
+          attempt_record(workflow_id, revision, 2, "attempt-b", "newer"),
+          attempt_record(workflow_id, revision, 1, "attempt-z", "older")
+        ].shuffle(random: @random)
+      end
+
+      private
+
+      def attempt_record(workflow_id, revision, attempt_number, attempt_id, value)
+        {
+          attempt_id: attempt_id,
+          workflow_id: workflow_id,
+          revision: revision,
+          node_id: :a,
+          attempt_number: attempt_number,
+          state: :committed,
+          result: DAG::Success[value: value, context_patch: {shared: value}]
+        }
+      end
+    end
+
+    registry = DAG::StepTypeRegistry.new
+    registry.register(name: :passthrough, klass: DAG::BuiltinSteps::Passthrough, fingerprint_payload: {v: 1})
+    registry.register(name: :sink_step, klass: context_dump_step_class, fingerprint_payload: {v: 1})
+    registry.freeze!
+
+    definition = DAG::Workflow::Definition.new
+      .add_node(:a, type: :passthrough)
+      .add_node(:c, type: :sink_step)
+      .add_edge(:a, :c)
+
+    observed = Array.new(5) do |seed|
+      storage = storage_class.new(seed: seed)
+      workflow_id = create_workflow(storage, definition)
+      build_runner(storage: storage, registry: registry).call(workflow_id)
+
+      sink_attempt = storage.list_attempts(workflow_id: workflow_id, node_id: :c).last
+      sink_attempt[:result].value[:shared]
+    end
+    assert_equal ["newer"], observed.uniq
+  end
+
+  private
+
+  def context_dump_step_class
+    @context_dump_step_class ||= Class.new(DAG::Step::Base) do
+      def call(input)
+        DAG::Success[value: input.context.to_h, context_patch: input.context.to_h]
+      end
+    end
   end
 end

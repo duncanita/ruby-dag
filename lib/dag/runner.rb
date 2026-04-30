@@ -277,12 +277,38 @@ module DAG
       ctx = run.base_context
       run.predecessors_by_node[node_id].each do |pred|
         attempts = @storage.list_attempts(workflow_id: run.workflow_id, revision: run.revision, node_id: pred)
-        committed = attempts.reverse_each.find { |a| a[:state] == :committed }
+        committed = canonical_committed_attempt(attempts)
         next unless committed
 
         ctx = ctx.merge(committed[:result].context_patch)
       end
       ctx
+    end
+
+    # Pick the canonical committed attempt independent of `list_attempts`
+    # ordering: highest `attempt_number`, with `attempt_id` ASCII as the
+    # tie-break (matches the `id.to_s` ASCII tie-break used by the topo
+    # sort). Single-pass; avoids the intermediate Array and per-element
+    # key Array that `select`/`max_by` would allocate on this hot path.
+    def canonical_committed_attempt(attempts)
+      best = nil
+      best_id = nil
+      attempts.each do |a|
+        next unless a[:state] == :committed
+        n = a.fetch(:attempt_number)
+        if best.nil? || n > best.fetch(:attempt_number)
+          best = a
+          best_id = nil
+        elsif n == best.fetch(:attempt_number)
+          best_id ||= best.fetch(:attempt_id).to_s
+          candidate_id = a.fetch(:attempt_id).to_s
+          if candidate_id > best_id
+            best = a
+            best_id = candidate_id
+          end
+        end
+      end
+      best
     end
 
     def safe_call_step(definition, node_id, input)
