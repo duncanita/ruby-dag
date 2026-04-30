@@ -4,9 +4,10 @@ module DAG
   # Step result indicating success. `value` is the JSON-safe step output;
   # `context_patch` is merged into the downstream execution context;
   # `proposed_mutations` (when non-empty) drives the workflow to `:paused`
-  # so a mutation service can apply structural changes.
+  # so a mutation service can apply structural changes. `proposed_effects`
+  # describes detached external effects that do not block node commit.
   # @api public
-  Success = Data.define(:value, :context_patch, :proposed_mutations, :metadata) do
+  Success = Data.define(:value, :context_patch, :proposed_mutations, :proposed_effects, :metadata) do
     include Result
 
     class << self
@@ -15,28 +16,32 @@ module DAG
       # @param value [Object] JSON-safe value
       # @param context_patch [Hash] JSON-safe patch merged into context
       # @param proposed_mutations [Array<DAG::ProposedMutation>]
+      # @param proposed_effects [Array<DAG::Effects::Intent>]
       # @param metadata [Hash] JSON-safe
       # @return [Success]
-      def [](value: nil, context_patch: {}, proposed_mutations: [], metadata: {})
+      def [](value: nil, context_patch: {}, proposed_mutations: [], proposed_effects: [], metadata: {})
         new(
           value: value,
           context_patch: context_patch,
           proposed_mutations: proposed_mutations,
+          proposed_effects: proposed_effects,
           metadata: metadata
         )
       end
     end
 
-    def initialize(value: nil, context_patch: {}, proposed_mutations: [], metadata: {})
+    def initialize(value: nil, context_patch: {}, proposed_mutations: [], proposed_effects: [], metadata: {})
       DAG.json_safe!(value, "$root.value")
       DAG.json_safe!(context_patch, "$root.context_patch")
       DAG.json_safe!(metadata, "$root.metadata")
       validate_proposed_mutations!(proposed_mutations)
+      DAG::Effects.validate_intents!(proposed_effects)
 
       super(
         value: DAG.deep_freeze(DAG.deep_dup(value)),
         context_patch: DAG.deep_freeze(DAG.deep_dup(context_patch)),
         proposed_mutations: DAG.deep_freeze(proposed_mutations.dup),
+        proposed_effects: DAG.deep_freeze(proposed_effects.dup),
         metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
       )
     end
@@ -64,6 +69,7 @@ module DAG
         value: yield(value),
         context_patch: context_patch,
         proposed_mutations: proposed_mutations,
+        proposed_effects: proposed_effects,
         metadata: metadata
       )
     end

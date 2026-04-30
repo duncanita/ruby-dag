@@ -9,9 +9,10 @@ module RuboCop
         MSG = "Do not mutate pure kernel values in place."
         MUTATING_METHODS = %i[push << merge! update delete clear shift pop []=].freeze
         # Files that wrap their state in Data.define and must not mutate it
-        # in place. `immutability.rb` is intentionally NOT in this list — it
-        # is the implementation of `deep_dup` / `deep_freeze` / `json_safe!`
-        # and necessarily mutates the local hashes it is constructing.
+        # in place. Everything under `lib/dag/effects/` is also pure value
+        # code. `immutability.rb` is intentionally NOT in this list — it is
+        # the implementation of `deep_dup` / `deep_freeze` / `json_safe!` and
+        # necessarily mutates the local hashes it is constructing.
         PURE_KERNEL_FILES = %w[
           event.rb
           proposed_mutation.rb
@@ -33,6 +34,7 @@ module RuboCop
         def pure_kernel_file?
           path = processed_source.file_path
           PURE_KERNEL_FILES.any? { |file| path.end_with?("/lib/dag/#{file}") } ||
+            path.include?("/lib/dag/effects/") ||
             path.include?("/lib/dag/ports/")
         end
       end

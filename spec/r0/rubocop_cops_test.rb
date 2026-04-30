@@ -88,6 +88,16 @@ class R0RuboCopCopsTest < Minitest::Test
     refute_empty offenses
   end
 
+  def test_no_in_place_mutation_flags_effect_value_mutation
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoInPlaceMutation,
+      "values = []\nvalues << :item\n",
+      path: runtime_path("effects/intent.rb")
+    )
+
+    refute_empty offenses
+  end
+
   def test_no_external_requires_flags_non_stdlib_runtime_requires
     offenses = inspect_source(
       RuboCop::Cop::DAG::NoExternalRequires,

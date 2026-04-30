@@ -86,7 +86,11 @@ class TypesValidationTest < Minitest::Test
       -> { DAG::RuntimeProfile[:ephemeral, 1, 0, :null] },
       -> { DAG::StepInput[DAG::ExecutionContext.new, :a] },
       -> { DAG::ReplacementGraph[graph, [:a], [:a]] },
-      -> { DAG::RunResult[:completed] }
+      -> { DAG::RunResult[:completed] },
+      -> { DAG::Effects::Intent["tool", "key"] },
+      -> { DAG::Effects::PreparedIntent["ref"] },
+      -> { DAG::Effects::Record["effect"] },
+      -> { DAG::Effects::HandlerResult[:succeeded] }
     ]
 
     cases.each do |factory_call|

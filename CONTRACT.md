@@ -26,11 +26,73 @@ The kernel transports these fields without assigning consumer semantics:
 value
 context_patch
 proposed_mutations
+proposed_effects
 metadata
 ```
 
 `metadata` is opaque to the kernel and must remain JSON-safe for durable
 workflows.
+
+`proposed_effects` is an Array of `DAG::Effects::Intent`. On `Success`, effects
+are detached: they describe external work that does not block committing the
+node. On `Waiting`, effects are blocking: they describe external work that must
+finish before the step can produce its final result. PR1 validates and
+transports these values only; durable reservation and dispatch are storage and
+dispatcher concerns introduced by later effect-aware phases.
+
+## Effects Value Layer
+
+An effect is described as an abstract, adapter-agnostic intent:
+
+```ruby
+DAG::Effects::Intent[type:, key:, payload: {}, metadata: {}]
+```
+
+`type` and `key` are Strings. `Intent#ref` is deterministic and equal to
+`"#{type}:#{key}"`. `(type, key)` is the semantic identity of the effect;
+payload is JSON-safe data that later storage adapters guard with a stable
+payload fingerprint. Metadata is JSON-safe and opaque to the kernel.
+
+The public value layer also exposes:
+
+```ruby
+DAG::Effects::PreparedIntent.from_intent(intent:, workflow_id:, revision:,
+                                        node_id:, attempt_id:,
+                                        payload_fingerprint:, blocking:,
+                                        created_at_ms:)
+DAG::Effects::Record.from_prepared(id:, prepared_intent:, status:,
+                                   updated_at_ms:)
+DAG::Effects::HandlerResult.succeeded(result:, external_ref: nil)
+DAG::Effects::HandlerResult.failed(error:, retriable:, not_before_ms: nil)
+```
+
+All effect value objects are immutable and deep-freeze their JSON-safe
+payloads. Effect records use the closed status set:
+
+```ruby
+EFFECT_STATUSES = %i[
+  reserved
+  dispatching
+  succeeded
+  failed_retriable
+  failed_terminal
+].freeze
+```
+
+Steps can compose awaited effects with:
+
+```ruby
+DAG::Effects::Await.call(input, intent, not_before_ms: nil) do |result|
+  DAG::Success[value: result]
+end
+```
+
+`Await` reads `input.metadata[:effects][intent.ref]`. If no snapshot exists,
+or the effect is still pending/retriable, it returns
+`Waiting[reason: :effect_pending, proposed_effects: [intent]]`. If the snapshot
+is `:succeeded`, it yields the durable effect result to the continuation and
+requires the continuation to return a legal step result. If the snapshot is
+`:failed_terminal`, it returns a non-retriable `Failure`.
 
 ## Execution Context
 
