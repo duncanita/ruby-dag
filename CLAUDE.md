@@ -86,6 +86,34 @@ matching current-revision nodes still in `:running` back to `:pending`.
 This is not a new method, but it is required so `Runner#resume` can
 recompute eligibility after a process crash.
 
+Effect PR2 adds the durable abstract effect ledger needed by Delphi without
+putting concrete external systems in `ruby-dag`:
+
+- **`commit_attempt(attempt_id:, result:, node_state:, event:, effects: [])`**
+  widens the existing attempt atomic boundary. `effects` is an Array of
+  `DAG::Effects::PreparedIntent`; adapters must commit attempt result,
+  attempt state, node state, event, effect records, and attempt-effect links in
+  one logical transaction. The default `[]` preserves all existing call sites.
+- **`list_effects_for_node(workflow_id:, revision:, node_id:)`** and
+  **`list_effects_for_attempt(attempt_id:)`** expose immutable
+  `DAG::Effects::Record` snapshots linked through storage-owned
+  attempt-effect links.
+- **`claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:)`** atomically
+  claims `:reserved`, due `:failed_retriable`, or expired `:dispatching`
+  effects and assigns a lease.
+- **`mark_effect_succeeded(effect_id:, owner_id:, result:, external_ref:,
+  now_ms:)`** and **`mark_effect_failed(effect_id:, owner_id:, error:,
+  retriable:, not_before_ms:, now_ms:)`** require the current non-expired
+  lease owner, otherwise `DAG::Effects::StaleLeaseError`.
+- **`release_nodes_satisfied_by_effect(effect_id:, now_ms:)`** resets a linked
+  waiting node to `:pending` only when every blocking effect linked to that
+  waiting attempt is terminal.
+
+This is justified by the effect safety invariant from the Delphi execution
+plan: `ruby-dag` must durably reserve abstract effect intents and enforce
+idempotency on `(type, key)` plus `payload_fingerprint`, while concrete
+handlers and exactly-once external-system guarantees remain in consumers.
+
 All other R1/R2/R3 work uses the documented methods.
 
 ## Commands
@@ -142,16 +170,22 @@ lib/dag/graph.rb                          # Graph class
 lib/dag/graph/builder.rb                  # Builder.build { |b| ... } -> frozen Graph
 lib/dag/graph/validator.rb                # Structural validation -> Validator::Report
 lib/dag/result.rb                         # DAG::Result marker + Result.try / assert_result!
-lib/dag/success.rb                        # Success(value:, context_patch:, proposed_mutations:, metadata:)
+lib/dag/success.rb                        # Success(value:, context_patch:, proposed_mutations:, proposed_effects:, metadata:)
 lib/dag/failure.rb                        # Failure(error:, retriable:, metadata:)
 lib/dag/types.rb                          # Loads tagged types
 lib/dag/step_input.rb                     # StepInput[context:, node_id:, attempt_number:, metadata:]
-lib/dag/waiting.rb                        # Waiting[reason:, resume_token:, not_before_ms:, metadata:]
+lib/dag/waiting.rb                        # Waiting[reason:, resume_token:, not_before_ms:, proposed_effects:, metadata:]
 lib/dag/proposed_mutation.rb              # ProposedMutation[kind:, target_node_id:, replacement_graph:, ...]
 lib/dag/replacement_graph.rb              # ReplacementGraph[graph:, entry_node_ids:, exit_node_ids:]
 lib/dag/runtime_profile.rb                # RuntimeProfile[durability:, max_attempts_per_node:, max_workflow_retries:, event_bus_kind:, metadata:]
 lib/dag/run_result.rb                     # RunResult(state:, last_event_seq:, outcome:, metadata:)
 lib/dag/event.rb                          # Event[seq:, type:, workflow_id:, revision:, ...]; TYPES is closed
+lib/dag/effects.rb                        # DAG::Effects namespace, status sets, helpers
+lib/dag/effects/intent.rb                 # abstract effect intent
+lib/dag/effects/prepared_intent.rb        # kernel-enriched effect intent for storage commit
+lib/dag/effects/record.rb                 # durable effect snapshot
+lib/dag/effects/handler_result.rb         # abstract dispatcher handler result
+lib/dag/effects/await.rb                  # monadic Waiting/Failure/Success composition helper
 lib/dag/immutability.rb                   # deep_freeze, deep_dup, json_safe!
 lib/dag/ports/storage.rb                  # Ports::Storage interface
 lib/dag/ports/event_bus.rb                # Ports::EventBus interface
@@ -196,6 +230,10 @@ All errors inherit from `DAG::Error < StandardError`:
 - `FingerprintMismatchError`
 - `UnknownStepTypeError`, `UnknownWorkflowError`
 - `WorkflowRetryExhaustedError`
+- `DAG::Effects::IdempotencyConflictError`
+- `DAG::Effects::StaleLeaseError`
+- `DAG::Effects::UnknownEffectError`
+- `DAG::Effects::UnknownHandlerError`
 
 Adding a duplicate edge is **not** an error — `add_edge` is idempotent.
 
