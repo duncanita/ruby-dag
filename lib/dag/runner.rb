@@ -286,10 +286,10 @@ module DAG
     end
 
     # Pick the canonical committed attempt independent of `list_attempts`
-    # ordering: highest `attempt_number`, with `attempt_id` ASCII as the
-    # tie-break (matches the `id.to_s` ASCII tie-break used by the topo
-    # sort). Single-pass; avoids the intermediate Array and per-element
-    # key Array that `select`/`max_by` would allocate on this hot path.
+    # ordering: highest `attempt_number`, with `attempt_id.to_s` ASCII as
+    # a defensive tie-break. Single-pass; avoids the intermediate Array
+    # and per-element key Array that `select`/`max_by` would allocate on
+    # this hot path.
     def canonical_committed_attempt(attempts)
       best = nil
       best_id = nil
