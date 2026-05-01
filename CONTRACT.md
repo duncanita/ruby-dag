@@ -193,6 +193,18 @@ failures with JSON-safe error payloads. Unknown effect types default to terminal
 failure with `code: :unknown_handler`; alternatively,
 `unknown_handler_policy: :raise` raises `DAG::Effects::UnknownHandlerError`.
 
+Every entry in `DispatchReport#errors` has the shared JSON-safe keys:
+
+```text
+code
+effect_id
+ref
+type
+```
+
+Code-specific entries may add fields. `:handler_raised` adds `class` and
+`message`; `:handler_bad_return` adds `class`; `:stale_lease` adds `message`.
+
 ## Effect Storage Contract
 
 Effect reservation is part of the attempt commit atomic boundary:

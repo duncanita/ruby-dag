@@ -194,7 +194,7 @@ module DAG
       end
 
       def unknown_handler_error(record)
-        effect_error(record, code: :unknown_handler).merge(type: record.type)
+        effect_error(record, code: :unknown_handler)
       end
 
       def boundary_error(record, code:, class_name:, message: nil)
