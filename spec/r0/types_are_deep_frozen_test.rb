@@ -31,7 +31,7 @@ class R0TypesAreDeepFrozenTest < Minitest::Test
   end
 
   def test_frozen_copy_preserves_frozen_strings_and_isolates_mutable_strings
-    frozen = "already".freeze
+    frozen = (+"already").freeze
     mutable = +"mutable"
 
     assert_same frozen, DAG.frozen_copy(frozen)

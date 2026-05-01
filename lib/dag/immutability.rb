@@ -106,11 +106,7 @@ module DAG
   def format_json_path(path)
     root, *segments = path
     segments.each_with_object(root.to_s.dup) do |segment, formatted|
-      if segment.is_a?(Integer)
-        formatted << "[#{segment}]"
-      else
-        formatted << ".#{segment}"
-      end
+      formatted << (segment.is_a?(Integer) ? "[#{segment}]" : ".#{segment}")
     end
   end
 

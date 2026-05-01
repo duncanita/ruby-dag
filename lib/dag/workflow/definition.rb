@@ -15,6 +15,8 @@ module DAG
       attr_reader :graph
       # @return [Integer]
       attr_reader :revision
+      # @return [Integer]
+      attr_reader :hash
 
       # @param graph [DAG::Graph] frozen (or freezable) graph
       # @param step_types [Hash{Symbol => Hash}] node id => {type:, config:}
@@ -136,9 +138,6 @@ module DAG
         to_h == other.to_h
       end
       alias_method :eql?, :==
-
-      # @return [Integer]
-      def hash = @hash
 
       # @return [String]
       def inspect = "#<DAG::Workflow::Definition revision=#{@revision} nodes=#{@graph.node_count} edges=#{@graph.edge_count}>"
