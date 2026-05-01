@@ -25,6 +25,7 @@ module DAG
         @graph = graph.frozen? ? graph : graph.dup.freeze
         @step_types = DAG.deep_freeze(DAG.deep_dup(step_types))
         @revision = revision
+        @hash = to_h.hash
         freeze
       end
 
@@ -128,12 +129,16 @@ module DAG
 
       # @return [Boolean]
       def ==(other)
-        other.is_a?(Definition) && to_h == other.to_h
+        return true if equal?(other)
+        return false unless other.is_a?(Definition)
+        return false unless hash == other.hash
+
+        to_h == other.to_h
       end
       alias_method :eql?, :==
 
       # @return [Integer]
-      def hash = to_h.hash
+      def hash = @hash
 
       # @return [String]
       def inspect = "#<DAG::Workflow::Definition revision=#{@revision} nodes=#{@graph.node_count} edges=#{@graph.edge_count}>"
