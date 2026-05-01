@@ -338,7 +338,12 @@ ATTEMPT_STATES = %i[
 ```
 
 Only a committed attempt for the current definition revision contributes to the
-effective context.
+effective context. When more than one committed attempt exists for a node, the
+canonical attempt is the highest `attempt_number`, with `attempt_id.to_s` ASCII
+as a defensive tie-break. Storage adapters may expose
+`list_committed_results_for_predecessors(workflow_id:, revision:, predecessors:)`
+to return those canonical `Success` results in one call; Runner falls back to
+`list_attempts` when the extension is absent.
 
 ## Resume And Crash Recovery
 
