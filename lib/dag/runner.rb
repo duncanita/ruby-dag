@@ -360,14 +360,37 @@ module DAG
 
     def effective_context(run, node_id)
       ctx = run.base_context
-      run.predecessors_by_node[node_id].each do |pred|
-        attempts = @storage.list_attempts(workflow_id: run.workflow_id, revision: run.revision, node_id: pred)
-        committed = canonical_committed_attempt(attempts)
-        next unless committed
+      predecessors = run.predecessors_by_node[node_id]
+      committed_results = committed_results_for_predecessors(run, predecessors)
+      predecessors.each do |pred|
+        result = committed_results[pred]
+        next unless result
 
-        ctx = ctx.merge(committed[:result].context_patch)
+        ctx = ctx.merge(result.context_patch)
       end
       ctx
+    end
+
+    def committed_results_for_predecessors(run, predecessors)
+      if storage_overrides?(:list_committed_results_for_predecessors)
+        return @storage.list_committed_results_for_predecessors(
+          workflow_id: run.workflow_id,
+          revision: run.revision,
+          predecessors: predecessors
+        )
+      end
+
+      predecessors.each_with_object({}) do |pred, results|
+        attempts = @storage.list_attempts(workflow_id: run.workflow_id, revision: run.revision, node_id: pred)
+        committed = canonical_committed_attempt(attempts)
+        results[pred] = committed[:result] if committed
+      end
+    end
+
+    def storage_overrides?(method_name)
+      return false unless @storage.respond_to?(method_name)
+
+      @storage.method(method_name).owner != DAG::Ports::Storage
     end
 
     # Pick the canonical committed attempt independent of `list_attempts`

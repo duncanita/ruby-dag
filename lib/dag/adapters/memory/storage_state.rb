@@ -424,6 +424,29 @@ module DAG
           end
         end
 
+        # Implements `Ports::Storage#list_committed_results_for_predecessors`.
+        # @api private
+        def list_committed_results_for_predecessors(state, workflow_id:, revision:, predecessors:)
+          predecessor_ids = predecessors.map(&:to_sym)
+          predecessor_set = predecessor_ids.to_set
+          best_by_node = {}
+
+          state[:attempts_index].fetch(workflow_id, []).each do |attempt_id|
+            attempt = state[:attempts][attempt_id]
+            next unless attempt[:revision] == revision
+            next unless attempt[:state] == :committed
+            next unless predecessor_set.include?(attempt[:node_id])
+
+            current = best_by_node[attempt[:node_id]]
+            best_by_node[attempt[:node_id]] = attempt if better_committed_attempt?(attempt, current)
+          end
+
+          predecessor_ids.each_with_object({}) do |node_id, results|
+            attempt = best_by_node[node_id]
+            results[node_id] = attempt[:result] if attempt
+          end
+        end
+
         # Implements `Ports::Storage#count_attempts` (excluding `:aborted`).
         # @api private
         def count_attempts(state, workflow_id:, revision:, node_id:)
@@ -706,6 +729,19 @@ module DAG
           end
 
           raise DAG::StaleStateError, "workflow #{id} cannot append revision from #{state.inspect}"
+        end
+
+        # Internal: canonical committed-attempt ordering.
+        # @api private
+        def better_committed_attempt?(candidate, current)
+          return true if current.nil?
+
+          candidate_number = candidate.fetch(:attempt_number)
+          current_number = current.fetch(:attempt_number)
+          return true if candidate_number > current_number
+          return false unless candidate_number == current_number
+
+          candidate.fetch(:attempt_id).to_s > current.fetch(:attempt_id).to_s
         end
 
         # Internal helper used by `count_attempts` and friends.

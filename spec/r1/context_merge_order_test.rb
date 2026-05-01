@@ -70,6 +70,16 @@ class ContextMergeOrderTest < Minitest::Test
         ].shuffle(random: @random)
       end
 
+      def list_committed_results_for_predecessors(workflow_id:, revision:, predecessors:)
+        return super unless predecessors.map(&:to_sym).include?(:a)
+
+        attempts = [
+          attempt_record(workflow_id, revision, 2, "attempt-b", "newer"),
+          attempt_record(workflow_id, revision, 1, "attempt-z", "older")
+        ].shuffle(random: @random)
+        {a: attempts.max_by { |attempt| [attempt.fetch(:attempt_number), attempt.fetch(:attempt_id).to_s] }.fetch(:result)}
+      end
+
       private
 
       def attempt_record(workflow_id, revision, attempt_number, attempt_id, value)
@@ -104,6 +114,36 @@ class ContextMergeOrderTest < Minitest::Test
       sink_attempt[:result].value[:shared]
     end
     assert_equal ["newer"], observed.uniq
+  end
+
+  def test_effective_context_uses_batched_committed_result_lookup_when_available
+    storage_class = Class.new(DAG::Adapters::Memory::Storage) do
+      attr_reader :batch_calls, :list_attempt_calls
+
+      def initialize
+        super
+        @batch_calls = 0
+        @list_attempt_calls = 0
+      end
+
+      def list_committed_results_for_predecessors(...)
+        @batch_calls += 1
+        super
+      end
+
+      def list_attempts(...)
+        @list_attempt_calls += 1
+        super
+      end
+    end
+    storage = storage_class.new
+    runner = build_runner(storage: storage)
+    workflow_id = create_workflow(storage, fan_out_fan_in(:a, [:b, :c], :d), initial_context: {seed: 7})
+
+    runner.call(workflow_id)
+
+    assert_operator storage.batch_calls, :>, 0
+    assert_equal 0, storage.list_attempt_calls
   end
 
   private

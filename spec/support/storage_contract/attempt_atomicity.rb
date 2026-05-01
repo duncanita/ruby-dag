@@ -63,6 +63,47 @@ module StorageContract
       assert_equal 7, attempt[:attempt_number]
     end
 
+    def test_contract_lists_committed_results_for_predecessors_in_one_call
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      a_attempt_id = storage.begin_attempt(
+        workflow_id: workflow_id,
+        revision: 1,
+        node_id: :a,
+        expected_node_state: :pending,
+        attempt_number: 1
+      )
+      b_attempt_id = storage.begin_attempt(
+        workflow_id: workflow_id,
+        revision: 1,
+        node_id: :b,
+        expected_node_state: :pending,
+        attempt_number: 1
+      )
+      storage.commit_attempt(
+        attempt_id: a_attempt_id,
+        result: DAG::Success[value: :a, context_patch: {a: 1}],
+        node_state: :committed,
+        event: contract_event(workflow_id: workflow_id, node_id: :a, attempt_id: a_attempt_id)
+      )
+      storage.commit_attempt(
+        attempt_id: b_attempt_id,
+        result: DAG::Success[value: :b, context_patch: {b: 2}],
+        node_state: :committed,
+        event: contract_event(workflow_id: workflow_id, node_id: :b, attempt_id: b_attempt_id)
+      )
+
+      results = storage.list_committed_results_for_predecessors(
+        workflow_id: workflow_id,
+        revision: 1,
+        predecessors: [:b, :a, :missing]
+      )
+
+      assert_equal [:b, :a], results.keys
+      assert_equal({b: 2}, results.fetch(:b).context_patch)
+      assert_equal({a: 1}, results.fetch(:a).context_patch)
+    end
+
     def test_contract_commit_attempt_is_one_shot
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)

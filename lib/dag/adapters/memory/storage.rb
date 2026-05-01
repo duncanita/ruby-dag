@@ -176,6 +176,16 @@ module DAG
           frozen StorageState.list_attempts(@state, workflow_id: workflow_id, revision: revision, node_id: node_id)
         end
 
+        # (see Ports::Storage#list_committed_results_for_predecessors)
+        def list_committed_results_for_predecessors(workflow_id:, revision:, predecessors:)
+          frozen StorageState.list_committed_results_for_predecessors(
+            @state,
+            workflow_id: workflow_id,
+            revision: revision,
+            predecessors: predecessors
+          )
+        end
+
         # (see Ports::Storage#count_attempts)
         def count_attempts(workflow_id:, revision:, node_id:)
           frozen StorageState.count_attempts(@state, workflow_id: workflow_id, revision: revision, node_id: node_id)
