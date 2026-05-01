@@ -42,7 +42,9 @@ module DAG
           return self
         end
         raise FingerprintMismatchError,
-          "step type #{name.inspect} already registered with a different fingerprint"
+          "step type #{name.inspect} already registered with a different fingerprint " \
+          "(existing klass=#{existing.klass}, payload=#{existing.fingerprint_payload.inspect}; " \
+          "new klass=#{klass}, payload=#{new_entry.fingerprint_payload.inspect})"
       end
 
       @entries[name] = new_entry
