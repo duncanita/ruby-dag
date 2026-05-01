@@ -59,10 +59,10 @@ module DAG
 
       super(
         reason: reason,
-        resume_token: DAG.deep_freeze(DAG.deep_dup(resume_token)),
+        resume_token: DAG.frozen_copy(resume_token),
         not_before_ms: not_before_ms,
-        proposed_effects: DAG.deep_freeze(proposed_effects.dup),
-        metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
+        proposed_effects: DAG.frozen_copy(proposed_effects),
+        metadata: DAG.frozen_copy(metadata)
       )
     end
   end

@@ -47,7 +47,7 @@ module DAG
         node_id: node_id,
         attempt_id: attempt_id,
         at_ms: at_ms,
-        payload: DAG.deep_freeze(DAG.deep_dup(payload))
+        payload: DAG.frozen_copy(payload)
       )
     end
   end

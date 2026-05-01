@@ -49,7 +49,7 @@ module DAG
         max_attempts_per_node: max_attempts_per_node,
         max_workflow_retries: max_workflow_retries,
         event_bus_kind: event_bus_kind,
-        metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
+        metadata: DAG.frozen_copy(metadata)
       )
     end
   end

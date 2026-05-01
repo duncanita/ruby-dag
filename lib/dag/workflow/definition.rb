@@ -25,7 +25,7 @@ module DAG
         DAG::Validation.revision!(revision)
 
         @graph = graph.frozen? ? graph : graph.dup.freeze
-        @step_types = DAG.deep_freeze(DAG.deep_dup(step_types))
+        @step_types = DAG.frozen_copy(step_types)
         @revision = revision
         @hash = to_h.hash
         freeze
@@ -42,7 +42,7 @@ module DAG
         DAG::Validation.symbol!(type, "type")
 
         new_graph = @graph.with_node(sym)
-        new_step_types = @step_types.merge(sym => {type: type, config: DAG.deep_freeze(DAG.deep_dup(config))})
+        new_step_types = @step_types.merge(sym => {type: type, config: DAG.frozen_copy(config)})
         Definition.new(graph: new_graph, step_types: new_step_types, revision: @revision)
       end
 

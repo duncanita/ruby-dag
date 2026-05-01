@@ -47,9 +47,9 @@ module DAG
         kind: kind,
         target_node_id: target_node_id,
         replacement_graph: replacement_graph,
-        rationale: DAG.deep_freeze(DAG.deep_dup(rationale)),
+        rationale: DAG.frozen_copy(rationale),
         confidence: confidence,
-        metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
+        metadata: DAG.frozen_copy(metadata)
       )
     end
   end

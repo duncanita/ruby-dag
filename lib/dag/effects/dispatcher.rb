@@ -43,7 +43,7 @@ module DAG
           return nil if value.nil?
           return value if value.frozen?
 
-          DAG.deep_freeze(DAG.deep_dup(value))
+          DAG.frozen_copy(value)
         end
       end
       private_constant :HandlerOutcome
@@ -94,7 +94,7 @@ module DAG
           super(
             succeeded_record: succeeded_record,
             failed_record: failed_record,
-            released: DAG.deep_freeze(DAG.deep_dup(released)),
+            released: DAG.frozen_copy(released),
             error: immutable_json_copy(error)
           )
         end
@@ -111,7 +111,7 @@ module DAG
           return nil if value.nil?
           return value if value.frozen?
 
-          DAG.deep_freeze(DAG.deep_dup(value))
+          DAG.frozen_copy(value)
         end
       end
       private_constant :DispatchOutcome

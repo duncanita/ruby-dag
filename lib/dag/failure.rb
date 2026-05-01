@@ -25,9 +25,9 @@ module DAG
       DAG.json_safe!(metadata, "$root.metadata")
 
       super(
-        error: DAG.deep_freeze(DAG.deep_dup(error)),
+        error: DAG.frozen_copy(error),
         retriable: !!retriable,
-        metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
+        metadata: DAG.frozen_copy(metadata)
       )
     end
 
