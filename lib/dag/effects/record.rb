@@ -2,6 +2,23 @@
 
 module DAG
   module Effects
+    RECORD_SNAPSHOT_FIELDS = %i[
+      id
+      ref
+      type
+      key
+      payload
+      payload_fingerprint
+      blocking
+      status
+      result
+      error
+      external_ref
+      not_before_ms
+      metadata
+    ].freeze
+    private_constant :RECORD_SNAPSHOT_FIELDS
+
     # Durable effect snapshot returned by effect-aware storage adapters.
     # @api public
     Record = Data.define(
@@ -27,22 +44,6 @@ module DAG
       :updated_at_ms,
       :metadata
     ) do
-      SNAPSHOT_FIELDS = %i[
-        id
-        ref
-        type
-        key
-        payload
-        payload_fingerprint
-        blocking
-        status
-        result
-        error
-        external_ref
-        not_before_ms
-        metadata
-      ].freeze
-
       class << self
         remove_method :[]
 
@@ -218,9 +219,7 @@ module DAG
       # Stable Hash shape injected into `StepInput#metadata[:effects]`.
       # @return [Hash]
       def to_snapshot
-        DAG.deep_freeze(SNAPSHOT_FIELDS.each_with_object({}) do |field, snapshot|
-          snapshot[field] = public_send(field)
-        end)
+        DAG.deep_freeze(RECORD_SNAPSHOT_FIELDS.map { |field| [field, public_send(field)] }.to_h)
       end
 
       private

@@ -11,6 +11,7 @@ module DAG
       # @api public
       class EventBus
         include Ports::EventBus
+
         NOOP_UNSUBSCRIBE = -> {}.freeze
         private_constant :NOOP_UNSUBSCRIBE
 
