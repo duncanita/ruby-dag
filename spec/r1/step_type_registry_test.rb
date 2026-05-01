@@ -28,9 +28,12 @@ class StepTypeRegistryTest < Minitest::Test
   def test_register_mismatch_raises
     reg = DAG::StepTypeRegistry.new
     reg.register(name: :p, klass: DAG::BuiltinSteps::Passthrough, fingerprint_payload: {v: 1})
-    assert_raises(DAG::FingerprintMismatchError) do
+    error = assert_raises(DAG::FingerprintMismatchError) do
       reg.register(name: :p, klass: DAG::BuiltinSteps::Passthrough, fingerprint_payload: {v: 2})
     end
+    assert_includes error.message, ":p"
+    assert_includes error.message, "payload={v: 1}"
+    assert_includes error.message, "payload={v: 2}"
   end
 
   def test_lookup_unknown_raises
