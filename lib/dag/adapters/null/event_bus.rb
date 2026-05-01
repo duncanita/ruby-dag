@@ -11,6 +11,8 @@ module DAG
       # @api public
       class EventBus
         include Ports::EventBus
+        NOOP_UNSUBSCRIBE = -> {}.freeze
+        private_constant :NOOP_UNSUBSCRIBE
 
         # @param logger [#debug, nil] optional sink for diagnostic logging
         def initialize(logger: nil)
@@ -26,9 +28,9 @@ module DAG
         end
 
         # No-op. The null bus has no subscribers.
-        # @return [nil]
+        # @return [Proc] unsubscribe callback
         def subscribe(&block)
-          nil
+          NOOP_UNSUBSCRIBE
         end
       end
     end

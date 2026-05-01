@@ -43,7 +43,9 @@ class AdaptersTest < Minitest::Test
   def test_null_event_bus_drops
     bus = DAG::Adapters::Null::EventBus.new
     bus.publish(:event)
-    assert_nil bus.subscribe { |_| flunk "subscribe should be inert" }
+    unsubscribe = bus.subscribe { |_| flunk "subscribe should be inert" }
+    assert_kind_of Proc, unsubscribe
+    assert_nil unsubscribe.call
   end
 
   def test_memory_event_bus_appends_and_subscribes
@@ -60,6 +62,24 @@ class AdaptersTest < Minitest::Test
 
     assert_equal [:node_started, :node_committed, :workflow_completed], received.map(&:type)
     assert_equal [:node_committed, :workflow_completed], bus.events.map(&:type)
+  end
+
+  def test_memory_event_bus_publish_uses_subscriber_snapshot
+    bus = DAG::Adapters::Memory::EventBus.new
+    received = []
+    bus.subscribe do |event|
+      received << [:first, event.type]
+      bus.subscribe { |nested| received << [:second, nested.type] }
+    end
+
+    bus.publish(build_event(:node_started))
+    bus.publish(build_event(:node_committed))
+
+    assert_equal [
+      [:first, :node_started],
+      [:first, :node_committed],
+      [:second, :node_committed]
+    ], received
   end
 
   def test_memory_event_bus_events_are_deep_frozen

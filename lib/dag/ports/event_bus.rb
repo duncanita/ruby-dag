@@ -15,10 +15,11 @@ module DAG
         raise PortNotImplementedError
       end
 
-      # Register a subscriber. The block receives each future event.
+      # Register a subscriber. The block receives each future event and the
+      # return value unsubscribes it. Null adapters may return a no-op Proc.
       #
       # @yieldparam event [DAG::Event]
-      # @return [void]
+      # @return [Proc]
       def subscribe(&block)
         raise PortNotImplementedError
       end
