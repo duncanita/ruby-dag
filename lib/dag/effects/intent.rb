@@ -20,8 +20,8 @@ module DAG
       end
 
       def initialize(type:, key:, payload: {}, metadata: {})
-        raise ArgumentError, "type must be String" unless type.is_a?(String)
-        raise ArgumentError, "key must be String" unless key.is_a?(String)
+        DAG::Effects.validate_ref_part!(type, "type")
+        DAG::Effects.validate_ref_part!(key, "key")
         DAG.json_safe!(payload, "$root.payload")
         DAG.json_safe!(metadata, "$root.metadata")
 
@@ -34,7 +34,7 @@ module DAG
       end
 
       # @return [String] deterministic effect reference
-      def ref = "#{type}:#{key}".freeze
+      def ref = DAG::Effects.ref_for(type, key)
     end
   end
 end

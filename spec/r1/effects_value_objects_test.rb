@@ -14,12 +14,12 @@ class EffectsValueObjectsTest < Minitest::Test
 
   def test_intent_is_deep_frozen_json_safe_and_has_deterministic_ref
     payload = {args: [{id: 1}]}
-    intent = DAG::Effects::Intent[type: "delphi.tool", key: "wf:1", payload: payload, metadata: {source: "test"}]
+    intent = DAG::Effects::Intent[type: "delphi.tool", key: "wf-1", payload: payload, metadata: {source: "test"}]
     payload[:args].first[:id] = 2
 
     assert intent.frozen?
     assert intent.ref.frozen?
-    assert_equal "delphi.tool:wf:1", intent.ref
+    assert_equal "delphi.tool:wf-1", intent.ref
     assert_equal 1, intent.payload[:args].first[:id]
     assert_raises(FrozenError) { intent.payload[:args] << {id: 3} }
   end
@@ -28,6 +28,13 @@ class EffectsValueObjectsTest < Minitest::Test
     assert_raises(ArgumentError) { DAG::Effects::Intent[type: :tool, key: "k"] }
     assert_raises(ArgumentError) { DAG::Effects::Intent[type: "tool", key: :k] }
     assert_raises(ArgumentError) { DAG::Effects::Intent[type: "tool", key: "k", payload: {time: Time.now}] }
+  end
+
+  def test_effect_identity_rejects_ref_separator
+    assert_raises(ArgumentError) { DAG::Effects::Intent[type: "a:b", key: "c"] }
+    assert_raises(ArgumentError) { DAG::Effects::Intent[type: "a", key: "b:c"] }
+    assert_raises(ArgumentError) { prepared_intent(type: "a:b", key: "c") }
+    assert_raises(ArgumentError) { effect_record(type: "a", key: "b:c") }
   end
 
   def test_prepared_intent_is_deep_frozen_and_derives_ref_from_type_and_key
@@ -273,14 +280,14 @@ class EffectsValueObjectsTest < Minitest::Test
     DAG::Effects::Intent[type: "tool", key: "k", payload: {input: 1}]
   end
 
-  def prepared_intent(payload: {})
+  def prepared_intent(payload: {}, type: "tool", key: "k")
     DAG::Effects::PreparedIntent[
       workflow_id: "wf",
       revision: 1,
       node_id: :node,
       attempt_id: "attempt-1",
-      type: "tool",
-      key: "k",
+      type: type,
+      key: key,
       payload: payload,
       payload_fingerprint: "sha256",
       blocking: true,
@@ -288,15 +295,15 @@ class EffectsValueObjectsTest < Minitest::Test
     ]
   end
 
-  def effect_record(status:, result: nil, error: nil, not_before_ms: nil)
+  def effect_record(status: :reserved, result: nil, error: nil, not_before_ms: nil, type: "tool", key: "k")
     DAG::Effects::Record[
       id: "effect-1",
       workflow_id: "wf",
       revision: 1,
       node_id: :node,
       attempt_id: "attempt-1",
-      type: "tool",
-      key: "k",
+      type: type,
+      key: key,
       payload: {input: 1},
       payload_fingerprint: "sha256",
       blocking: true,

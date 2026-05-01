@@ -151,8 +151,8 @@ module DAG
         # always recomputed from `type:key` below; user input passes through
         # `[]`, which does not expose the kwarg.
         validate_string!(id, "id")
-        validate_string!(type, "type")
-        validate_string!(key, "key")
+        DAG::Effects.validate_ref_part!(type, "type")
+        DAG::Effects.validate_ref_part!(key, "key")
         validate_string!(workflow_id, "workflow_id")
         validate_revision!(revision)
         validate_node_id!(node_id)
@@ -173,7 +173,7 @@ module DAG
 
         super(
           id: DAG.deep_freeze(DAG.deep_dup(id)),
-          ref: DAG.deep_freeze(DAG.deep_dup("#{type}:#{key}")),
+          ref: DAG::Effects.ref_for(type, key),
           workflow_id: DAG.deep_freeze(DAG.deep_dup(workflow_id)),
           revision: revision,
           node_id: DAG.deep_freeze(DAG.deep_dup(node_id)),
