@@ -543,7 +543,10 @@ The value is frozen and JSON-safe. Defaults are `max_attempts_per_node: 3` and
 Consumers register custom step types with:
 
 ```ruby
-register(name:, klass:, fingerprint_payload:, config: {})
+register(name:, klass:, fingerprint_payload:, config: {}, cache_instances: false)
 ```
 
 The fingerprint must be stable and deterministic.
+`cache_instances: true` lets the Runner reuse one frozen step instance per
+`(type, config)` during a call. The default is `false` so stateful user step
+classes keep the historical per-attempt instantiation behavior.

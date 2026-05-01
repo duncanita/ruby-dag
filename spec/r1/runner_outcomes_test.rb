@@ -93,6 +93,33 @@ class RunnerOutcomesTest < Minitest::Test
     assert_equal "RuntimeError", attempt[:result].error[:error_class]
   end
 
+  def test_runner_reuses_step_instance_when_registry_opts_in
+    storage = DAG::Adapters::Memory::Storage.new
+    initialize_count = 0
+    klass = Class.new(DAG::Step::Base) do
+      define_method(:initialize) do |config: {}|
+        initialize_count += 1
+        super(config: config)
+      end
+
+      def call(_input)
+        DAG::Success[value: :ok, context_patch: {}]
+      end
+    end
+    registry = DAG::StepTypeRegistry.new
+    registry.register(name: :cached, klass: klass, fingerprint_payload: {v: 1}, cache_instances: true)
+    registry.freeze!
+    runner = build_runner(storage: storage, registry: registry)
+    definition = DAG::Workflow::Definition.new
+      .add_node(:a, type: :cached, config: {mode: "same"})
+      .add_node(:b, type: :cached, config: {mode: "same"})
+    workflow_id = create_workflow(storage, definition)
+
+    runner.call(workflow_id)
+
+    assert_equal 1, initialize_count
+  end
+
   def test_paused_workflow_can_be_resumed_back_to_running
     storage = DAG::Adapters::Memory::Storage.new
     runner = build_runner(storage: storage)

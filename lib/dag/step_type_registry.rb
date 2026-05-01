@@ -12,24 +12,28 @@ module DAG
   class StepTypeRegistry
     # Internal carrier for one registration entry.
     # @api private
-    Entry = Data.define(:klass, :fingerprint_payload, :config)
+    Entry = Data.define(:klass, :fingerprint_payload, :config, :cache_instances)
 
     def initialize
       @entries = {}
     end
 
-    def register(name:, klass:, fingerprint_payload:, config: {})
+    def register(name:, klass:, fingerprint_payload:, config: {}, cache_instances: false)
       raise FrozenError, "registry is frozen" if frozen?
       raise ArgumentError, "name must be a Symbol" unless name.is_a?(Symbol)
       unless klass.is_a?(Class) && klass.method_defined?(:call)
         raise ArgumentError, "klass must be a Class with a public #call(StepInput) method"
+      end
+      unless cache_instances == true || cache_instances == false
+        raise ArgumentError, "cache_instances must be true or false"
       end
       DAG.json_safe!(fingerprint_payload, "$root.fingerprint_payload")
 
       new_entry = Entry.new(
         klass: klass,
         fingerprint_payload: DAG.frozen_copy(fingerprint_payload),
-        config: DAG.frozen_copy(config)
+        config: DAG.frozen_copy(config),
+        cache_instances: cache_instances
       )
 
       existing = @entries[name]
