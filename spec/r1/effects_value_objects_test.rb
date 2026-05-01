@@ -19,6 +19,8 @@ class EffectsValueObjectsTest < Minitest::Test
 
     assert intent.frozen?
     assert intent.ref.frozen?
+    assert_same intent.ref, intent.ref
+    refute_includes DAG::Effects::Intent.members, :ref
     assert_equal "delphi.tool:wf-1", intent.ref
     assert_equal 1, intent.payload[:args].first[:id]
     assert_raises(FrozenError) { intent.payload[:args] << {id: 3} }
