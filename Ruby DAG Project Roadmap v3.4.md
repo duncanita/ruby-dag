@@ -816,7 +816,7 @@ CONTRACT.md                                  # sezione storage durable consumer-
 - [ ] Dipendenze runtime minime S0:
   - `ruby-dag`, `~> 1.0`, `require: "ruby-dag"`
   - `sqlite3`
-- [ ] Implementa `DAG::Ports::Storage` come `Delphic::Adapters::Sqlite::Storage`.
+- [ ] Implementa l'intero port effect-aware `DAG::Ports::Storage` come `Delphic::Adapters::Sqlite::Storage`.
 - [ ] L'adapter vive nel namespace `Delphic`, non in `DAG`; non monkey-patcha il kernel e non aggiunge dipendenze runtime a `ruby-dag`.
 - [ ] Implementa schema isolato con prefisso `dag_`.
 - [ ] All'apertura della connessione applica i pragma vincolanti:
@@ -830,7 +830,12 @@ CONTRACT.md                                  # sezione storage durable consumer-
 - [ ] Usa transazioni SQLite per ogni operazione atomica (`BEGIN IMMEDIATE` per write).
 - [ ] CAS revision via transazione e condizione su `current_revision`.
 - [ ] CAS node/workflow state via `UPDATE ... WHERE state = ?` e verifica `db.changes == 1`.
-- [ ] `commit_attempt` è una singola transazione.
+- [ ] `commit_attempt(effects: [])` è una singola transazione: attempt result, attempt state, node state, event, effect records e attempt-effect links vengono committati o rollbackati insieme.
+- [ ] Effect ledger storage:
+  - `dag_effects` conserva status, lease, idempotency identity `(type, key)`, `payload_fingerprint`, payload/result/error JSON-safe ed eventuale `external_ref`.
+  - `dag_attempt_effects` collega attempt ed effects, distinguendo blocking/detached.
+  - stesso `(type, key)` + stesso `payload_fingerprint` riusa/linka il record; fingerprint diverso solleva `DAG::Effects::IdempotencyConflictError`.
+- [ ] Implementa `list_effects_for_node`, `list_effects_for_attempt`, `claim_ready_effects`, `mark_effect_succeeded`, `mark_effect_failed`, `release_nodes_satisfied_by_effect`.
 - [ ] `transition_workflow_state(event:)` è una singola transazione quando `event` è presente.
 - [ ] `append_revision` è una singola transazione.
 - [ ] Serializer JSON compatibile con i tipi canonici del kernel.
@@ -886,6 +891,39 @@ dag_attempts(
   updated_at_ms
 )
 
+dag_effects(
+  id,
+  ref,
+  workflow_id,
+  revision,
+  node_id,
+  attempt_id,
+  type,
+  key,
+  payload_json,
+  payload_fingerprint,
+  blocking,
+  status,
+  result_json,
+  error_json,
+  external_ref,
+  not_before_ms,
+  lease_owner,
+  lease_until_ms,
+  created_at_ms,
+  updated_at_ms,
+  metadata_json,
+  UNIQUE(type, key)
+)
+
+dag_attempt_effects(
+  attempt_id,
+  effect_id,
+  blocking,
+  created_at_ms,
+  PRIMARY KEY(attempt_id, effect_id)
+)
+
 dag_events(
   workflow_id,
   seq,
@@ -900,9 +938,15 @@ dag_events(
 
 ### DoD S0
 
-- [ ] Storage contract suite passa su `DAG::Adapters::Memory::Storage` e `Delphic::Adapters::Sqlite::Storage`.
+- [ ] Storage contract suite passa su `DAG::Adapters::Memory::Storage` e `Delphic::Adapters::Sqlite::Storage`, incluse le sezioni effect ledger.
 - [ ] CAS revision usa transazione SQLite.
-- [ ] `commit_attempt` è atomico.
+- [ ] `commit_attempt(effects: [])` è atomico e coperto da contract test: attempt/node/event/effect records/effect links non possono half-committare.
+- [ ] Contract test effect-aware passano anche su SQLite:
+  - riserva idempotente su `(type, key)` + `payload_fingerprint`;
+  - conflict su stesso `(type, key)` + fingerprint diverso;
+  - due claim concorrenti non ottengono lo stesso effetto;
+  - `mark_effect_succeeded` / `mark_effect_failed` richiedono lease owner valido;
+  - `release_nodes_satisfied_by_effect` rimette `:pending` solo quando tutti gli effetti blocking collegati all'attempt waiting sono terminali.
 - [ ] `transition_workflow_state(event:)` è atomico: uno stato terminale durable non puo' esistere senza il corrispondente evento terminale durable.
 - [ ] Crash simulato durante transazione non lascia half-commit: il test usa un processo figlio terminato con `KILL` oppure una transazione `BEGIN IMMEDIATE` interrotta; mai Ractor.
 - [ ] WAL abilitato e verificato via `PRAGMA journal_mode`.
@@ -917,6 +961,9 @@ dag_events(
   - `test/r2/test_resume_after_crash.rb`
   - `test/r2/test_resume_in_flight_attempt.rb`
   - `test/r2/test_workflow_retry.rb`
+  - `test/r2/test_runner_effects.rb`
+  - `test/r2/test_effects_dispatcher.rb`
+  - `test/support/storage_contract/effects.rb`
 - [ ] Non si applicano a SQLite: `test/r1/test_cycle_detection.rb` (puro test di Graph, non tocca storage), `test/r0/**` (R0 non ha storage).
 - [ ] `bundle exec rake test` passa nel repo `delphic` con S0 incluso.
 
@@ -938,7 +985,7 @@ D0 puo' partire solo quando S0 e' verde. Se S0 ha creato lo scaffold minimo di `
 
 Lo step deve essere frozen. Per workflow durable, input/output applicativi devono essere JSON-safe.
 
-**Idempotenza.** Lo step è una funzione del proprio `StepInput`: per gli stessi input deve produrre lo stesso `Success | Waiting | Failure` (modulo metadati di tracing). Il kernel garantisce *at-most-once commit del risultato*, NON *at-most-once invocazione*. Se uno step ha effetti esterni, è il consumer (`delphic`) a doverli proteggere via ledger (`ToolInvocationLedger`, `ModelInvocationLedger`). Vedi D1.
+**Idempotenza.** Lo step è una funzione del proprio `StepInput`: per gli stessi input deve produrre lo stesso `Success | Waiting | Failure` (modulo metadati di tracing). Il kernel garantisce *at-most-once commit del risultato* e prenotazione durabile degli intenti effetto astratti, NON *at-most-once invocazione* dello step e NON exactly-once fisico verso sistemi esterni. Gli step non eseguono I/O esterno direttamente: descrivono side effect tramite `proposed_effects`, mentre gli handler consumer proteggono la chiamata fisica con idempotency key remota, reconciliation e retry/backoff.
 
 ### 7.2 Step result contract
 
@@ -948,8 +995,16 @@ Lo step deve essere frozen. Per workflow durable, input/output applicativi devon
 value
 context_patch
 proposed_mutations
+proposed_effects
 metadata
 ```
+
+`proposed_effects` è un Array di `DAG::Effects::Intent`.
+
+- Su `Success`, gli effetti sono detached: il nodo può committare, mentre gli effetti vengono registrati e dispatchati senza bloccare il completamento del nodo.
+- Su `Waiting`, gli effetti sono blocking: il nodo resta `:waiting` finché gli effect records collegati all'attempt waiting non diventano terminali.
+
+Il Runner prepara gli intenti in `DAG::Effects::PreparedIntent`, calcola `payload_fingerprint` tramite il port `fingerprint`, e li passa a `storage.commit_attempt(..., effects: prepared_effects)` nello stesso boundary atomico di attempt/node/event. `DAG::Effects::Await` legge gli snapshot risolti in `input.metadata[:effects]` e mappa lo stato dell'effetto in `Waiting` / `Success` / `Failure`. `DAG::Effects::Dispatcher` è il boundary astratto claim -> handler -> mark -> release; gli handler concreti vivono nel consumer.
 
 `metadata` è opaco e può contenere attributi semantici del consumer, ma deve restare JSON-safe. Token usage, latency, model name e simili vivono in `delphic`, non nel kernel.
 
@@ -1748,8 +1803,11 @@ module DAG
         raise PortNotImplementedError
       end
 
-      def transition_workflow_state(id:, from:, to:)
+      def transition_workflow_state(id:, from:, to:, event: nil)
         raise PortNotImplementedError
+        # atomico: CAS workflow state e, quando event è presente,
+        # append dell'evento nello stesso step.
+        # => {id:, state:, event: stamped_or_nil}
       end
 
       def append_revision(id:, parent_revision:, definition:, invalidated_node_ids:, event:)
@@ -1781,12 +1839,50 @@ module DAG
         # => attempt_id
       end
 
-      def commit_attempt(attempt_id:, result:, node_state:, event:)
+      def commit_attempt(attempt_id:, result:, node_state:, event:, effects: [])
         raise PortNotImplementedError
         # atomico: persist result + attempt state + node state + append event
+        # + reserve/link effect records.
         # node_state: :committed | :waiting | :failed | :pending
         # :pending è ammesso solo per failure retriable, dopo aver marcato l'attempt failed.
-        # => event_seq
+        # effects: Array<DAG::Effects::PreparedIntent>
+        # => stamped Event
+      end
+
+      def list_effects_for_node(workflow_id:, revision:, node_id:)
+        raise PortNotImplementedError
+        # => Array<DAG::Effects::Record>
+      end
+
+      def list_effects_for_attempt(attempt_id:)
+        raise PortNotImplementedError
+        # => Array<DAG::Effects::Record>
+      end
+
+      def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:)
+        raise PortNotImplementedError
+        # atomico: claim di :reserved, :failed_retriable due, o :dispatching scaduti
+        # => Array<DAG::Effects::Record>
+      end
+
+      def mark_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
+        raise PortNotImplementedError
+        # richiede lease owner valido, altrimenti DAG::Effects::StaleLeaseError
+        # => DAG::Effects::Record
+      end
+
+      def mark_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
+        raise PortNotImplementedError
+        # retriable true -> :failed_retriable; retriable false -> :failed_terminal
+        # richiede lease owner valido, altrimenti DAG::Effects::StaleLeaseError
+        # => DAG::Effects::Record
+      end
+
+      def release_nodes_satisfied_by_effect(effect_id:, now_ms:)
+        raise PortNotImplementedError
+        # node :waiting -> :pending solo quando tutti gli effetti blocking
+        # collegati all'attempt waiting sono terminali.
+        # => Array<Hash>
       end
 
       def abort_running_attempts(workflow_id:)
@@ -1809,6 +1905,14 @@ module DAG
 
       def read_events(workflow_id:, after_seq: nil, limit: nil)
         raise PortNotImplementedError
+      end
+
+      def prepare_workflow_retry(id:, from: :failed, to: :pending, event: nil)
+        raise PortNotImplementedError
+        # atomico: CAS workflow state + retry budget, abort failed attempts,
+        # reset failed nodes, increment workflow_retry_count, transition workflow,
+        # append event quando presente.
+        # => {id:, state:, reset:, workflow_retry_count:, event: stamped_or_nil}
       end
     end
   end
@@ -2626,7 +2730,7 @@ end
 
 ### Appendice I — `Memory::Storage` firme metodi pubblici
 
-Per chiudere il gap tra port astratto e adapter concreto, queste sono le 15 firme pubbliche che `DAG::Adapters::Memory::Storage` deve esporre.
+Per chiudere il gap tra port astratto e adapter concreto, queste sono le firme pubbliche effect-aware che `DAG::Adapters::Memory::Storage` deve esporre.
 
 ```ruby
 # lib/dag/adapters/memory/storage.rb (firme pubbliche)
@@ -2635,7 +2739,7 @@ class DAG::Adapters::Memory::Storage
 
   def create_workflow(id:, initial_definition:, initial_context:, runtime_profile:); end
   def load_workflow(id:); end
-  def transition_workflow_state(id:, from:, to:); end
+  def transition_workflow_state(id:, from:, to:, event: nil); end
 
   def append_revision(id:, parent_revision:, definition:, invalidated_node_ids:, event:); end
   def load_revision(id:, revision:); end
@@ -2645,13 +2749,20 @@ class DAG::Adapters::Memory::Storage
   def transition_node_state(workflow_id:, revision:, node_id:, from:, to:); end
 
   def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:); end
-  def commit_attempt(attempt_id:, result:, node_state:, event:); end
+  def commit_attempt(attempt_id:, result:, node_state:, event:, effects: []); end
+  def list_effects_for_node(workflow_id:, revision:, node_id:); end
+  def list_effects_for_attempt(attempt_id:); end
+  def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:); end
+  def mark_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:); end
+  def mark_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:); end
+  def release_nodes_satisfied_by_effect(effect_id:, now_ms:); end
   def abort_running_attempts(workflow_id:); end
   def list_attempts(workflow_id:, revision: nil, node_id: nil); end
   def count_attempts(workflow_id:, revision:, node_id:); end
 
   def append_event(workflow_id:, event:); end
   def read_events(workflow_id:, after_seq: nil, limit: nil); end
+  def prepare_workflow_retry(id:, from: :failed, to: :pending, event: nil); end
 end
 ```
 

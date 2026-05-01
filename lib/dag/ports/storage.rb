@@ -2,8 +2,8 @@
 
 module DAG
   module Ports
-    # Storage port — 15 documented methods (Roadmap v3.4 §C / Appendix I)
-    # plus documented extensions needed by R1/R2 retry and resume semantics.
+    # Storage port. Roadmap v3.4 §C / Appendix I documents the current
+    # effect-aware shape, including the R1/R2 retry/resume extensions.
     #
     # Adapters persist workflow rows, definition revisions, node states,
     # attempts, and the durable event log. Every method that returns

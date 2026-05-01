@@ -10,12 +10,28 @@ dependencies; Ruby 3.4+.
 
 ## Source of truth
 
-**`Ruby DAG Project Roadmap v3.4.md` (sibling to this repo) is the contract
-source.** Implement everything taking that document into account: the 4
-pillars (§2), frozen decisions (§3), public contract (§7), per-phase Output
-file obbligatori and DoD (§5–§6), anti-patterns (§9), and the appendices
-(immutability, tagged types, ports, default adapters, cops, test scenarios,
-public adapter signatures).
+Two normative documents live in the repo root. See `ROADMAP.md` for the
+full hierarchy.
+
+**`Ruby DAG Project Roadmap v3.4.md`** is the contract source for kernel
+architecture: the 4 pillars (§2), frozen decisions (§3), public contract
+(§7), per-phase Output file obbligatori and DoD (§5–§6), anti-patterns
+(§9), and the appendices (immutability, tagged types, ports, default
+adapters, cops, test scenarios, public adapter signatures).
+
+**`Delphi Ruby DAG Execution Plan.md` (v2.1-final)** is the contract
+source for the effects work and the consumer boundary: effect-aware
+semantics (§2–§3), the upstream PR sequence PR 0–PR 5 (§4), the SQLite
+adapter shape (§5), the dispatcher / handler split (§6), and the
+pinning rule (§4 PR 5).
+
+Where the two documents touch the same topic, the execution plan v2.1
+supersedes the v3.4 roadmap. The most visible difference is naming: the
+consumer host is `Delphi` (project name) in repo `nexus`, branch
+`delphi-v1`. The older `delphic` / `Delphic::Adapters::Sqlite` naming in
+the v3.4 roadmap is retained there as historical context; new code, doc
+edits, and configuration must use `Delphi` / `nexus` per execution-plan
+§0 directive 1.
 
 Hard rules:
 
@@ -40,9 +56,11 @@ Hard rules:
 
 ## Port extensions
 
-The roadmap port (Appendix C) lists 15 methods. Implementing R1's
+The original roadmap port (Appendix C) listed 15 methods. The current
+effect-aware Appendix C/I shape includes the documented extensions below.
+Implementing R1's
 `Runner#retry_workflow` per its DoD requires one operation that cannot be
-expressed via the 15 documented primitives:
+expressed via the original primitives:
 
 - **`prepare_workflow_retry(id:, from: :failed, to: :pending, event: nil)`**
   — atomically (a) verifies the workflow is still in `from`, (b) verifies
@@ -57,7 +75,7 @@ expressed via the 15 documented primitives:
 
 This is justified by R1 DoD line 586 which mandates
 `Runner#retry_workflow` resets `:failed` nodes and "ricrea attempt nuovi";
-with only the 15 documented primitives the budget restart and stale-read-safe
+with only the original primitives the budget restart and stale-read-safe
 workflow retry budget check are not achievable.
 
 A second extension widens an existing canonical method:
