@@ -12,6 +12,10 @@ Steps implement:
 ```
 
 Steps should be frozen. Durable workflow inputs and outputs must be JSON-safe.
+`Success` and `Failure` include the `DAG::Result` monadic helpers such as
+`and_then`, `map`, and `recover`. `Waiting` is a valid step outcome, but it is
+not a `DAG::Result`: it parks execution and is handled by the Runner state
+machine instead of by value-level chaining.
 
 Steps are idempotent functions of their `StepInput`: the same input should
 produce the same `Success`, `Waiting`, or `Failure`, excluding trace metadata.
