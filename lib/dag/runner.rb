@@ -250,16 +250,29 @@ module DAG
     end
 
     def commit_and_emit(run, node_id, attempt_id, attempt_number, result, node_state, event_type, extra_payload)
+      now_ms = @clock.now_ms
+      prepared_effects = prepare_effects(
+        run,
+        node_id: node_id,
+        attempt_id: attempt_id,
+        result: result,
+        created_at_ms: now_ms
+      )
+      payload = extra_payload
+        .merge(attempt_number: attempt_number)
+        .merge(effect_event_payload(event_type, prepared_effects))
       event = build_event(run,
         type: event_type,
         node_id: node_id,
         attempt_id: attempt_id,
-        payload: extra_payload.merge(attempt_number: attempt_number))
+        at_ms: now_ms,
+        payload: payload)
       stamped = @storage.commit_attempt(
         attempt_id: attempt_id,
         result: result,
         node_state: node_state,
-        event: event
+        event: event,
+        effects: prepared_effects
       )
       @event_bus.publish(stamped)
     end
@@ -269,8 +282,80 @@ module DAG
         context: effective_context(run, node_id),
         node_id: node_id,
         attempt_number: attempt_number,
-        metadata: {workflow_id: run.workflow_id, revision: run.revision}
+        metadata: {
+          workflow_id: run.workflow_id,
+          revision: run.revision,
+          effects: effects_snapshot_for(run, node_id)
+        }
       ]
+    end
+
+    EMPTY_EFFECTS = [].freeze
+    private_constant :EMPTY_EFFECTS
+
+    def prepare_effects(run, node_id:, attempt_id:, result:, created_at_ms:)
+      return EMPTY_EFFECTS unless result.respond_to?(:proposed_effects)
+      return EMPTY_EFFECTS if result.proposed_effects.empty?
+
+      blocking = result.is_a?(DAG::Waiting)
+      result.proposed_effects.map do |intent|
+        DAG::Effects::PreparedIntent.from_intent(
+          intent: intent,
+          workflow_id: run.workflow_id,
+          revision: run.revision,
+          node_id: node_id,
+          attempt_id: attempt_id,
+          payload_fingerprint: @fingerprint.compute(intent.payload),
+          blocking: blocking,
+          created_at_ms: created_at_ms
+        )
+      end.freeze
+    end
+
+    def effect_event_payload(event_type, prepared_effects)
+      return {} unless event_type == :node_waiting
+
+      {
+        effect_refs: prepared_effects.map(&:ref),
+        effect_count: prepared_effects.size
+      }
+    end
+
+    EFFECT_SNAPSHOT_FIELDS = %i[
+      id
+      ref
+      type
+      key
+      payload
+      payload_fingerprint
+      blocking
+      status
+      result
+      error
+      external_ref
+      not_before_ms
+      metadata
+    ].freeze
+    private_constant :EFFECT_SNAPSHOT_FIELDS
+
+    def effects_snapshot_for(run, node_id)
+      records = @storage.list_effects_for_node(
+        workflow_id: run.workflow_id,
+        revision: run.revision,
+        node_id: node_id
+      )
+
+      records
+        .sort_by(&:ref)
+        .each_with_object({}) do |record, snapshot|
+          snapshot[record.ref] = effect_snapshot(record)
+        end
+    end
+
+    def effect_snapshot(record)
+      EFFECT_SNAPSHOT_FIELDS.each_with_object({}) do |field, snapshot|
+        snapshot[field] = record.public_send(field)
+      end
     end
 
     def effective_context(run, node_id)
@@ -371,12 +456,12 @@ module DAG
       )
     end
 
-    def build_event(run, type:, payload:, node_id: nil, attempt_id: nil)
+    def build_event(run, type:, payload:, node_id: nil, attempt_id: nil, at_ms: nil)
       DAG::Event[
         type: type,
         workflow_id: run.workflow_id,
         revision: run.revision,
-        at_ms: @clock.now_ms,
+        at_ms: at_ms || @clock.now_ms,
         node_id: node_id,
         attempt_id: attempt_id,
         payload: payload

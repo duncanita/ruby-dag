@@ -157,7 +157,10 @@ Two layers, in order of dependency:
     algorithm; `#retry_workflow(workflow_id)` delegates the failed-to-pending
     retry boundary to storage, then calls the workflow again. The storage
     port enforces `max_workflow_retries` and raises
-    `WorkflowRetryExhaustedError` when the budget is spent.
+    `WorkflowRetryExhaustedError` when the budget is spent. The Runner also
+    prepares effect intents returned by `Success` / `Waiting`, computes their
+    payload fingerprints via the injected fingerprint port, and passes
+    `PreparedIntent` values to storage inside `commit_attempt`.
 
 ## Key files
 
@@ -261,8 +264,11 @@ public surface) without paying ceremony for private scaffolding.
   `spec/support/` are auto-included.
 - All graph nodes are symbols internally (`.to_sym` on input).
 - Step inputs flow through `DAG::StepInput[context: ec, node_id:,
-  attempt_number:, metadata: {workflow_id:, revision:}]` where `ec` is an
-  `ExecutionContext`. `input.context` is always an `ExecutionContext`.
+  attempt_number:, metadata: {workflow_id:, revision:, effects:}]` where
+  `ec` is an `ExecutionContext`. `input.context` is always an
+  `ExecutionContext`. `metadata[:effects]` is a JSON-safe Hash keyed by
+  effect `ref`, scoped to the current workflow revision and node. It excludes
+  effect lease fields and storage timestamps.
 - Effective context for a node = `initial_context` + each predecessor's
   committed-attempt `context_patch`, applied in `id.to_s` ASCII order
   over predecessors. Later predecessor wins on key collision. Bit-identical
