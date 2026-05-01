@@ -218,20 +218,48 @@ module DAG
 
       def apply_handler_result(record, result, now_ms, error)
         if result.success?
-          updated = @storage.mark_effect_succeeded(
+          completion = complete_effect_succeeded(record, result, now_ms)
+          updated = completion.fetch(:record)
+          DispatchOutcome.succeeded(
+            record: updated,
+            released: completion.fetch(:released),
+            error: error
+          )
+        else
+          completion = complete_effect_failed(record, result, now_ms)
+          updated = completion.fetch(:record)
+          DispatchOutcome.failed(
+            record: updated,
+            released: completion.fetch(:released),
+            error: error
+          )
+        end
+      end
+
+      def complete_effect_succeeded(record, result, now_ms)
+        if storage_overrides?(:complete_effect_succeeded)
+          return @storage.complete_effect_succeeded(
             effect_id: record.id,
             owner_id: @owner_id,
             result: result.result,
             external_ref: result.external_ref,
             now_ms: now_ms
           )
-          DispatchOutcome.succeeded(
-            record: updated,
-            released: release_if_terminal(updated, now_ms),
-            error: error
-          )
-        else
-          updated = @storage.mark_effect_failed(
+        end
+
+        updated = @storage.mark_effect_succeeded(
+          effect_id: record.id,
+          owner_id: @owner_id,
+          result: result.result,
+          external_ref: result.external_ref,
+          now_ms: now_ms
+        )
+        {record: updated, released: release_if_terminal(updated, now_ms)}
+      end
+
+      def complete_effect_failed(record, result, now_ms)
+        if storage_overrides?(:complete_effect_failed)
+          return @storage.complete_effect_failed(
             effect_id: record.id,
             owner_id: @owner_id,
             error: result.error,
@@ -239,18 +267,29 @@ module DAG
             not_before_ms: result.not_before_ms,
             now_ms: now_ms
           )
-          DispatchOutcome.failed(
-            record: updated,
-            released: release_if_terminal(updated, now_ms),
-            error: error
-          )
         end
+
+        updated = @storage.mark_effect_failed(
+          effect_id: record.id,
+          owner_id: @owner_id,
+          error: result.error,
+          retriable: result.retriable?,
+          not_before_ms: result.not_before_ms,
+          now_ms: now_ms
+        )
+        {record: updated, released: release_if_terminal(updated, now_ms)}
       end
 
       def release_if_terminal(updated, now_ms)
         return [] unless updated.terminal?
 
         @storage.release_nodes_satisfied_by_effect(effect_id: updated.id, now_ms: now_ms)
+      end
+
+      def storage_overrides?(method_name)
+        return false unless @storage.respond_to?(method_name)
+
+        @storage.method(method_name).owner != DAG::Ports::Storage
       end
 
       def stale_lease_error(record, error)
