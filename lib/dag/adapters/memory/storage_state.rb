@@ -318,6 +318,36 @@ module DAG
           state[:effects][effect_id] = updated
         end
 
+        # Implements `Ports::Storage#complete_effect_succeeded`.
+        # @api private
+        def complete_effect_succeeded(state, effect_id:, owner_id:, result:, external_ref:, now_ms:)
+          updated = mark_effect_succeeded(
+            state,
+            effect_id: effect_id,
+            owner_id: owner_id,
+            result: result,
+            external_ref: external_ref,
+            now_ms: now_ms
+          )
+          {record: updated, released: release_nodes_satisfied_by_effect(state, effect_id: effect_id, now_ms: now_ms)}
+        end
+
+        # Implements `Ports::Storage#complete_effect_failed`.
+        # @api private
+        def complete_effect_failed(state, effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
+          updated = mark_effect_failed(
+            state,
+            effect_id: effect_id,
+            owner_id: owner_id,
+            error: error,
+            retriable: retriable,
+            not_before_ms: not_before_ms,
+            now_ms: now_ms
+          )
+          released = updated.terminal? ? release_nodes_satisfied_by_effect(state, effect_id: effect_id, now_ms: now_ms) : []
+          {record: updated, released: released}
+        end
+
         # Implements `Ports::Storage#release_nodes_satisfied_by_effect`.
         # @api private
         def release_nodes_satisfied_by_effect(state, effect_id:, now_ms:)

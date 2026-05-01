@@ -195,6 +195,25 @@ module StorageContract
       assert_nil updated.lease_until_ms
     end
 
+    def test_contract_complete_effect_succeeded_releases_waiting_node_atomically
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      effect = commit_waiting_effect(storage, workflow_id, :a)
+      storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
+
+      completion = storage.complete_effect_succeeded(
+        effect_id: effect.id,
+        owner_id: "worker-a",
+        result: {ok: true},
+        external_ref: "external-1",
+        now_ms: 1_100
+      )
+
+      assert_equal :succeeded, completion.fetch(:record).status
+      assert_equal [{workflow_id: workflow_id, revision: 1, node_id: :a, attempt_id: effect.attempt_id, released_at_ms: 1_100}], completion.fetch(:released)
+      assert_equal :pending, storage.load_node_states(workflow_id: workflow_id, revision: 1)[:a]
+    end
+
     def test_contract_mark_effect_failed_requires_current_lease_and_sets_terminality
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
@@ -237,6 +256,38 @@ module StorageContract
       assert_equal :failed_terminal, terminal_record.status
       assert terminal_record.terminal?
       assert_nil terminal_record.not_before_ms
+    end
+
+    def test_contract_complete_effect_failed_releases_only_terminal_failures
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      retriable = commit_waiting_effect(storage, workflow_id, :a, effect_key: "retry")
+      terminal = commit_waiting_effect(storage, workflow_id, :b, effect_key: "terminal")
+      storage.claim_ready_effects(limit: 2, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
+
+      retry_completion = storage.complete_effect_failed(
+        effect_id: retriable.id,
+        owner_id: "worker-a",
+        error: {code: :retry},
+        retriable: true,
+        not_before_ms: 2_000,
+        now_ms: 1_100
+      )
+      terminal_completion = storage.complete_effect_failed(
+        effect_id: terminal.id,
+        owner_id: "worker-a",
+        error: {code: :terminal},
+        retriable: false,
+        not_before_ms: 2_000,
+        now_ms: 1_100
+      )
+
+      assert_equal :failed_retriable, retry_completion.fetch(:record).status
+      assert_empty retry_completion.fetch(:released)
+      assert_equal :waiting, storage.load_node_states(workflow_id: workflow_id, revision: 1)[:a]
+      assert_equal :failed_terminal, terminal_completion.fetch(:record).status
+      assert_equal [{workflow_id: workflow_id, revision: 1, node_id: :b, attempt_id: terminal.attempt_id, released_at_ms: 1_100}], terminal_completion.fetch(:released)
+      assert_equal :pending, storage.load_node_states(workflow_id: workflow_id, revision: 1)[:b]
     end
 
     def test_contract_release_waiting_node_only_when_all_blocking_effects_terminal

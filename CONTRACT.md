@@ -171,9 +171,13 @@ must implement:
 ```
 
 `tick(limit:)` claims up to `limit` ready effects with
-`storage.claim_ready_effects`, dispatches each claimed record, updates storage
-through `mark_effect_succeeded` or `mark_effect_failed`, and returns an
-immutable `DAG::Effects::DispatchReport`:
+`storage.claim_ready_effects`, dispatches each claimed record, and completes
+the effect through storage. When the adapter implements
+`complete_effect_succeeded` / `complete_effect_failed`, the terminal mark and
+waiting-node release happen in one storage boundary. Older adapters may still
+fall back to `mark_effect_succeeded` / `mark_effect_failed` followed by
+`release_nodes_satisfied_by_effect`. The return value is an immutable
+`DAG::Effects::DispatchReport`:
 
 ```text
 claimed
@@ -183,10 +187,12 @@ released
 errors
 ```
 
-After a successful handler result or terminal failure, the dispatcher calls
-`release_nodes_satisfied_by_effect`. Retriable failures do not release waiting
-nodes. `DAG::Effects::StaleLeaseError` from a mark operation is recorded in
-`errors` and the tick continues with the remaining claimed records.
+After a successful handler result or terminal failure, waiting nodes are
+released only when every blocking effect linked to the waiting attempt is
+terminal. Retriable failures do not release waiting nodes.
+`DAG::Effects::StaleLeaseError` from a completion or mark operation is
+recorded in `errors` and the tick continues with the remaining claimed
+records.
 
 Handler exceptions and invalid handler return values become retriable effect
 failures with JSON-safe error payloads. Unknown effect types default to terminal
@@ -239,6 +245,8 @@ storage.list_effects_for_attempt(attempt_id:)
 storage.claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:)
 storage.mark_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
 storage.mark_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
+storage.complete_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
+storage.complete_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
 storage.release_nodes_satisfied_by_effect(effect_id:, now_ms:)
 ```
 
@@ -260,6 +268,13 @@ the JSON-safe result and external reference. Retriable failure sets
 `:pending` only when every blocking effect linked to that waiting attempt is
 terminal. Detached effects (`blocking: false`) never hold a node in
 `:waiting`.
+
+`complete_effect_succeeded` and `complete_effect_failed` are the durable
+completion boundary for dispatchers. They perform the same lease validation and
+state update as `mark_effect_succeeded` / `mark_effect_failed` and also release
+any newly satisfied waiting nodes in the same logical storage transaction.
+They return `{record:, released:}`. Retriable failures return an empty
+`released:` array.
 
 ## Execution Context
 

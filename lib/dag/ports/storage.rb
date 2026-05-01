@@ -187,6 +187,37 @@ module DAG
         raise PortNotImplementedError
       end
 
+      # Port extension: atomically mark a claimed effect as succeeded and
+      # release any waiting nodes that become satisfied by that terminal
+      # effect state. This closes the crash window between a terminal mark and
+      # a separate release call in durable adapters.
+      #
+      # @param effect_id [String]
+      # @param owner_id [String] current lease owner
+      # @param result [Object] JSON-safe result
+      # @param external_ref [Object, nil] JSON-safe external reference
+      # @param now_ms [Integer]
+      # @return [Hash] {record:, released:}
+      # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
+      def complete_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
+        raise PortNotImplementedError
+      end
+
+      # Port extension: atomically mark a claimed effect as failed and release
+      # waiting nodes when the resulting failure is terminal.
+      #
+      # @param effect_id [String]
+      # @param owner_id [String] current lease owner
+      # @param error [Object] JSON-safe error
+      # @param retriable [Boolean]
+      # @param not_before_ms [Integer, nil] retry delay hint for retriable failures
+      # @param now_ms [Integer]
+      # @return [Hash] {record:, released:}
+      # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
+      def complete_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
+        raise PortNotImplementedError
+      end
+
       # Reset waiting nodes linked to `effect_id` once all blocking effects for
       # the waiting attempt are terminal. The node is reset to :pending; the
       # waiting attempt remains waiting as durable history.

@@ -123,6 +123,31 @@ module DAG
           )
         end
 
+        # (see Ports::Storage#complete_effect_succeeded)
+        def complete_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
+          frozen StorageState.complete_effect_succeeded(
+            @state,
+            effect_id: effect_id,
+            owner_id: owner_id,
+            result: result,
+            external_ref: external_ref,
+            now_ms: now_ms
+          )
+        end
+
+        # (see Ports::Storage#complete_effect_failed)
+        def complete_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
+          frozen StorageState.complete_effect_failed(
+            @state,
+            effect_id: effect_id,
+            owner_id: owner_id,
+            error: error,
+            retriable: retriable,
+            not_before_ms: not_before_ms,
+            now_ms: now_ms
+          )
+        end
+
         # (see Ports::Storage#release_nodes_satisfied_by_effect)
         def release_nodes_satisfied_by_effect(effect_id:, now_ms:)
           frozen StorageState.release_nodes_satisfied_by_effect(@state, effect_id: effect_id, now_ms: now_ms)
