@@ -247,10 +247,16 @@ module DAG
     # --- Neighbor queries ---
 
     # @return [Set<Symbol>]
-    def successors(name) = fetch_set(@adjacency, name.to_sym).dup
+    def successors(name)
+      set = fetch_set(@adjacency, name.to_sym)
+      frozen? ? set : set.dup
+    end
 
     # @return [Set<Symbol>]
-    def predecessors(name) = fetch_set(@reverse, name.to_sym).dup
+    def predecessors(name)
+      set = fetch_set(@reverse, name.to_sym)
+      frozen? ? set : set.dup
+    end
 
     # @return [Set<Symbol>] nodes with no predecessors
     def roots = frozen? ? @cached_roots : nodes_with_no(@reverse)
