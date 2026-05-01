@@ -18,4 +18,12 @@ class R0JsonSafetyTest < Minitest::Test
 
     assert_includes error.message, "non JSON-safe value"
   end
+
+  def test_json_safe_error_paths_are_preserved_for_nested_values
+    error = assert_raises(ArgumentError) do
+      DAG.json_safe!({items: [{deadline: Time.now}]})
+    end
+
+    assert_includes error.message, "$root.items[0].deadline"
+  end
 end
