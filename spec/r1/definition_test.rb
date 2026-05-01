@@ -59,7 +59,17 @@ class DefinitionTest < Minitest::Test
     a = DAG::Workflow::Definition.new.add_node(:n, type: :passthrough)
     b = DAG::Workflow::Definition.new.add_node(:n, type: :passthrough)
     assert_equal a, b
+    assert_equal a.hash, b.hash
     refute_equal a, DAG::Workflow::Definition.new.add_node(:other, type: :passthrough)
     refute_equal a, "not a definition"
+  end
+
+  def test_hash_is_stable_when_to_h_result_is_mutated
+    definition = DAG::Workflow::Definition.new.add_node(:n, type: :passthrough)
+    hash = definition.hash
+
+    definition.to_h[:nodes] << {id: :other, type: :passthrough, config: {}}
+
+    assert_equal hash, definition.hash
   end
 end
