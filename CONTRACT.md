@@ -231,6 +231,10 @@ identity = [type, key]
 ref      = "#{type}:#{key}"
 ```
 
+`type` and `key` are Strings and must not contain `:`. The separator is
+reserved so the string `ref` is an unambiguous representation of
+`[type, key]`.
+
 The first reservation for a `ref` creates a durable `DAG::Effects::Record` in
 `:reserved`. A later reservation with the same `ref` and the same
 `payload_fingerprint` reuses the record and adds a new attempt-effect link. A

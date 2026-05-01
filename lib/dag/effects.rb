@@ -35,6 +35,19 @@ module DAG
       proposed_effects
     end
 
+    # Effect refs use `type:key`; disallow the separator in either component
+    # so the string ref remains an unambiguous representation of identity.
+    # @api private
+    def validate_ref_part!(value, label)
+      raise ArgumentError, "#{label} must be String" unless value.is_a?(String)
+      raise ArgumentError, "#{label} must not include ':'" if value.include?(":")
+    end
+
+    # @api private
+    def ref_for(type, key)
+      "#{type}:#{key}".freeze
+    end
+
     # Fetch a value from a Hash-like snapshot accepting symbol or string keys.
     # @api private
     def fetch_snapshot_value(snapshot, key, default = nil)
