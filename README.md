@@ -63,6 +63,83 @@ left in `:running` is unwedged by aborting in-flight attempts before
 recomputing eligibility. Already-committed nodes are not rerun in the
 same revision.
 
+## Effect Intents
+
+Steps can return side effects as abstract intents without performing physical I/O. The kernel guarantees durable reservation; a consumer-provided dispatcher executes them.
+
+### Awaited abstract effect
+
+A step returns `Waiting` with `proposed_effects` when it needs external work. When the workflow resumes, it uses `DAG::Effects::Await` to process the resolved effect:
+
+```ruby
+class FetchStep < DAG::Step::Base
+  def call(input)
+    intent = DAG::Effects::Intent[
+      type: "http_get",
+      key: "fetch_data",
+      payload: { url: "https://example.com" }
+    ]
+
+    DAG::Effects::Await.call(input, intent) do |result|
+      # This block runs only when the effect has succeeded
+      DAG::Success[value: result.fetch("body")]
+    end
+  end
+end
+```
+
+### Detached effect
+
+A step can also propose non-blocking effects on `Success` (e.g. notifications):
+
+```ruby
+class NotifyStep < DAG::Step::Base
+  def call(_input)
+    intent = DAG::Effects::Intent[
+      type: "email",
+      key: "welcome_user",
+      payload: { to: "user@example.com" }
+    ]
+    DAG::Success[value: :ok, proposed_effects: [intent]]
+  end
+end
+```
+
+### Handler failures
+
+The `DAG::Effects::Dispatcher` claims records and calls your concrete handlers. Handlers determine if a failure is retriable or terminal:
+
+```ruby
+class HttpHandler
+  def call(record)
+    response = HTTP.get(record.payload["url"])
+    
+    if response.status.success?
+      DAG::Effects::HandlerResult.succeeded(result: response.parse)
+    elsif response.status.server_error? || response.status.too_many_requests?
+      # Retriable failure: dispatcher will retry after backoff
+      DAG::Effects::HandlerResult.failed(
+        error: { code: response.status.code },
+        retriable: true,
+        not_before_ms: Time.now.to_i * 1000 + 30_000
+      )
+    else
+      # Terminal failure: step will receive a Failure result on next resume
+      DAG::Effects::HandlerResult.failed(
+        error: { code: response.status.code },
+        retriable: false
+      )
+    end
+  rescue => e
+    # Raised exceptions are treated as retriable by default
+    DAG::Effects::HandlerResult.failed(
+      error: { class: e.class.name, message: e.message },
+      retriable: true
+    )
+  end
+end
+```
+
 ## Architecture
 
 - **Graph** (`DAG::Graph`) — pure DAG with deterministic topological
