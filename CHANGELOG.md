@@ -1,11 +1,14 @@
 # Changelog
 
-## 1.0.0 — 2026-04-28
+## 1.0.0 — 2026-05-01
 
-Roadmap v3.4 complete (R0-R3). Deterministic kernel, durable in-memory
-resume, and structural mutation are in. Zero runtime dependencies; Ruby
-≥ 3.4. The Memory adapters are single-process; SQLite (S0) and the
-`delphic` consumer (approvals/budgets) are the next phases.
+Roadmap v3.4 complete (R0-R3) plus the effect-aware kernel contract
+required by Delphi. Deterministic kernel, durable in-memory resume,
+structural mutation, abstract effect intents, lease-aware dispatch, and
+the shared storage contract are in. Zero runtime dependencies; Ruby
+≥ 3.4. The Memory adapters are single-process; SQLite (S0) lives in the
+Delphi consumer (`nexus`, branch `delphi-v1`) and implements the public
+`DAG::Ports::Storage` contract.
 
 This release closes the v1.0 readiness gate (#74). Highlights:
 
@@ -36,6 +39,26 @@ This release closes the v1.0 readiness gate (#74). Highlights:
   and rejects duplicate `commit_attempt` calls.
 - Tagged types validate through `initialize`, so `.new`, `[]`, and `#with`
   share the same JSON-safety and closed-enum checks.
+
+### Added — Effect-aware kernel contract
+
+- `DAG::Effects::{Intent, PreparedIntent, Record, HandlerResult,
+  DispatchReport}` value objects plus `DAG::Effects::Await` for pure awaited
+  effect composition.
+- `DAG::Success` and `DAG::Waiting` now accept `proposed_effects`.
+  `Success` effects are detached; `Waiting` effects are blocking and release
+  the node only after every linked blocking effect is terminal.
+- `DAG::Runner` prepares effect intents, computes payload fingerprints via
+  the injected fingerprint port, and commits prepared intents inside
+  `storage.commit_attempt(..., effects: [])`.
+- `DAG::Ports::Storage` includes the effect ledger API:
+  `list_effects_for_node`, `list_effects_for_attempt`,
+  `claim_ready_effects`, `mark_effect_succeeded`, `mark_effect_failed`,
+  and `release_nodes_satisfied_by_effect`.
+- `DAG::Effects::Dispatcher` coordinates abstract effect dispatch under
+  leases while concrete handlers remain in the consumer host.
+- Effect identity is `(type, key)`; a different `payload_fingerprint` for the
+  same identity raises `DAG::Effects::IdempotencyConflictError`.
 
 ### Changed
 
