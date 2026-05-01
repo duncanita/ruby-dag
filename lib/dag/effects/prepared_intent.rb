@@ -104,13 +104,13 @@ module DAG
         # `[]`, which does not expose the kwarg.
         DAG::Effects.validate_ref_part!(type, "type")
         DAG::Effects.validate_ref_part!(key, "key")
-        validate_string!(workflow_id, "workflow_id")
-        validate_revision!(revision)
-        validate_node_id!(node_id)
-        validate_string!(attempt_id, "attempt_id")
-        validate_string!(payload_fingerprint, "payload_fingerprint")
-        validate_boolean!(blocking, "blocking")
-        validate_integer!(created_at_ms, "created_at_ms")
+        DAG::Validation.string!(workflow_id, "workflow_id")
+        DAG::Validation.revision!(revision)
+        DAG::Validation.node_id!(node_id)
+        DAG::Validation.string!(attempt_id, "attempt_id")
+        DAG::Validation.string!(payload_fingerprint, "payload_fingerprint")
+        DAG::Validation.boolean!(blocking, "blocking")
+        DAG::Validation.integer!(created_at_ms, "created_at_ms")
         DAG.json_safe!(payload, "$root.payload")
         DAG.json_safe!(metadata, "$root.metadata")
 
@@ -128,32 +128,6 @@ module DAG
           created_at_ms: created_at_ms,
           metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
         )
-      end
-
-      private
-
-      def validate_string!(value, label)
-        raise ArgumentError, "#{label} must be String" unless value.is_a?(String)
-      end
-
-      def validate_revision!(value)
-        raise ArgumentError, "revision must be a positive Integer" unless value.is_a?(Integer) && value.positive?
-      end
-
-      def validate_node_id!(value)
-        return if value.is_a?(Symbol) || value.is_a?(String)
-
-        raise ArgumentError, "node_id must be Symbol or String"
-      end
-
-      def validate_boolean!(value, label)
-        return if value == true || value == false
-
-        raise ArgumentError, "#{label} must be true or false"
-      end
-
-      def validate_integer!(value, label)
-        raise ArgumentError, "#{label} must be Integer" unless value.is_a?(Integer)
       end
     end
   end

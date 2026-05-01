@@ -31,7 +31,7 @@ module DAG
           unless result.is_a?(DAG::Effects::HandlerResult)
             raise ArgumentError, "result must be DAG::Effects::HandlerResult"
           end
-          raise ArgumentError, "error must be Hash or nil" unless error.nil? || error.is_a?(Hash)
+          DAG::Validation.optional_hash!(error, "error")
           DAG.json_safe!(error, "$root.error")
 
           super(result: result, error: immutable_json_copy(error))
@@ -86,8 +86,8 @@ module DAG
           if succeeded_record && failed_record
             raise ArgumentError, "dispatch outcome cannot contain both succeeded_record and failed_record"
           end
-          raise ArgumentError, "released must be an Array" unless released.is_a?(Array)
-          raise ArgumentError, "error must be Hash or nil" unless error.nil? || error.is_a?(Hash)
+          DAG::Validation.array!(released, "released")
+          DAG::Validation.optional_hash!(error, "error")
           DAG.json_safe!(released, "$root.released")
           DAG.json_safe!(error, "$root.error")
 
@@ -124,9 +124,9 @@ module DAG
       # @param unknown_handler_policy [:terminal_failure, :raise]
       def initialize(storage:, handlers:, clock:, owner_id:, lease_ms:, unknown_handler_policy: :terminal_failure)
         validate_storage!(storage)
-        validate_dependency!(clock, :now_ms, "clock")
-        validate_owner_id!(owner_id)
-        validate_positive_integer!(lease_ms, "lease_ms")
+        DAG::Validation.dependency!(clock, :now_ms, "clock")
+        DAG::Validation.nonempty_string!(owner_id, "owner_id")
+        DAG::Validation.positive_integer!(lease_ms, "lease_ms")
         validate_unknown_handler_policy!(unknown_handler_policy)
 
         @storage = storage
@@ -142,7 +142,7 @@ module DAG
       # @param limit [Integer]
       # @return [DAG::Effects::DispatchReport]
       def tick(limit:)
-        validate_nonnegative_integer!(limit, "limit")
+        DAG::Validation.nonnegative_integer!(limit, "limit")
 
         now_ms = @clock.now_ms
         claimed = @storage.claim_ready_effects(
@@ -314,7 +314,7 @@ module DAG
         end
         handlers.each do |type, handler|
           validate_handler_type!(type)
-          validate_dependency!(handler, :call, "handler #{type.inspect}")
+          DAG::Validation.dependency!(handler, :call, "handler #{type.inspect}")
         end
 
         handlers.to_h { |type, handler| [type.to_s, handler] }.freeze
@@ -327,39 +327,18 @@ module DAG
           mark_effect_failed
           release_nodes_satisfied_by_effect
         ].each do |method_name|
-          validate_dependency!(value, method_name, "storage")
+          DAG::Validation.dependency!(value, method_name, "storage")
         end
       end
 
       def validate_handler_type!(value)
-        return if value.is_a?(String) || value.is_a?(Symbol)
-
-        raise ArgumentError, "handler type must be String or Symbol"
+        DAG::Validation.string_or_symbol!(value, "handler type")
       end
 
       def validate_unknown_handler_policy!(value)
         return if UNKNOWN_HANDLER_POLICIES.include?(value)
 
         raise ArgumentError, "unknown_handler_policy must be one of #{UNKNOWN_HANDLER_POLICIES.inspect}"
-      end
-
-      def validate_dependency!(value, method_name, label)
-        return if value.respond_to?(method_name)
-
-        raise ArgumentError, "#{label} must respond to #{method_name}"
-      end
-
-      def validate_owner_id!(value)
-        raise ArgumentError, "owner_id must be String" unless value.is_a?(String)
-        raise ArgumentError, "owner_id must not be empty" if value.empty?
-      end
-
-      def validate_positive_integer!(value, label)
-        raise ArgumentError, "#{label} must be a positive Integer" unless value.is_a?(Integer) && value.positive?
-      end
-
-      def validate_nonnegative_integer!(value, label)
-        raise ArgumentError, "#{label} must be a non-negative Integer" unless value.is_a?(Integer) && !value.negative?
       end
     end
   end

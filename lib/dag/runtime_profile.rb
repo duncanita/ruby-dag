@@ -39,12 +39,8 @@ module DAG
 
     def initialize(durability:, max_attempts_per_node:, max_workflow_retries:, event_bus_kind:, metadata: {})
       raise ArgumentError, "invalid durability" unless DAG::RuntimeProfile::DURABILITY.include?(durability)
-      unless max_attempts_per_node.is_a?(Integer) && max_attempts_per_node.positive?
-        raise ArgumentError, "max_attempts_per_node must be a positive Integer"
-      end
-      unless max_workflow_retries.is_a?(Integer) && !max_workflow_retries.negative?
-        raise ArgumentError, "max_workflow_retries must be a non-negative Integer"
-      end
+      DAG::Validation.positive_integer!(max_attempts_per_node, "max_attempts_per_node")
+      DAG::Validation.nonnegative_integer!(max_workflow_retries, "max_workflow_retries")
 
       DAG.json_safe!(metadata, "$root.metadata")
 

@@ -15,9 +15,7 @@ module DAG
         # @return [DAG::Success, DAG::Waiting, DAG::Failure]
         def call(input, intent, not_before_ms: nil)
           raise ArgumentError, "intent must be DAG::Effects::Intent" unless intent.is_a?(DAG::Effects::Intent)
-          unless not_before_ms.nil? || not_before_ms.is_a?(Integer)
-            raise ArgumentError, "not_before_ms must be Integer or nil"
-          end
+          DAG::Validation.optional_integer!(not_before_ms, "not_before_ms")
 
           record = effect_snapshot(input, intent)
           case DAG::Effects.fetch_snapshot_value(record, :status)&.to_sym

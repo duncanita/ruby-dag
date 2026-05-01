@@ -35,9 +35,7 @@ module DAG
         # @param metadata [Hash] JSON-safe
         # @return [HandlerResult]
         def failed(error:, retriable:, not_before_ms: nil, metadata: {})
-          unless retriable == true || retriable == false
-            raise ArgumentError, "retriable must be true or false"
-          end
+          DAG::Validation.boolean!(retriable, "retriable")
 
           new(
             status: retriable ? :failed_retriable : :failed_terminal,
@@ -52,7 +50,7 @@ module DAG
         unless DAG::Effects::HandlerResult::STATUSES.include?(status)
           raise ArgumentError, "invalid handler result status: #{status.inspect}"
         end
-        raise ArgumentError, "not_before_ms must be Integer or nil" unless not_before_ms.nil? || not_before_ms.is_a?(Integer)
+        DAG::Validation.optional_integer!(not_before_ms, "not_before_ms")
         raise ArgumentError, "succeeded does not accept error" if status == :succeeded && !error.nil?
         raise ArgumentError, "#{status} does not accept result" if status != :succeeded && !result.nil?
         DAG.json_safe!(result, "$root.result")
