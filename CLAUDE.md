@@ -54,6 +54,26 @@ Hard rules:
   Justify the extension with a roadmap-level concern (DoD requirement,
   pillar invariant) and update CONTRACT.md.
 
+## Code style and DRY discipline
+
+Prefer small, explicit shared helpers for repeated boundary code instead of
+copying the same validation, defensive-copy, or normalization logic across
+value objects and adapters.
+
+- Reuse `DAG::Validation` for primitive, instance, optional instance, enum,
+  dependency, and collection-shape checks. Add a narrowly named helper there
+  when the same validation shape appears in multiple files.
+- Reuse `DAG.frozen_copy` at object boundaries instead of spelling
+  `DAG.deep_freeze(DAG.deep_dup(...))` or `DAG.deep_freeze(array.dup)` inline.
+- Keep public error messages stable. When tests or docs rely on wording, pass
+  an explicit `message:` to the validation helper rather than changing the
+  observed contract.
+- Do not make DRYness abstract or magical. Avoid `method_missing`, broad
+  metaprogramming, or generic "validate schema" layers in the kernel unless
+  they remove substantial duplication without hiding control flow.
+- One-off domain invariants should stay local when local code is clearer than
+  a helper. DRY is a maintainability rule, not permission to erase intent.
+
 ## Port extensions
 
 The original roadmap port (Appendix C) listed 15 methods. The current
