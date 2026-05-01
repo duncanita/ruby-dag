@@ -188,7 +188,7 @@ module DAG
       @reverse.freeze
       @edge_metadata.each_value(&:freeze)
       @edge_metadata.freeze
-      @cached_layers = compute_topological_layers.freeze
+      @cached_layers = frozen_layers(compute_topological_layers)
       @cached_sort = @cached_layers.flatten.freeze
       @cached_roots = nodes_with_no(@reverse).freeze
       @cached_leaves = nodes_with_no(@adjacency).freeze
@@ -573,6 +573,10 @@ module DAG
       raise CycleError, "Graph contains a cycle" if processed < @nodes.size
       # :nocov:
       layers
+    end
+
+    def frozen_layers(layers)
+      layers.each(&:freeze).freeze
     end
 
     def initialize_dup(orig)
