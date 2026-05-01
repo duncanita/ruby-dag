@@ -336,23 +336,6 @@ module DAG
       }
     end
 
-    EFFECT_SNAPSHOT_FIELDS = %i[
-      id
-      ref
-      type
-      key
-      payload
-      payload_fingerprint
-      blocking
-      status
-      result
-      error
-      external_ref
-      not_before_ms
-      metadata
-    ].freeze
-    private_constant :EFFECT_SNAPSHOT_FIELDS
-
     def effects_snapshot_for(run, node_id)
       records = @storage.list_effects_for_node(
         workflow_id: run.workflow_id,
@@ -363,14 +346,8 @@ module DAG
       records
         .sort_by(&:ref)
         .each_with_object({}) do |record, snapshot|
-          snapshot[record.ref] = effect_snapshot(record)
+          snapshot[record.ref] = record.to_snapshot
         end
-    end
-
-    def effect_snapshot(record)
-      EFFECT_SNAPSHOT_FIELDS.each_with_object({}) do |field, snapshot|
-        snapshot[field] = record.public_send(field)
-      end
     end
 
     def effective_context(run, node_id)

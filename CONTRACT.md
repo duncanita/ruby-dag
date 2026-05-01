@@ -109,7 +109,8 @@ input.metadata[:effects]
 
 The snapshot is a JSON-safe Hash keyed by effect `ref`. Values are plain frozen
 Hashes, not `DAG::Effects::Record` objects, so `StepInput` remains durable and
-JSON-safe. The snapshot contains stable effect data:
+JSON-safe. `DAG::Effects::Record#to_snapshot` returns this public shape. The
+snapshot contains stable effect data:
 
 ```text
 id
