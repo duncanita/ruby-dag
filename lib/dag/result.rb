@@ -1,8 +1,9 @@
 # frozen_string_literal: true
 
 module DAG
-  # Marker module included by Success and Failure. Use `result.is_a?(DAG::Result)`
-  # to type-check a value monad.
+  # Marker module included by Success and Failure. Waiting is a valid step
+  # outcome, but it deliberately does not include this monadic API.
+  # Use `result.is_a?(DAG::Result)` to type-check a value monad.
   #
   # The full contract lives on Success and Failure themselves:
   #   success? / failure?    -- branch predicates
