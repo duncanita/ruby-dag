@@ -26,7 +26,7 @@ module DAG
           frozen_event = DAG.frozen_copy(event)
           @events << frozen_event
           @events.shift if @events.size > @buffer_size
-          @subscribers.each { |subscriber| subscriber.call(frozen_event) }
+          @subscribers.dup.each { |subscriber| subscriber.call(frozen_event) }
           nil
         end
 
