@@ -159,6 +159,7 @@ module StorageContract
       assert_equal :dispatching, claimed.first.status
 
       assert_empty storage.claim_ready_effects(limit: 1, owner_id: "worker-b", lease_ms: 500, now_ms: 1_100)
+      assert_empty storage.claim_ready_effects(limit: 1, owner_id: "worker-b", lease_ms: 500, now_ms: 1_500)
 
       reclaimed = storage.claim_ready_effects(limit: 1, owner_id: "worker-b", lease_ms: 500, now_ms: 1_501)
       assert_equal [first_effect_id], reclaimed.map(&:id)

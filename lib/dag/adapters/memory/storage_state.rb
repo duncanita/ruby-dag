@@ -629,6 +629,8 @@ module DAG
           when :failed_retriable
             record.not_before_ms.nil? || record.not_before_ms <= now_ms
           when :dispatching
+            # Leases are valid through their exact expiry millisecond; only a
+            # strictly older lease is claimable by another owner.
             record.lease_until_ms.nil? || record.lease_until_ms < now_ms
           else
             false
