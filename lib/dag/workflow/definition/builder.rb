@@ -16,7 +16,7 @@ module DAG
         end
 
         def initialize(revision: 1)
-          raise ArgumentError, "revision must be a positive Integer" unless revision.is_a?(Integer) && revision.positive?
+          DAG::Validation.revision!(revision)
 
           @graph = DAG::Graph.new
           @step_types = {}
@@ -26,7 +26,7 @@ module DAG
         # @return [self]
         def add_node(id, type:, config: {})
           sym = id.to_sym
-          raise ArgumentError, "type must be a Symbol" unless type.is_a?(Symbol)
+          DAG::Validation.symbol!(type, "type")
 
           @graph.add_node(sym)
           @step_types[sym] = {type: type, config: DAG.frozen_copy(config)}

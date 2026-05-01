@@ -46,10 +46,12 @@ module DAG
     end
 
     def initialize(reason:, resume_token: nil, not_before_ms: nil, proposed_effects: [], metadata: {})
-      raise ArgumentError, "reason must be Symbol" unless reason.is_a?(Symbol)
-      unless not_before_ms.nil? || not_before_ms.is_a?(Integer)
-        raise ArgumentError, "not_before_ms must be Integer milliseconds or nil"
-      end
+      DAG::Validation.symbol!(reason, "reason")
+      DAG::Validation.optional_integer!(
+        not_before_ms,
+        "not_before_ms",
+        message: "not_before_ms must be Integer milliseconds or nil"
+      )
 
       DAG.json_safe!(resume_token, "$root.resume_token")
       DAG.json_safe!(metadata, "$root.metadata")

@@ -39,12 +39,14 @@ module DAG
     private
 
     def validate_node_ids_shape!(ids, label)
-      raise ArgumentError, "#{label} must be an Array" unless ids.is_a?(Array)
+      DAG::Validation.array!(ids, label)
 
       ids.each do |id|
-        next if id.is_a?(Symbol) || id.is_a?(String)
-
-        raise ArgumentError, "#{label} entries must be Symbol or String, got #{id.class}: #{id.inspect}"
+        DAG::Validation.string_or_symbol!(
+          id,
+          "#{label} entry",
+          message: "#{label} entries must be Symbol or String, got #{id.class}: #{id.inspect}"
+        )
       end
     end
 

@@ -188,9 +188,7 @@ module DAG
         # Implements `Ports::Storage#begin_attempt`.
         # @api private
         def begin_attempt(state, workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:)
-          unless attempt_number.is_a?(Integer) && attempt_number.positive?
-            raise ArgumentError, "attempt_number must be a positive Integer"
-          end
+          DAG::Validation.positive_integer!(attempt_number, "attempt_number")
 
           states_for_rev = fetch_node_states!(state, workflow_id, revision)
           current = states_for_rev[node_id]
@@ -262,10 +260,10 @@ module DAG
         # @api private
         def claim_ready_effects(state, limit:, owner_id:, lease_ms:, now_ms:)
           ensure_effect_state!(state)
-          validate_nonnegative_integer!(limit, "limit")
-          validate_string!(owner_id, "owner_id")
-          validate_positive_integer!(lease_ms, "lease_ms")
-          validate_integer!(now_ms, "now_ms")
+          DAG::Validation.nonnegative_integer!(limit, "limit")
+          DAG::Validation.string!(owner_id, "owner_id")
+          DAG::Validation.positive_integer!(lease_ms, "lease_ms")
+          DAG::Validation.integer!(now_ms, "now_ms")
 
           claimed = []
           state[:effect_order].each do |effect_id|
@@ -290,8 +288,8 @@ module DAG
         # @api private
         def mark_effect_succeeded(state, effect_id:, owner_id:, result:, external_ref:, now_ms:)
           ensure_effect_state!(state)
-          validate_string!(owner_id, "owner_id")
-          validate_integer!(now_ms, "now_ms")
+          DAG::Validation.string!(owner_id, "owner_id")
+          DAG::Validation.integer!(now_ms, "now_ms")
           record = fetch_effect!(state, effect_id)
           validate_effect_lease!(record, owner_id: owner_id, now_ms: now_ms)
 
@@ -312,11 +310,9 @@ module DAG
         # @api private
         def mark_effect_failed(state, effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
           ensure_effect_state!(state)
-          validate_string!(owner_id, "owner_id")
-          validate_integer!(now_ms, "now_ms")
-          unless retriable == true || retriable == false
-            raise ArgumentError, "retriable must be true or false"
-          end
+          DAG::Validation.string!(owner_id, "owner_id")
+          DAG::Validation.integer!(now_ms, "now_ms")
+          DAG::Validation.boolean!(retriable, "retriable")
           record = fetch_effect!(state, effect_id)
           validate_effect_lease!(record, owner_id: owner_id, now_ms: now_ms)
 
@@ -367,7 +363,7 @@ module DAG
         # @api private
         def release_nodes_satisfied_by_effect(state, effect_id:, now_ms:)
           ensure_effect_state!(state)
-          validate_integer!(now_ms, "now_ms")
+          DAG::Validation.integer!(now_ms, "now_ms")
           fetch_effect!(state, effect_id)
 
           released = []
@@ -521,7 +517,7 @@ module DAG
         # @api private
         def prepare_effect_reservations(state, attempt, effects)
           ensure_effect_state!(state)
-          raise ArgumentError, "effects must be an Array" unless effects.is_a?(Array)
+          DAG::Validation.array!(effects, "effects")
 
           next_effect_seq = state[:effect_seq]
           pending_by_ref = {}
@@ -692,30 +688,6 @@ module DAG
           state[:attempt_effect_links].fetch(attempt_id, []).all? do |link|
             !link[:blocking] || state[:effects].fetch(link[:effect_id]).terminal?
           end
-        end
-
-        # Internal validations.
-        # @api private
-        def validate_string!(value, label)
-          raise ArgumentError, "#{label} must be String" unless value.is_a?(String)
-        end
-
-        # Internal validations.
-        # @api private
-        def validate_integer!(value, label)
-          raise ArgumentError, "#{label} must be Integer" unless value.is_a?(Integer)
-        end
-
-        # Internal validations.
-        # @api private
-        def validate_positive_integer!(value, label)
-          raise ArgumentError, "#{label} must be a positive Integer" unless value.is_a?(Integer) && value.positive?
-        end
-
-        # Internal validations.
-        # @api private
-        def validate_nonnegative_integer!(value, label)
-          raise ArgumentError, "#{label} must be a non-negative Integer" unless value.is_a?(Integer) && value >= 0
         end
 
         # Internal validations.

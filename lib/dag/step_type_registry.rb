@@ -20,13 +20,11 @@ module DAG
 
     def register(name:, klass:, fingerprint_payload:, config: {}, cache_instances: false)
       raise FrozenError, "registry is frozen" if frozen?
-      raise ArgumentError, "name must be a Symbol" unless name.is_a?(Symbol)
+      DAG::Validation.symbol!(name, "name")
       unless klass.is_a?(Class) && klass.method_defined?(:call)
         raise ArgumentError, "klass must be a Class with a public #call(StepInput) method"
       end
-      unless cache_instances == true || cache_instances == false
-        raise ArgumentError, "cache_instances must be true or false"
-      end
+      DAG::Validation.boolean!(cache_instances, "cache_instances")
       DAG.json_safe!(fingerprint_payload, "$root.fingerprint_payload")
 
       new_entry = Entry.new(

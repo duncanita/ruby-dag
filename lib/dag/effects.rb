@@ -24,7 +24,7 @@ module DAG
     # @param label [String]
     # @return [Array<DAG::Effects::Intent>]
     def validate_intents!(proposed_effects, label: "proposed_effects")
-      raise ArgumentError, "#{label} must be an Array" unless proposed_effects.is_a?(Array)
+      DAG::Validation.array!(proposed_effects, label)
 
       proposed_effects.each_with_index do |intent, index|
         next if intent.is_a?(DAG::Effects::Intent)
@@ -39,7 +39,7 @@ module DAG
     # so the string ref remains an unambiguous representation of identity.
     # @api private
     def validate_ref_part!(value, label)
-      raise ArgumentError, "#{label} must be String" unless value.is_a?(String)
+      DAG::Validation.string!(value, label)
       raise ArgumentError, "#{label} must not include ':'" if value.include?(":")
     end
 

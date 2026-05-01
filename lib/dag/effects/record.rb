@@ -167,20 +167,20 @@ module DAG
         # `ref:` is accepted only so `Data#with` round-trips correctly. It is
         # always recomputed from `type:key` below; user input passes through
         # `[]`, which does not expose the kwarg.
-        validate_string!(id, "id")
+        DAG::Validation.string!(id, "id")
         DAG::Effects.validate_ref_part!(type, "type")
         DAG::Effects.validate_ref_part!(key, "key")
-        validate_string!(workflow_id, "workflow_id")
-        validate_revision!(revision)
-        validate_node_id!(node_id)
-        validate_string!(attempt_id, "attempt_id")
-        validate_string!(payload_fingerprint, "payload_fingerprint")
-        validate_boolean!(blocking, "blocking")
+        DAG::Validation.string!(workflow_id, "workflow_id")
+        DAG::Validation.revision!(revision)
+        DAG::Validation.node_id!(node_id)
+        DAG::Validation.string!(attempt_id, "attempt_id")
+        DAG::Validation.string!(payload_fingerprint, "payload_fingerprint")
+        DAG::Validation.boolean!(blocking, "blocking")
         validate_status!(status)
-        validate_optional_integer!(not_before_ms, "not_before_ms")
-        validate_optional_integer!(lease_until_ms, "lease_until_ms")
-        validate_integer!(created_at_ms, "created_at_ms")
-        validate_integer!(updated_at_ms, "updated_at_ms")
+        DAG::Validation.optional_integer!(not_before_ms, "not_before_ms")
+        DAG::Validation.optional_integer!(lease_until_ms, "lease_until_ms")
+        DAG::Validation.integer!(created_at_ms, "created_at_ms")
+        DAG::Validation.integer!(updated_at_ms, "updated_at_ms")
         DAG.json_safe!(payload, "$root.payload")
         DAG.json_safe!(result, "$root.result")
         DAG.json_safe!(error, "$root.error")
@@ -224,38 +224,8 @@ module DAG
 
       private
 
-      def validate_string!(value, label)
-        raise ArgumentError, "#{label} must be String" unless value.is_a?(String)
-      end
-
-      def validate_revision!(value)
-        raise ArgumentError, "revision must be a positive Integer" unless value.is_a?(Integer) && value.positive?
-      end
-
-      def validate_node_id!(value)
-        return if value.is_a?(Symbol) || value.is_a?(String)
-
-        raise ArgumentError, "node_id must be Symbol or String"
-      end
-
-      def validate_boolean!(value, label)
-        return if value == true || value == false
-
-        raise ArgumentError, "#{label} must be true or false"
-      end
-
       def validate_status!(value)
         raise ArgumentError, "invalid effect status: #{value.inspect}" unless DAG::Effects::STATUSES.include?(value)
-      end
-
-      def validate_integer!(value, label)
-        raise ArgumentError, "#{label} must be Integer" unless value.is_a?(Integer)
-      end
-
-      def validate_optional_integer!(value, label)
-        return if value.nil? || value.is_a?(Integer)
-
-        raise ArgumentError, "#{label} must be Integer or nil"
       end
     end
   end

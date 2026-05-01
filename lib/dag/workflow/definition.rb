@@ -22,7 +22,7 @@ module DAG
       # @param step_types [Hash{Symbol => Hash}] node id => {type:, config:}
       # @param revision [Integer] positive
       def initialize(graph: DAG::Graph.new.freeze, step_types: {}, revision: 1)
-        raise ArgumentError, "revision must be a positive Integer" unless revision.is_a?(Integer) && revision.positive?
+        DAG::Validation.revision!(revision)
 
         @graph = graph.frozen? ? graph : graph.dup.freeze
         @step_types = DAG.deep_freeze(DAG.deep_dup(step_types))
@@ -39,7 +39,7 @@ module DAG
       # @raise [DAG::DuplicateNodeError] when `id` already exists
       def add_node(id, type:, config: {})
         sym = id.to_sym
-        raise ArgumentError, "type must be a Symbol" unless type.is_a?(Symbol)
+        DAG::Validation.symbol!(type, "type")
 
         new_graph = @graph.with_node(sym)
         new_step_types = @step_types.merge(sym => {type: type, config: DAG.deep_freeze(DAG.deep_dup(config))})

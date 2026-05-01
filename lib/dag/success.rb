@@ -91,9 +91,7 @@ module DAG
     private
 
     def validate_proposed_mutations!(proposed_mutations)
-      unless proposed_mutations.is_a?(Array)
-        raise ArgumentError, "proposed_mutations must be an Array"
-      end
+      DAG::Validation.array!(proposed_mutations, "proposed_mutations")
 
       proposed_mutations.each do |mutation|
         unless mutation.is_a?(DAG::ProposedMutation)

@@ -20,11 +20,11 @@ module DAG
       end
 
       def initialize(claimed: [], succeeded: [], failed: [], released: [], errors: [])
-        validate_array!(claimed, "claimed")
-        validate_array!(succeeded, "succeeded")
-        validate_array!(failed, "failed")
-        validate_array!(released, "released")
-        validate_array!(errors, "errors")
+        DAG::Validation.array!(claimed, "claimed")
+        DAG::Validation.array!(succeeded, "succeeded")
+        DAG::Validation.array!(failed, "failed")
+        DAG::Validation.array!(released, "released")
+        DAG::Validation.array!(errors, "errors")
         DAG.json_safe!(released, "$root.released")
         DAG.json_safe!(errors, "$root.errors")
 
@@ -35,12 +35,6 @@ module DAG
           released: DAG.deep_freeze(DAG.deep_dup(released)),
           errors: DAG.deep_freeze(DAG.deep_dup(errors))
         )
-      end
-
-      private
-
-      def validate_array!(value, label)
-        raise ArgumentError, "#{label} must be an Array" unless value.is_a?(Array)
       end
     end
   end
