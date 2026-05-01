@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.1 — 2026-05-01
+
+Patch release for the v1.0 kernel line. No runtime dependencies added and no
+public API removals.
+
+### Fixed
+
+- Effect dispatch now validates leases against a fresh clock read per record,
+  so long handler batches cannot mark records with stale batch-start time.
+- Effect completion can atomically mark terminal effects and release waiting
+  nodes through `complete_effect_succeeded` / `complete_effect_failed`,
+  preventing crash gaps between mark and release.
+- Effect refs reject ambiguous `type` / `key` parts containing `:`.
+- Frozen graph layer caches now freeze their member arrays.
+- Revision append is state-aware, avoiding stale mutation application.
+- Memory event bus subscriber dispatch uses a stable callback snapshot.
+
+### Changed
+
+- Runner and value-object hot paths avoid avoidable storage reads,
+  repeated ref construction, defensive copies, and snapshot projection work.
+- Definition construction gained a bulk builder and cached structural hash.
+- Validation and immutability helpers are reused consistently across value
+  objects and adapters while preserving public error messages.
+- Documentation clarifies workflow retry budgets, waiting-result semantics,
+  storage return shapes, and DRY guidance for future agents.
+
 ## 1.0.0 — 2026-05-01
 
 Roadmap v3.4 complete (R0-R3) plus the effect-aware kernel contract
