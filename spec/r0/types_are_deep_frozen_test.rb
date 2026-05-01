@@ -29,4 +29,16 @@ class R0TypesAreDeepFrozenTest < Minitest::Test
       DAG::Waiting[reason: :rate_limited, not_before_ms: Time.now]
     end
   end
+
+  def test_frozen_copy_preserves_frozen_strings_and_isolates_mutable_strings
+    frozen = "already".freeze
+    mutable = +"mutable"
+
+    assert_same frozen, DAG.frozen_copy(frozen)
+    copied = DAG.frozen_copy(mutable)
+    mutable << "-changed"
+
+    assert_equal "mutable", copied
+    assert copied.frozen?
+  end
 end

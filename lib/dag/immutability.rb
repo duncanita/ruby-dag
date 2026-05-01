@@ -14,7 +14,7 @@ module DAG
   # as-is — Data.define instances and other immutable values do not need
   # to be re-cloned.
   def frozen_copy(value)
-    return value if value.frozen? && !value.is_a?(Hash) && !value.is_a?(Array) && !value.is_a?(String)
+    return value if value.frozen? && !value.is_a?(Hash) && !value.is_a?(Array)
     deep_freeze(deep_dup(value))
   end
 
@@ -39,6 +39,7 @@ module DAG
 
   def deep_dup(value, seen = {})
     return value if immutable_scalar?(value)
+    return value if value.is_a?(String) && value.frozen?
     return seen[value.object_id] if seen.key?(value.object_id)
 
     case value
@@ -64,38 +65,58 @@ module DAG
   end
 
   def json_safe!(value, path = "$root")
+    json_safe_walk!(value, path.is_a?(Array) ? path : [path])
+    value
+  end
+
+  def json_safe_walk!(value, path)
     case value
     when Hash
       seen = {}
       value.each do |key, nested|
         unless JSON_KEY_CLASSES.any? { |klass| key.is_a?(klass) }
-          raise ArgumentError, "non JSON-safe key at #{path}: #{key.class}"
+          raise ArgumentError, "non JSON-safe key at #{format_json_path(path)}: #{key.class}"
         end
 
         canonical_key = key.to_s
         if seen.key?(canonical_key)
-          raise ArgumentError, "canonical key collision at #{path}: #{canonical_key.inspect}"
+          raise ArgumentError, "canonical key collision at #{format_json_path(path)}: #{canonical_key.inspect}"
         end
 
         seen[canonical_key] = true
-        json_safe!(nested, "#{path}.#{canonical_key}")
+        path << canonical_key
+        json_safe_walk!(nested, path)
+        path.pop
       end
     when Array
-      value.each_with_index { |nested, index| json_safe!(nested, "#{path}[#{index}]") }
+      value.each_with_index do |nested, index|
+        path << index
+        json_safe_walk!(nested, path)
+        path.pop
+      end
     when Float
-      raise ArgumentError, "non-finite float at #{path}" if value.nan? || value.infinite?
+      raise ArgumentError, "non-finite float at #{format_json_path(path)}" if value.nan? || value.infinite?
     when *JSON_SCALAR_CLASSES
       true
     else
-      raise ArgumentError, "non JSON-safe value at #{path}: #{value.class}"
+      raise ArgumentError, "non JSON-safe value at #{format_json_path(path)}: #{value.class}"
     end
+  end
 
-    value
+  def format_json_path(path)
+    root, *segments = path
+    segments.each_with_object(root.to_s.dup) do |segment, formatted|
+      if segment.is_a?(Integer)
+        formatted << "[#{segment}]"
+      else
+        formatted << ".#{segment}"
+      end
+    end
   end
 
   def immutable_scalar?(value)
     value.nil? || value == true || value == false ||
       value.is_a?(Symbol) || value.is_a?(Integer) || value.is_a?(Float)
   end
-  private_class_method :immutable_scalar?
+  private_class_method :json_safe_walk!, :format_json_path, :immutable_scalar?
 end
