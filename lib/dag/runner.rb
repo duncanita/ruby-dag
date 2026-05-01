@@ -290,9 +290,12 @@ module DAG
       ]
     end
 
+    EMPTY_EFFECTS = [].freeze
+    private_constant :EMPTY_EFFECTS
+
     def prepare_effects(run, node_id:, attempt_id:, result:, created_at_ms:)
-      return [] unless result.respond_to?(:proposed_effects)
-      return [] if result.proposed_effects.empty?
+      return EMPTY_EFFECTS unless result.respond_to?(:proposed_effects)
+      return EMPTY_EFFECTS if result.proposed_effects.empty?
 
       blocking = result.is_a?(DAG::Waiting)
       result.proposed_effects.map do |intent|
