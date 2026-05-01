@@ -36,7 +36,12 @@ module DAG
     end
 
     def initialize(type:, workflow_id:, revision:, at_ms:, seq: nil, node_id: nil, attempt_id: nil, payload: {})
-      raise ArgumentError, "invalid event type: #{type.inspect}" unless DAG::Event::TYPES.include?(type)
+      DAG::Validation.member!(
+        type,
+        DAG::Event::TYPES,
+        "type",
+        message: "invalid event type: #{type.inspect}"
+      )
       DAG.json_safe!(payload, "$root.payload")
 
       super(

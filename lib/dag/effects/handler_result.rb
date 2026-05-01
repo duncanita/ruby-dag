@@ -47,9 +47,12 @@ module DAG
       end
 
       def initialize(status:, result: nil, error: nil, external_ref: nil, not_before_ms: nil, metadata: {})
-        unless DAG::Effects::HandlerResult::STATUSES.include?(status)
-          raise ArgumentError, "invalid handler result status: #{status.inspect}"
-        end
+        DAG::Validation.member!(
+          status,
+          DAG::Effects::HandlerResult::STATUSES,
+          "status",
+          message: "invalid handler result status: #{status.inspect}"
+        )
         DAG::Validation.optional_integer!(not_before_ms, "not_before_ms")
         raise ArgumentError, "succeeded does not accept error" if status == :succeeded && !error.nil?
         raise ArgumentError, "#{status} does not accept result" if status != :succeeded && !result.nil?

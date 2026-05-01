@@ -14,7 +14,7 @@ module DAG
         # @yieldparam result [Object] JSON-safe effect result
         # @return [DAG::Success, DAG::Waiting, DAG::Failure]
         def call(input, intent, not_before_ms: nil)
-          raise ArgumentError, "intent must be DAG::Effects::Intent" unless intent.is_a?(DAG::Effects::Intent)
+          DAG::Validation.instance!(intent, DAG::Effects::Intent, "intent")
           DAG::Validation.optional_integer!(not_before_ms, "not_before_ms")
 
           record = effect_snapshot(input, intent)

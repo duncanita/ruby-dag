@@ -94,9 +94,12 @@ module DAG
       DAG::Validation.array!(proposed_mutations, "proposed_mutations")
 
       proposed_mutations.each do |mutation|
-        unless mutation.is_a?(DAG::ProposedMutation)
-          raise ArgumentError, "proposed_mutations must contain ProposedMutation"
-        end
+        DAG::Validation.instance!(
+          mutation,
+          DAG::ProposedMutation,
+          "proposed_mutations entry",
+          message: "proposed_mutations must contain ProposedMutation"
+        )
       end
     end
   end

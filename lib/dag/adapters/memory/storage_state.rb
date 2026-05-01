@@ -63,12 +63,12 @@ module DAG
         # @api private
         def create_workflow(state, id:, initial_definition:, initial_context:, runtime_profile:)
           raise ArgumentError, "workflow #{id} already exists" if state[:workflows].key?(id)
-          unless initial_definition.is_a?(DAG::Workflow::Definition)
-            raise ArgumentError, "initial_definition must be a DAG::Workflow::Definition"
-          end
-          unless runtime_profile.is_a?(DAG::RuntimeProfile)
-            raise ArgumentError, "runtime_profile must be a DAG::RuntimeProfile"
-          end
+          DAG::Validation.instance!(
+            initial_definition,
+            DAG::Workflow::Definition,
+            "initial_definition"
+          )
+          DAG::Validation.instance!(runtime_profile, DAG::RuntimeProfile, "runtime_profile")
           DAG.json_safe!(initial_context, "$root.initial_context")
 
           revision = initial_definition.revision
@@ -576,9 +576,11 @@ module DAG
         # Internal: type/coordinate guard for staged effect intents.
         # @api private
         def validate_prepared_effect!(effect, attempt, index)
-          unless effect.is_a?(DAG::Effects::PreparedIntent)
-            raise ArgumentError, "effects[#{index}] must be DAG::Effects::PreparedIntent"
-          end
+          DAG::Validation.instance!(
+            effect,
+            DAG::Effects::PreparedIntent,
+            "effects[#{index}]"
+          )
           unless effect.workflow_id == attempt[:workflow_id]
             raise ArgumentError, "effects[#{index}].workflow_id does not match attempt"
           end
@@ -745,9 +747,12 @@ module DAG
           when DAG::Waiting then [:waiting]
           when DAG::Failure then %i[failed pending]
           end
-          return if allowed.include?(node_state)
-
-          raise ArgumentError, "node_state #{node_state.inspect} is invalid for #{result.class}"
+          DAG::Validation.member!(
+            node_state,
+            allowed,
+            "node_state",
+            message: "node_state #{node_state.inspect} is invalid for #{result.class}"
+          )
         end
       end
     end
