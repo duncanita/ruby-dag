@@ -7,6 +7,16 @@ class EffectsDispatcherTest < Minitest::Test
     def initialize(now_ms:) = super
   end
 
+  class SequenceClock
+    def initialize(*values)
+      @values = values
+    end
+
+    def now_ms
+      @values.shift || raise("clock exhausted")
+    end
+  end
+
   def test_tick_claims_at_most_limit_and_marks_success
     storage = DAG::Adapters::Memory::Storage.new
     first = commit_waiting_effect(storage, node_id: :a, effect_key: "first", effect_type: "success")
@@ -154,6 +164,25 @@ class EffectsDispatcherTest < Minitest::Test
     assert_equal ["effect/2"], report.succeeded.map(&:id)
     assert_equal :stale_lease, report.errors.first[:code]
     assert_equal "effect/1", report.errors.first[:effect_id]
+  end
+
+  def test_mark_uses_fresh_time_after_handler
+    storage = DAG::Adapters::Memory::Storage.new
+    effect = commit_waiting_effect(storage, node_id: :a, effect_type: "success")
+    dispatcher = DAG::Effects::Dispatcher.new(
+      storage: storage,
+      handlers: {"success" => ->(_record) { DAG::Effects::HandlerResult.succeeded(result: {ok: true}) }},
+      clock: SequenceClock.new(1_000, 1_501),
+      owner_id: "worker",
+      lease_ms: 500
+    )
+
+    report = dispatcher.tick(limit: 1)
+
+    assert_equal [effect.id], report.claimed.map(&:id)
+    assert_empty report.succeeded
+    assert_equal :stale_lease, report.errors.first[:code]
+    assert_equal :dispatching, storage.list_effects_for_attempt(attempt_id: effect.attempt_id).first.status
   end
 
   private

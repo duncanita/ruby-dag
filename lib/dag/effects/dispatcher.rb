@@ -151,7 +151,7 @@ module DAG
           lease_ms: @lease_ms,
           now_ms: now_ms
         )
-        outcomes = claimed.map { |record| dispatch_record(record, now_ms) }
+        outcomes = claimed.map { |record| dispatch_record(record) }
 
         DispatchReport[
           claimed: claimed,
@@ -164,9 +164,9 @@ module DAG
 
       private
 
-      def dispatch_record(record, now_ms)
+      def dispatch_record(record)
         outcome = handler_outcome_for(record)
-        apply_handler_result(record, outcome.result, now_ms, outcome.error)
+        apply_handler_result(record, outcome.result, @clock.now_ms, outcome.error)
       rescue DAG::Effects::StaleLeaseError => stale
         DispatchOutcome.claimed_not_marked(error: stale_lease_error(record, stale))
       end
