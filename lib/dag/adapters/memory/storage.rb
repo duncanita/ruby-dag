@@ -39,6 +39,19 @@ module DAG
           frozen StorageState.append_revision(@state, id: id, parent_revision: parent_revision, definition: definition, invalidated_node_ids: invalidated_node_ids, event: event)
         end
 
+        # (see Ports::Storage#append_revision_if_workflow_state)
+        def append_revision_if_workflow_state(id:, allowed_states:, parent_revision:, definition:, invalidated_node_ids:, event:)
+          frozen StorageState.append_revision_if_workflow_state(
+            @state,
+            id: id,
+            allowed_states: allowed_states,
+            parent_revision: parent_revision,
+            definition: definition,
+            invalidated_node_ids: invalidated_node_ids,
+            event: event
+          )
+        end
+
         # (see Ports::Storage#load_revision)
         def load_revision(id:, revision:)
           frozen StorageState.load_revision(@state, id: id, revision: revision)

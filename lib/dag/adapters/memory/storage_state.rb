@@ -137,6 +137,21 @@ module DAG
           {id: id, revision: new_revision, event: stamped}
         end
 
+        # Implements `Ports::Storage#append_revision_if_workflow_state`.
+        # @api private
+        def append_revision_if_workflow_state(state, id:, allowed_states:, parent_revision:, definition:, invalidated_node_ids:, event:)
+          row = fetch_workflow!(state, id)
+          validate_workflow_state_for_revision_append!(id, row.fetch(:state), allowed_states)
+          append_revision(
+            state,
+            id: id,
+            parent_revision: parent_revision,
+            definition: definition,
+            invalidated_node_ids: invalidated_node_ids,
+            event: event
+          )
+        end
+
         # Implements `Ports::Storage#load_revision`.
         # @api private
         def load_revision(state, id:, revision:)
@@ -678,6 +693,19 @@ module DAG
         # @api private
         def validate_nonnegative_integer!(value, label)
           raise ArgumentError, "#{label} must be a non-negative Integer" unless value.is_a?(Integer) && value >= 0
+        end
+
+        # Internal validations.
+        # @api private
+        def validate_workflow_state_for_revision_append!(id, state, allowed_states)
+          allowed = allowed_states.map(&:to_sym)
+          return if allowed.include?(state)
+
+          if state == :running
+            raise DAG::ConcurrentMutationError, "workflow #{id} is running"
+          end
+
+          raise DAG::StaleStateError, "workflow #{id} cannot append revision from #{state.inspect}"
         end
 
         # Internal helper used by `count_attempts` and friends.
