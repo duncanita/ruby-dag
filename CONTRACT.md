@@ -143,6 +143,68 @@ effect_refs: [...]
 effect_count: Integer
 ```
 
+## Effect Dispatcher Contract
+
+`DAG::Effects::Dispatcher` is an abstract boundary coordinator. It claims
+durable `DAG::Effects::Record` values from storage and calls consumer-provided
+handlers; it does not know concrete external systems and is not used by
+`DAG::Runner`.
+
+Dispatcher construction is explicit:
+
+```ruby
+DAG::Effects::Dispatcher.new(
+  storage:,
+  handlers:,
+  clock:,
+  owner_id:,
+  lease_ms:,
+  unknown_handler_policy: :terminal_failure
+)
+```
+
+`handlers` is a Hash keyed by effect type (`String` or `Symbol`). Each handler
+must implement:
+
+```text
+#call(DAG::Effects::Record) -> DAG::Effects::HandlerResult
+```
+
+`tick(limit:)` claims up to `limit` ready effects with
+`storage.claim_ready_effects`, dispatches each claimed record, updates storage
+through `mark_effect_succeeded` or `mark_effect_failed`, and returns an
+immutable `DAG::Effects::DispatchReport`:
+
+```text
+claimed
+succeeded
+failed
+released
+errors
+```
+
+After a successful handler result or terminal failure, the dispatcher calls
+`release_nodes_satisfied_by_effect`. Retriable failures do not release waiting
+nodes. `DAG::Effects::StaleLeaseError` from a mark operation is recorded in
+`errors` and the tick continues with the remaining claimed records.
+
+Handler exceptions and invalid handler return values become retriable effect
+failures with JSON-safe error payloads. Unknown effect types default to terminal
+failure with `code: :unknown_handler`; alternatively,
+`unknown_handler_policy: :raise` raises `DAG::Effects::UnknownHandlerError`.
+
+Every entry in `DispatchReport#errors` has the shared JSON-safe keys:
+
+```text
+code
+effect_id
+ref
+type
+```
+
+Code-specific entries may add fields. `:handler_raised` adds `class` and
+`message`; `:handler_bad_return` adds `class`; `:stale_lease` adds `message`.
+
 ## Effect Storage Contract
 
 Effect reservation is part of the attempt commit atomic boundary:

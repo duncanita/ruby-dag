@@ -114,6 +114,21 @@ plan: `ruby-dag` must durably reserve abstract effect intents and enforce
 idempotency on `(type, key)` plus `payload_fingerprint`, while concrete
 handlers and exactly-once external-system guarantees remain in consumers.
 
+Effect PR4 adds the abstract dispatcher boundary on top of those storage
+methods:
+
+- **`DAG::Effects::Dispatcher#tick(limit:)`** claims ready records, calls the
+  handler registered for each effect type, marks the effect succeeded or
+  failed, releases waiting nodes when the effect is terminal, and returns an
+  immutable `DAG::Effects::DispatchReport`.
+- Handlers implement **`#call(DAG::Effects::Record) ->
+  DAG::Effects::HandlerResult`**. Handler exceptions and invalid return values
+  become retriable failures; unknown effect types default to terminal failure
+  unless `unknown_handler_policy: :raise` is selected.
+
+This keeps concrete external integrations in Delphi while `ruby-dag` supplies
+the lease-aware, deterministic coordination contract.
+
 All other R1/R2/R3 work uses the documented methods.
 
 ## Commands
@@ -188,6 +203,8 @@ lib/dag/effects/intent.rb                 # abstract effect intent
 lib/dag/effects/prepared_intent.rb        # kernel-enriched effect intent for storage commit
 lib/dag/effects/record.rb                 # durable effect snapshot
 lib/dag/effects/handler_result.rb         # abstract dispatcher handler result
+lib/dag/effects/dispatch_report.rb        # immutable dispatcher tick report
+lib/dag/effects/dispatcher.rb             # abstract effect dispatcher
 lib/dag/effects/await.rb                  # monadic Waiting/Failure/Success composition helper
 lib/dag/immutability.rb                   # deep_freeze, deep_dup, json_safe!
 lib/dag/ports/storage.rb                  # Ports::Storage interface
