@@ -31,8 +31,8 @@ module DAG
       super(
         state: state,
         last_event_seq: last_event_seq,
-        outcome: DAG.deep_freeze(DAG.deep_dup(outcome)),
-        metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
+        outcome: DAG.frozen_copy(outcome),
+        metadata: DAG.frozen_copy(metadata)
       )
     end
   end

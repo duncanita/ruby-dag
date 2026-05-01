@@ -60,11 +60,11 @@ module DAG
 
         super(
           status: status,
-          result: DAG.deep_freeze(DAG.deep_dup(result)),
-          error: DAG.deep_freeze(DAG.deep_dup(error)),
-          external_ref: DAG.deep_freeze(DAG.deep_dup(external_ref)),
+          result: DAG.frozen_copy(result),
+          error: DAG.frozen_copy(error),
+          external_ref: DAG.frozen_copy(external_ref),
           not_before_ms: not_before_ms,
-          metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
+          metadata: DAG.frozen_copy(metadata)
         )
       end
 

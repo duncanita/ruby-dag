@@ -31,8 +31,8 @@ module DAG
 
       super(
         graph: frozen_graph,
-        entry_node_ids: DAG.deep_freeze(DAG.deep_dup(entry_node_ids)),
-        exit_node_ids: DAG.deep_freeze(DAG.deep_dup(exit_node_ids))
+        entry_node_ids: DAG.frozen_copy(entry_node_ids),
+        exit_node_ids: DAG.frozen_copy(exit_node_ids)
       )
     end
 

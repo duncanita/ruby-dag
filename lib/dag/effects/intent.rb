@@ -27,10 +27,10 @@ module DAG
         @ref = DAG::Effects.ref_for(type, key)
 
         super(
-          type: DAG.deep_freeze(DAG.deep_dup(type)),
-          key: DAG.deep_freeze(DAG.deep_dup(key)),
-          payload: DAG.deep_freeze(DAG.deep_dup(payload)),
-          metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
+          type: DAG.frozen_copy(type),
+          key: DAG.frozen_copy(key),
+          payload: DAG.frozen_copy(payload),
+          metadata: DAG.frozen_copy(metadata)
         )
       end
 

@@ -189,27 +189,27 @@ module DAG
         DAG.json_safe!(metadata, "$root.metadata")
 
         super(
-          id: DAG.deep_freeze(DAG.deep_dup(id)),
+          id: DAG.frozen_copy(id),
           ref: DAG::Effects.ref_for(type, key),
-          workflow_id: DAG.deep_freeze(DAG.deep_dup(workflow_id)),
+          workflow_id: DAG.frozen_copy(workflow_id),
           revision: revision,
-          node_id: DAG.deep_freeze(DAG.deep_dup(node_id)),
-          attempt_id: DAG.deep_freeze(DAG.deep_dup(attempt_id)),
-          type: DAG.deep_freeze(DAG.deep_dup(type)),
-          key: DAG.deep_freeze(DAG.deep_dup(key)),
-          payload: DAG.deep_freeze(DAG.deep_dup(payload)),
-          payload_fingerprint: DAG.deep_freeze(DAG.deep_dup(payload_fingerprint)),
+          node_id: DAG.frozen_copy(node_id),
+          attempt_id: DAG.frozen_copy(attempt_id),
+          type: DAG.frozen_copy(type),
+          key: DAG.frozen_copy(key),
+          payload: DAG.frozen_copy(payload),
+          payload_fingerprint: DAG.frozen_copy(payload_fingerprint),
           blocking: blocking,
           status: status,
-          result: DAG.deep_freeze(DAG.deep_dup(result)),
-          error: DAG.deep_freeze(DAG.deep_dup(error)),
-          external_ref: DAG.deep_freeze(DAG.deep_dup(external_ref)),
+          result: DAG.frozen_copy(result),
+          error: DAG.frozen_copy(error),
+          external_ref: DAG.frozen_copy(external_ref),
           not_before_ms: not_before_ms,
-          lease_owner: DAG.deep_freeze(DAG.deep_dup(lease_owner)),
+          lease_owner: DAG.frozen_copy(lease_owner),
           lease_until_ms: lease_until_ms,
           created_at_ms: created_at_ms,
           updated_at_ms: updated_at_ms,
-          metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
+          metadata: DAG.frozen_copy(metadata)
         )
       end
 

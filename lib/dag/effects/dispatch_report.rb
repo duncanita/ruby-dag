@@ -29,11 +29,11 @@ module DAG
         DAG.json_safe!(errors, "$root.errors")
 
         super(
-          claimed: DAG.deep_freeze(claimed.dup),
-          succeeded: DAG.deep_freeze(succeeded.dup),
-          failed: DAG.deep_freeze(failed.dup),
-          released: DAG.deep_freeze(DAG.deep_dup(released)),
-          errors: DAG.deep_freeze(DAG.deep_dup(errors))
+          claimed: DAG.frozen_copy(claimed),
+          succeeded: DAG.frozen_copy(succeeded),
+          failed: DAG.frozen_copy(failed),
+          released: DAG.frozen_copy(released),
+          errors: DAG.frozen_copy(errors)
         )
       end
     end

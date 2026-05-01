@@ -38,11 +38,11 @@ module DAG
       DAG::Effects.validate_intents!(proposed_effects)
 
       super(
-        value: DAG.deep_freeze(DAG.deep_dup(value)),
-        context_patch: DAG.deep_freeze(DAG.deep_dup(context_patch)),
-        proposed_mutations: DAG.deep_freeze(proposed_mutations.dup),
-        proposed_effects: DAG.deep_freeze(proposed_effects.dup),
-        metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
+        value: DAG.frozen_copy(value),
+        context_patch: DAG.frozen_copy(context_patch),
+        proposed_mutations: DAG.frozen_copy(proposed_mutations),
+        proposed_effects: DAG.frozen_copy(proposed_effects),
+        metadata: DAG.frozen_copy(metadata)
       )
     end
 

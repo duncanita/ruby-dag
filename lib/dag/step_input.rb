@@ -28,10 +28,10 @@ module DAG
       DAG.json_safe!(metadata, "$root.metadata")
 
       super(
-        context: DAG.deep_freeze(DAG.deep_dup(context)),
+        context: DAG.frozen_copy(context),
         node_id: node_id,
         attempt_number: attempt_number,
-        metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
+        metadata: DAG.frozen_copy(metadata)
       )
     end
   end
