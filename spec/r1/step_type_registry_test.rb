@@ -8,6 +8,14 @@ class StepTypeRegistryTest < Minitest::Test
     reg.register(name: :passthrough, klass: DAG::BuiltinSteps::Passthrough, fingerprint_payload: {v: 1})
     entry = reg.lookup(:passthrough)
     assert_equal DAG::BuiltinSteps::Passthrough, entry.klass
+    refute entry.cache_instances
+  end
+
+  def test_register_accepts_instance_cache_opt_in
+    reg = DAG::StepTypeRegistry.new
+    reg.register(name: :passthrough, klass: DAG::BuiltinSteps::Passthrough, fingerprint_payload: {v: 1}, cache_instances: true)
+
+    assert reg.lookup(:passthrough).cache_instances
   end
 
   def test_register_idempotent_with_same_payload
@@ -43,6 +51,13 @@ class StepTypeRegistryTest < Minitest::Test
     reg = DAG::StepTypeRegistry.new
     assert_raises(ArgumentError) do
       reg.register(name: :bad, klass: String, fingerprint_payload: {v: 1})
+    end
+  end
+
+  def test_register_rejects_non_boolean_cache_instances
+    reg = DAG::StepTypeRegistry.new
+    assert_raises(ArgumentError) do
+      reg.register(name: :bad_cache, klass: DAG::BuiltinSteps::Noop, fingerprint_payload: {v: 1}, cache_instances: :yes)
     end
   end
 end

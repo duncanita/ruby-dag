@@ -24,7 +24,8 @@ module DAG
       :definition,
       :runtime_profile,
       :base_context,
-      :predecessors_by_node
+      :predecessors_by_node,
+      :step_instances
     )
 
     # @return [Object] injected port (see {Ports::Storage})
@@ -154,8 +155,22 @@ module DAG
         definition: definition,
         runtime_profile: workflow[:runtime_profile],
         base_context: DAG::ExecutionContext.from(workflow[:initial_context]),
-        predecessors_by_node: predecessors_by_node
+        predecessors_by_node: predecessors_by_node,
+        step_instances: build_step_instances(definition)
       )
+    end
+
+    def build_step_instances(definition)
+      instances = {}
+      definition.each_node do |node_id|
+        step_def = definition.step_type_for(node_id)
+        entry = @registry.lookup(step_def[:type])
+        next unless entry.cache_instances
+
+        key = step_instance_key(step_def)
+        instances[key] ||= entry.klass.new(config: step_def[:config])
+      end
+      instances.freeze
     end
 
     # Emitted once per workflow lifetime; survives Runner#retry_workflow.
@@ -204,7 +219,7 @@ module DAG
         payload: {attempt_number: attempt_number})
 
       input = build_step_input(run, node_id, attempt_number)
-      result = safe_call_step(run.definition, node_id, input)
+      result = safe_call_step(run, node_id, input)
 
       handle_outcome(run, node_id, attempt_id, attempt_number, result)
     end
@@ -419,10 +434,12 @@ module DAG
       best
     end
 
-    def safe_call_step(definition, node_id, input)
-      step_def = definition.step_type_for(node_id)
+    def safe_call_step(run, node_id, input)
+      step_def = run.definition.step_type_for(node_id)
       entry = @registry.lookup(step_def[:type])
-      step = entry.klass.new(config: step_def[:config])
+      step = run.step_instances.fetch(step_instance_key(step_def)) do
+        entry.klass.new(config: step_def[:config])
+      end
       result = step.call(input)
       return result if DAG::StepProtocol.valid_result?(result)
 
@@ -432,6 +449,10 @@ module DAG
       ]
     rescue => e
       DAG::Result.exception_failure(:step_raised, e)
+    end
+
+    def step_instance_key(step_def)
+      [step_def.fetch(:type), step_def.fetch(:config)]
     end
 
     # The :paused/:failed_terminal early returns above are the only paths
