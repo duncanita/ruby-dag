@@ -27,6 +27,22 @@ module DAG
       :updated_at_ms,
       :metadata
     ) do
+      SNAPSHOT_FIELDS = %i[
+        id
+        ref
+        type
+        key
+        payload
+        payload_fingerprint
+        blocking
+        status
+        result
+        error
+        external_ref
+        not_before_ms
+        metadata
+      ].freeze
+
       class << self
         remove_method :[]
 
@@ -198,6 +214,14 @@ module DAG
 
       # @return [Boolean]
       def terminal? = DAG::Effects::TERMINAL_STATUSES.include?(status)
+
+      # Stable Hash shape injected into `StepInput#metadata[:effects]`.
+      # @return [Hash]
+      def to_snapshot
+        DAG.deep_freeze(SNAPSHOT_FIELDS.each_with_object({}) do |field, snapshot|
+          snapshot[field] = public_send(field)
+        end)
+      end
 
       private
 

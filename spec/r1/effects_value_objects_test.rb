@@ -125,6 +125,31 @@ class EffectsValueObjectsTest < Minitest::Test
     assert_raises(ArgumentError) { effect_record(status: :succeeded, result: {time: Time.now}) }
   end
 
+  def test_record_to_snapshot_returns_documented_frozen_shape
+    record = effect_record(status: :succeeded, result: {ok: true}, error: nil)
+
+    snapshot = record.to_snapshot
+
+    assert snapshot.frozen?
+    assert_equal %i[
+      id
+      ref
+      type
+      key
+      payload
+      payload_fingerprint
+      blocking
+      status
+      result
+      error
+      external_ref
+      not_before_ms
+      metadata
+    ], snapshot.keys
+    assert_equal :succeeded, snapshot[:status]
+    assert_equal({ok: true}, snapshot[:result])
+  end
+
   def test_record_with_recomputes_ref_when_identity_changes
     record = effect_record(status: :succeeded, result: {ok: true})
 
