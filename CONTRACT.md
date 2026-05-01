@@ -537,7 +537,10 @@ metadata
 ```
 
 The value is frozen and JSON-safe. Defaults are `max_attempts_per_node: 3` and
-`max_workflow_retries: 0`.
+`max_workflow_retries: 0`. A retry budget of `0` means
+`Runner#retry_workflow` raises `WorkflowRetryExhaustedError` immediately;
+choose a positive value, commonly `3`, for workflows that should be manually
+retryable after failure.
 
 ## Step Type Registry
 
