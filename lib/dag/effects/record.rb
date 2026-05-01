@@ -112,9 +112,11 @@ module DAG
           lease_until_ms: nil,
           metadata: nil
         )
-          unless prepared_intent.is_a?(DAG::Effects::PreparedIntent)
-            raise ArgumentError, "prepared_intent must be DAG::Effects::PreparedIntent"
-          end
+          DAG::Validation.instance!(
+            prepared_intent,
+            DAG::Effects::PreparedIntent,
+            "prepared_intent"
+          )
 
           new(
             id: id,
@@ -225,7 +227,12 @@ module DAG
       private
 
       def validate_status!(value)
-        raise ArgumentError, "invalid effect status: #{value.inspect}" unless DAG::Effects::STATUSES.include?(value)
+        DAG::Validation.member!(
+          value,
+          DAG::Effects::STATUSES,
+          "status",
+          message: "invalid effect status: #{value.inspect}"
+        )
       end
     end
   end

@@ -27,10 +27,12 @@ module DAG
       DAG::Validation.array!(proposed_effects, label)
 
       proposed_effects.each_with_index do |intent, index|
-        next if intent.is_a?(DAG::Effects::Intent)
-
-        raise ArgumentError,
-          "#{label}[#{index}] must be DAG::Effects::Intent, got #{intent.class}"
+        DAG::Validation.instance!(
+          intent,
+          DAG::Effects::Intent,
+          "#{label}[#{index}]",
+          message: "#{label}[#{index}] must be DAG::Effects::Intent, got #{intent.class}"
+        )
       end
       proposed_effects
     end

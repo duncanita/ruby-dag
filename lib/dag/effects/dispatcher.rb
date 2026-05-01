@@ -28,9 +28,7 @@ module DAG
         # @param result [DAG::Effects::HandlerResult]
         # @param error [Hash, nil]
         def initialize(result:, error:)
-          unless result.is_a?(DAG::Effects::HandlerResult)
-            raise ArgumentError, "result must be DAG::Effects::HandlerResult"
-          end
+          DAG::Validation.instance!(result, DAG::Effects::HandlerResult, "result")
           DAG::Validation.optional_hash!(error, "error")
           DAG.json_safe!(error, "$root.error")
 
@@ -102,9 +100,7 @@ module DAG
         private
 
         def validate_optional_record!(value, label)
-          return if value.nil? || value.is_a?(DAG::Effects::Record)
-
-          raise ArgumentError, "#{label} must be DAG::Effects::Record or nil"
+          DAG::Validation.optional_instance!(value, DAG::Effects::Record, label)
         end
 
         def immutable_json_copy(value)
@@ -306,7 +302,7 @@ module DAG
       end
 
       def normalize_handlers(handlers)
-        raise ArgumentError, "handlers must be a Hash" unless handlers.is_a?(Hash)
+        DAG::Validation.hash!(handlers, "handlers")
 
         keys = handlers.keys.map(&:to_s)
         if keys.uniq.size != keys.size
@@ -336,9 +332,7 @@ module DAG
       end
 
       def validate_unknown_handler_policy!(value)
-        return if UNKNOWN_HANDLER_POLICIES.include?(value)
-
-        raise ArgumentError, "unknown_handler_policy must be one of #{UNKNOWN_HANDLER_POLICIES.inspect}"
+        DAG::Validation.member!(value, UNKNOWN_HANDLER_POLICIES, "unknown_handler_policy")
       end
     end
   end

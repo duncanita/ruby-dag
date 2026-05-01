@@ -16,8 +16,18 @@ module DAG
     # @param mutation [DAG::ProposedMutation]
     # @return [DAG::PlanResult]
     def plan(definition, mutation)
-      raise ArgumentError, "definition must be a DAG::Workflow::Definition" unless definition.is_a?(DAG::Workflow::Definition)
-      raise ArgumentError, "mutation must be a DAG::ProposedMutation" unless mutation.is_a?(DAG::ProposedMutation)
+      DAG::Validation.instance!(
+        definition,
+        DAG::Workflow::Definition,
+        "definition",
+        message: "definition must be a DAG::Workflow::Definition"
+      )
+      DAG::Validation.instance!(
+        mutation,
+        DAG::ProposedMutation,
+        "mutation",
+        message: "mutation must be a DAG::ProposedMutation"
+      )
 
       case mutation.kind
       when :invalidate then plan_invalidate(definition, mutation)

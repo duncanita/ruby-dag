@@ -19,7 +19,12 @@ module DAG
     end
 
     def initialize(graph:, entry_node_ids:, exit_node_ids:)
-      raise ArgumentError, "graph must be a DAG::Graph" unless graph.is_a?(DAG::Graph)
+      DAG::Validation.instance!(
+        graph,
+        DAG::Graph,
+        "graph",
+        message: "graph must be a DAG::Graph"
+      )
       validate_node_ids_shape!(entry_node_ids, "entry_node_ids")
       validate_node_ids_shape!(exit_node_ids, "exit_node_ids")
       raise ArgumentError, "entry_node_ids cannot be empty" if entry_node_ids.empty?

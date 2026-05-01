@@ -67,7 +67,7 @@ module DAG
           created_at_ms:,
           metadata: nil
         )
-          raise ArgumentError, "intent must be DAG::Effects::Intent" unless intent.is_a?(DAG::Effects::Intent)
+          DAG::Validation.instance!(intent, DAG::Effects::Intent, "intent")
 
           new(
             workflow_id: workflow_id,

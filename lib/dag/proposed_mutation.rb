@@ -31,9 +31,19 @@ module DAG
     end
 
     def initialize(kind:, target_node_id:, replacement_graph: nil, rationale: nil, confidence: 1.0, metadata: {})
-      raise ArgumentError, "invalid mutation kind: #{kind.inspect}" unless DAG::ProposedMutation::KINDS.include?(kind)
-      if kind == :replace_subtree && !replacement_graph.is_a?(DAG::ReplacementGraph)
-        raise ArgumentError, "replace_subtree requires replacement_graph"
+      DAG::Validation.member!(
+        kind,
+        DAG::ProposedMutation::KINDS,
+        "kind",
+        message: "invalid mutation kind: #{kind.inspect}"
+      )
+      if kind == :replace_subtree
+        DAG::Validation.instance!(
+          replacement_graph,
+          DAG::ReplacementGraph,
+          "replacement_graph",
+          message: "replace_subtree requires replacement_graph"
+        )
       end
       if kind == :invalidate && !replacement_graph.nil?
         raise ArgumentError, "invalidate does not accept replacement_graph"

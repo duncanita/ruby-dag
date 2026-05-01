@@ -38,7 +38,12 @@ module DAG
     end
 
     def initialize(durability:, max_attempts_per_node:, max_workflow_retries:, event_bus_kind:, metadata: {})
-      raise ArgumentError, "invalid durability" unless DAG::RuntimeProfile::DURABILITY.include?(durability)
+      DAG::Validation.member!(
+        durability,
+        DAG::RuntimeProfile::DURABILITY,
+        "durability",
+        message: "invalid durability"
+      )
       DAG::Validation.positive_integer!(max_attempts_per_node, "max_attempts_per_node")
       DAG::Validation.nonnegative_integer!(max_workflow_retries, "max_workflow_retries")
 

@@ -18,6 +18,15 @@ module DAG
 
     # @param value [Object]
     # @param label [String]
+    # @return [Hash]
+    def hash!(value, label)
+      raise ArgumentError, "#{label} must be a Hash" unless value.is_a?(Hash)
+
+      value
+    end
+
+    # @param value [Object]
+    # @param label [String]
     # @return [Hash, nil]
     def optional_hash!(value, label)
       return value if value.nil? || value.is_a?(Hash)
@@ -111,6 +120,39 @@ module DAG
       return value if value == true || value == false
 
       raise ArgumentError, "#{label} must be true or false"
+    end
+
+    # @param value [Object]
+    # @param klass [Class, Module]
+    # @param label [String]
+    # @param message [String, nil]
+    # @return [Object]
+    def instance!(value, klass, label, message: nil)
+      return value if value.is_a?(klass)
+
+      raise ArgumentError, message || "#{label} must be #{klass}"
+    end
+
+    # @param value [Object]
+    # @param klass [Class, Module]
+    # @param label [String]
+    # @param message [String, nil]
+    # @return [Object, nil]
+    def optional_instance!(value, klass, label, message: nil)
+      return value if value.nil? || value.is_a?(klass)
+
+      raise ArgumentError, message || "#{label} must be #{klass} or nil"
+    end
+
+    # @param value [Object]
+    # @param allowed [#include?]
+    # @param label [String]
+    # @param message [String, nil]
+    # @return [Object]
+    def member!(value, allowed, label, message: nil)
+      return value if allowed.include?(value)
+
+      raise ArgumentError, message || "#{label} must be one of #{allowed.inspect}"
     end
 
     # @param value [Object]
