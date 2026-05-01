@@ -17,6 +17,11 @@ kit.storage.create_workflow(id: id, initial_definition: definition, initial_cont
 kit.runner.call(id).state # => :completed
 ```
 
+`DAG::RuntimeProfile.default` uses `max_workflow_retries: 0`: explicit
+workflow retries are disabled unless you opt in. For workflows that should be
+retryable, pass a profile with a positive `max_workflow_retries`; `3` is a
+reasonable starting point for scripts and small durable consumers.
+
 `DAG::Toolkit.in_memory_kit` is a convenience for examples and tests; production
 callers construct the seven `DAG::Runner` ports explicitly so production-grade
 adapters can be injected.
