@@ -72,4 +72,26 @@ class DefinitionTest < Minitest::Test
 
     assert_equal hash, definition.hash
   end
+
+  def test_builder_builds_equivalent_frozen_definition
+    built = DAG::Workflow::Definition::Builder.build do |b|
+      b.add_node(:a, type: :passthrough, config: {x: [1]})
+      b.add_node(:b, type: :noop)
+      b.add_edge(:a, :b, label: "next")
+    end
+    chained = DAG::Workflow::Definition.new
+      .add_node(:a, type: :passthrough, config: {x: [1]})
+      .add_node(:b, type: :noop)
+      .add_edge(:a, :b, label: "next")
+
+    assert_equal chained, built
+    assert built.frozen?
+    assert_raises(FrozenError) { built.step_type_for(:a)[:config][:x] << 2 }
+  end
+
+  def test_builder_rejects_invalid_revision
+    assert_raises(ArgumentError) do
+      DAG::Workflow::Definition::Builder.build(revision: 0) { |_| }
+    end
+  end
 end
