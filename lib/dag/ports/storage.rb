@@ -2,7 +2,7 @@
 
 module DAG
   module Ports
-    # Storage port. Roadmap v3.4 §C / Appendix I documents the current
+    # Storage port. `CONTRACT.md` and this module document the current
     # effect-aware shape, including the R1/R2 retry/resume extensions.
     #
     # Adapters persist workflow rows, definition revisions, node states,
@@ -19,7 +19,7 @@ module DAG
       # @param initial_definition [DAG::Workflow::Definition] revision 1 graph
       # @param initial_context [Hash] JSON-safe context seed
       # @param runtime_profile [DAG::RuntimeProfile] frozen profile
-      # @return [void]
+      # @return [Hash] {id:, current_revision:}
       def create_workflow(id:, initial_definition:, initial_context:, runtime_profile:)
         raise PortNotImplementedError
       end
@@ -27,7 +27,7 @@ module DAG
       # Load the workflow row keyed by `id`.
       #
       # @param id [String]
-      # @return [Hash] keys: :id, :state, :workflow_retry_count, :runtime_profile, :initial_context
+      # @return [Hash] keys: :id, :state, :current_revision, :workflow_retry_count, :runtime_profile, :initial_context
       # @raise [DAG::UnknownWorkflowError] when no workflow has the supplied id
       def load_workflow(id:)
         raise PortNotImplementedError
@@ -82,11 +82,11 @@ module DAG
         raise PortNotImplementedError
       end
 
-      # Load a specific revision row.
+      # Load a specific revision definition.
       #
       # @param id [String]
       # @param revision [Integer]
-      # @return [Hash]
+      # @return [DAG::Workflow::Definition]
       def load_revision(id:, revision:)
         raise PortNotImplementedError
       end
@@ -115,7 +115,7 @@ module DAG
       # @param node_id [Symbol]
       # @param from [Symbol] expected current state
       # @param to [Symbol] target state
-      # @return [void]
+      # @return [Hash] {workflow_id:, revision:, node_id:, state:}
       # @raise [DAG::StaleStateError] when the node is not in `from`
       def transition_node_state(workflow_id:, revision:, node_id:, from:, to:)
         raise PortNotImplementedError
@@ -252,7 +252,7 @@ module DAG
       # back to :pending so eligibility can recompute from committed state.
       #
       # @param workflow_id [String]
-      # @return [void]
+      # @return [Array<String>] aborted attempt ids
       def abort_running_attempts(workflow_id:)
         raise PortNotImplementedError
       end
