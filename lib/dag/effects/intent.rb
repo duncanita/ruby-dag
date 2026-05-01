@@ -24,6 +24,7 @@ module DAG
         DAG::Effects.validate_ref_part!(key, "key")
         DAG.json_safe!(payload, "$root.payload")
         DAG.json_safe!(metadata, "$root.metadata")
+        @ref = DAG::Effects.ref_for(type, key)
 
         super(
           type: DAG.deep_freeze(DAG.deep_dup(type)),
@@ -34,7 +35,7 @@ module DAG
       end
 
       # @return [String] deterministic effect reference
-      def ref = DAG::Effects.ref_for(type, key)
+      def ref = @ref
     end
   end
 end
