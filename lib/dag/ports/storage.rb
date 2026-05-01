@@ -64,6 +64,24 @@ module DAG
         raise PortNotImplementedError
       end
 
+      # Port extension: append a definition revision only if the workflow row
+      # is still in one of `allowed_states`. This lets mutation services bind
+      # the workflow-state guard and revision CAS inside one storage boundary.
+      #
+      # @param id [String]
+      # @param allowed_states [Array<Symbol>] allowed current workflow states
+      # @param parent_revision [Integer] expected current revision (CAS guard)
+      # @param definition [DAG::Workflow::Definition] new revision graph
+      # @param invalidated_node_ids [Array<Symbol>]
+      # @param event [DAG::Event, nil]
+      # @return [Hash] {id:, revision:, event: stamped_event}
+      # @raise [DAG::ConcurrentMutationError] when current state is :running
+      # @raise [DAG::StaleStateError] when current state is not allowed
+      # @raise [DAG::StaleRevisionError] when `parent_revision` no longer matches
+      def append_revision_if_workflow_state(id:, allowed_states:, parent_revision:, definition:, invalidated_node_ids:, event:)
+        raise PortNotImplementedError
+      end
+
       # Load a specific revision row.
       #
       # @param id [String]

@@ -478,6 +478,24 @@ CAS, resets invalidated and newly introduced nodes to `:pending` in the new
 revision, durably appends `mutation_applied`, and only then publishes that
 event through `EventBus#publish`.
 
+Durable adapters should implement:
+
+```ruby
+storage.append_revision_if_workflow_state(
+  id:,
+  allowed_states: %i[paused waiting],
+  parent_revision:,
+  definition:,
+  invalidated_node_ids:,
+  event:
+)
+```
+
+This port extension binds the workflow-state guard and revision CAS inside one
+storage boundary. If the workflow becomes `:running` between the service's
+initial read and the append, storage raises `ConcurrentMutationError` and the
+revision/event log remain unchanged.
+
 ## Events
 
 The coarse event list is closed:

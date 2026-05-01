@@ -30,8 +30,9 @@ module DAG
       raise DAG::ValidationError, plan.reason unless plan.valid?
 
       new_revision = expected_revision + 1
-      result = @storage.append_revision(
+      result = append_revision_with_state_guard(
         id: workflow_id,
+        allowed_states: MUTABLE_STATES,
         parent_revision: expected_revision,
         definition: plan.new_definition,
         invalidated_node_ids: plan.invalidated_node_ids,
@@ -50,6 +51,33 @@ module DAG
     end
 
     private
+
+    def append_revision_with_state_guard(id:, allowed_states:, parent_revision:, definition:, invalidated_node_ids:, event:)
+      if storage_overrides?(:append_revision_if_workflow_state)
+        return @storage.append_revision_if_workflow_state(
+          id: id,
+          allowed_states: allowed_states,
+          parent_revision: parent_revision,
+          definition: definition,
+          invalidated_node_ids: invalidated_node_ids,
+          event: event
+        )
+      end
+
+      @storage.append_revision(
+        id: id,
+        parent_revision: parent_revision,
+        definition: definition,
+        invalidated_node_ids: invalidated_node_ids,
+        event: event
+      )
+    end
+
+    def storage_overrides?(method_name)
+      return false unless @storage.respond_to?(method_name)
+
+      @storage.method(method_name).owner != DAG::Ports::Storage
+    end
 
     def guard_workflow_state!(workflow_id, state)
       case state

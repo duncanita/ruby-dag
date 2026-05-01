@@ -54,5 +54,46 @@ module StorageContract
       assert_equal :mutation_applied, result[:event].type
       assert_equal result[:event], storage.read_events(workflow_id: workflow_id).last
     end
+
+    def test_contract_append_revision_if_workflow_state_rejects_disallowed_state_atomically
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      storage.transition_workflow_state(id: workflow_id, from: :pending, to: :running)
+      next_definition = contract_definition.add_node(:c, type: :passthrough).add_edge(:b, :c)
+
+      assert_raises(DAG::ConcurrentMutationError) do
+        storage.append_revision_if_workflow_state(
+          id: workflow_id,
+          allowed_states: %i[paused waiting],
+          parent_revision: 1,
+          definition: next_definition,
+          invalidated_node_ids: [:b],
+          event: contract_event(type: :mutation_applied, workflow_id: workflow_id)
+        )
+      end
+
+      assert_equal 1, storage.load_current_definition(id: workflow_id).revision
+      assert_empty storage.read_events(workflow_id: workflow_id)
+    end
+
+    def test_contract_append_revision_if_workflow_state_advances_when_allowed
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      storage.transition_workflow_state(id: workflow_id, from: :pending, to: :paused)
+      next_definition = contract_definition.add_node(:c, type: :passthrough).add_edge(:b, :c)
+
+      result = storage.append_revision_if_workflow_state(
+        id: workflow_id,
+        allowed_states: %i[paused waiting],
+        parent_revision: 1,
+        definition: next_definition,
+        invalidated_node_ids: [:b],
+        event: contract_event(type: :mutation_applied, workflow_id: workflow_id)
+      )
+
+      assert_equal 2, result.fetch(:revision)
+      assert_equal 2, storage.load_current_definition(id: workflow_id).revision
+      assert_equal :mutation_applied, storage.read_events(workflow_id: workflow_id).last.type
+    end
   end
 end
