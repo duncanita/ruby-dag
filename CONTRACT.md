@@ -314,6 +314,31 @@ They return `{record:, released:}`. Retriable failures return an empty
 Execution context is a copy-on-write dictionary managed by the kernel. Keys and
 values are chosen by the consumer, and must be JSON-safe for durable workflows.
 
+## Plan Versions And Revisions
+
+A plan version is the immutable coordinate `{workflow_id, revision}` exposed as
+`DAG::PlanVersion`. `revision` is `Definition#revision`; storage records it on
+workflow definitions, node states, attempts, events, effect links, and committed
+result projections.
+
+A `Runner` call evaluates exactly one plan version. It loads the current
+`Definition` once at the start of the call, builds the scheduling context for
+that revision, and does not mix node states, attempts, or effect snapshots from
+other revisions during that scheduling pass.
+
+Structural mutation never edits the active definition in place. Applying a
+mutation appends `parent_revision + 1` behind the storage CAS guard. Older
+revisions remain loadable by exact revision and must return the graph and step
+mapping that were current before the mutation.
+
+Committed results from older revisions do not leak into a new revision by
+implicit lookup. When a preserved node remains `:committed` after a revision
+append, storage may materialize an explicit committed-result projection in the
+new plan version. That projection carries the previous canonical `Success`
+result for downstream context assembly, but it is not an attempt, does not
+increment attempt counts, and does not cause the preserved node to rerun.
+Invalidated nodes and newly introduced nodes have no carry-forward projection.
+
 ## State Model
 
 Workflow states:
@@ -366,13 +391,15 @@ ATTEMPT_STATES = %i[
 ].freeze
 ```
 
-Only a committed attempt for the current definition revision contributes to the
-effective context. When more than one committed attempt exists for a node, the
-canonical attempt is the highest `attempt_number`, with `attempt_id.to_s` ASCII
-as a defensive tie-break. Storage adapters may expose
+Only a committed attempt for the current definition revision or an explicit
+committed-result projection for that revision contributes to the effective
+context. When more than one committed attempt exists for a node, the canonical
+attempt is the highest `attempt_number`, with `attempt_id.to_s` ASCII as a
+defensive tie-break. Storage adapters may expose
 `list_committed_results_for_predecessors(workflow_id:, revision:, predecessors:)`
 to return those canonical `Success` results in one call; Runner falls back to
-`list_attempts` when the extension is absent.
+`list_attempts` when the extension is absent, which can only observe real
+attempts and not adapter-owned projections.
 
 ## Resume And Crash Recovery
 
@@ -508,9 +535,10 @@ raises `ConcurrentMutationError`; if the stored revision no longer matches
 `expected_revision`, it raises `StaleRevisionError`.
 
 On success, mutation apply appends the new definition revision using storage
-CAS, resets invalidated and newly introduced nodes to `:pending` in the new
-revision, durably appends `mutation_applied`, and only then publishes that
-event through `EventBus#publish`.
+CAS, marks invalidated preserved nodes `:invalidated`, initializes newly
+introduced nodes as `:pending`, materializes committed-result projections for
+preserved committed nodes, durably appends `mutation_applied`, and only then
+publishes that event through `EventBus#publish`.
 
 Durable adapters should implement:
 

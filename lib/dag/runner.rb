@@ -19,14 +19,21 @@ module DAG
     # Internal carrier for per-call run context.
     # @api private
     RunContext = Data.define(
-      :workflow_id,
-      :revision,
+      :plan_version,
       :definition,
       :runtime_profile,
       :base_context,
       :predecessors_by_node,
       :step_instances
-    )
+    ) do
+      # @return [String] workflow identifier for this run context.
+      # @api private
+      def workflow_id = plan_version.workflow_id
+
+      # @return [Integer] definition revision for this run context.
+      # @api private
+      def revision = plan_version.revision
+    end
 
     # @return [Object] injected port (see {Ports::Storage})
     attr_reader :storage
@@ -150,8 +157,7 @@ module DAG
       predecessors_by_node.freeze
 
       RunContext.new(
-        workflow_id: workflow_id,
-        revision: definition.revision,
+        plan_version: DAG::PlanVersion[workflow_id: workflow_id, revision: definition.revision],
         definition: definition,
         runtime_profile: workflow[:runtime_profile],
         base_context: DAG::ExecutionContext.from(workflow[:initial_context]),
