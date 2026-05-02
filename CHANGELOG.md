@@ -8,7 +8,11 @@
   suite around G1-G13 behavior: lifecycle, state transitions, attempts,
   canonical predecessor selection, effect ledger atomicity, leases,
   waiting-node release, workflow retry, revision CAS, event ordering,
-  immutable reads, standard errors, and consumer-neutrality.
+  immutable reads, standard receipts/errors, and consumer-neutrality.
+- Storage receipt contract tests now assert the documented return shapes for
+  workflow/node transitions, revision append, workflow retry, and atomic
+  effect completion, and the port docs require every public storage method to
+  document its return value.
 
 ## 1.0.1 — 2026-05-01
 

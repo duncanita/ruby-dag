@@ -280,6 +280,41 @@ type
 Code-specific entries may add fields. `:handler_raised` adds `class` and
 `message`; `:handler_bad_return` adds `class`; `:stale_lease` adds `message`.
 
+## Storage Receipts And Failure Vocabulary
+
+Public storage methods must not require consumers to infer success from `nil`
+or adapter-specific side effects. Every mutating operation returns the
+shape documented in `DAG::Ports::Storage`:
+
+- `create_workflow` -> `{id:, current_revision:}`.
+- `transition_workflow_state` -> `{id:, state:, event:}` where `event` is the
+  stamped event or `nil`.
+- `transition_node_state` -> `{workflow_id:, revision:, node_id:, state:}`.
+- `append_revision` and `append_revision_if_workflow_state` ->
+  `{id:, revision:, event:}`.
+- `begin_attempt` -> the durable attempt id string.
+- `commit_attempt` -> the stamped durable `DAG::Event`.
+- `claim_ready_effects` -> claimed `DAG::Effects::Record` snapshots.
+- `mark_effect_succeeded` and `mark_effect_failed` -> the updated
+  `DAG::Effects::Record`.
+- `complete_effect_succeeded` and `complete_effect_failed` ->
+  `{record:, released:}`.
+- `release_nodes_satisfied_by_effect` -> release receipts shaped as
+  `{workflow_id:, revision:, node_id:, attempt_id:, released_at_ms:}`.
+- `abort_running_attempts` -> aborted attempt ids.
+- `append_event` -> stamped `DAG::Event` with monotonic `seq`.
+- `prepare_workflow_retry` ->
+  `{id:, state:, reset:, workflow_retry_count:, event:}`.
+
+Storage adapters use the shared public error vocabulary for control flow:
+`DAG::UnknownWorkflowError`, `DAG::StaleStateError`,
+`DAG::StaleRevisionError`, `DAG::ConcurrentMutationError`,
+`DAG::WorkflowRetryExhaustedError`, `DAG::Effects::UnknownEffectError`,
+`DAG::Effects::IdempotencyConflictError`, and
+`DAG::Effects::StaleLeaseError`. Exception messages are diagnostics only;
+Runner and consumers must branch on classes and structured receipts rather than
+parsing adapter-specific text.
+
 ## Effect Storage Contract
 
 Effect reservation is part of the attempt commit atomic boundary:
@@ -377,7 +412,7 @@ covers these groups:
 - **G9** revision append CAS plus workflow-state guard.
 - **G10** durable event ordering and filtering.
 - **G11** immutable/fresh returned values.
-- **G12** standard error/failure vocabulary.
+- **G12** standard receipt and error/failure vocabulary.
 - **G13** no consumer-specific semantics in the storage contract.
 
 `DAG::Adapters::Memory::Storage` runs the suite in this repository. Consumer or

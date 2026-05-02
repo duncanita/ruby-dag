@@ -22,7 +22,7 @@ module DAG::Testing::StorageContract
     G9: "revision append CAS plus workflow-state guard",
     G10: "durable event ordering and filtering",
     G11: "immutable/fresh returned values",
-    G12: "standard error/failure vocabulary",
+    G12: "standard receipt and error/failure vocabulary",
     G13: "no consumer-specific semantics in storage contract"
   }.freeze
 
@@ -75,6 +75,50 @@ module DAG::Testing::StorageContract
         attempt_number: attempt_number
       )
     end
+
+    def contract_prepared_effect(
+      workflow_id:,
+      attempt_id:,
+      node_id: :a,
+      effect_type: "contract",
+      effect_key: "effect",
+      payload: {value: 1},
+      payload_fingerprint: "fp-1",
+      blocking: true,
+      created_at_ms: 1_700_000_000_000,
+      revision: 1
+    )
+      DAG::Effects::PreparedIntent[
+        workflow_id: workflow_id,
+        revision: revision,
+        node_id: node_id,
+        attempt_id: attempt_id,
+        type: effect_type,
+        key: effect_key,
+        payload: payload,
+        payload_fingerprint: payload_fingerprint,
+        blocking: blocking,
+        created_at_ms: created_at_ms
+      ]
+    end
+
+    def contract_commit_waiting_effect(storage, workflow_id, node_id, effect_key: "effect")
+      attempt_id = contract_begin_attempt(storage, workflow_id, node_id)
+      effect = contract_prepared_effect(
+        workflow_id: workflow_id,
+        attempt_id: attempt_id,
+        node_id: node_id,
+        effect_key: effect_key
+      )
+      storage.commit_attempt(
+        attempt_id: attempt_id,
+        result: DAG::Waiting[reason: :effect_pending],
+        node_state: :waiting,
+        event: contract_event(type: :node_waiting, workflow_id: workflow_id, node_id: node_id, attempt_id: attempt_id),
+        effects: [effect]
+      )
+      storage.list_effects_for_attempt(attempt_id: attempt_id).first
+    end
   end
 end
 
@@ -84,6 +128,7 @@ require_relative "storage_contract/attempt_atomicity"
 require_relative "storage_contract/event_log"
 require_relative "storage_contract/effects"
 require_relative "storage_contract/retry"
+require_relative "storage_contract/receipts"
 require_relative "storage_contract/error_vocabulary"
 require_relative "storage_contract/consumer_boundary"
 
@@ -95,6 +140,7 @@ module DAG::Testing::StorageContract
     include EventLog
     include Effects
     include Retry
+    include Receipts
     include ErrorVocabulary
     include ConsumerBoundary
   end

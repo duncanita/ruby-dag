@@ -248,7 +248,10 @@ taxonomy used by Delphi.
 `DAG::Testing::StorageContract::All`, a reusable G1-G13 behavioral suite for
 adapters that implement `DAG::Ports::Storage`. This repository runs it against
 `DAG::Adapters::Memory::Storage`; production adapters can include the same
-suite without depending on memory-adapter internals.
+suite without depending on memory-adapter internals. The suite asserts
+receipt shapes for mutating storage operations and the public failure
+vocabulary, so consumers branch on structured values and exception classes
+instead of adapter-specific messages.
 
 See `CONTRACT.md` for the closed event types, allowed transitions, and
 boundary contract; `docs/plans/2026-04-26-r1-deterministic-kernel.md`
