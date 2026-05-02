@@ -21,6 +21,7 @@ module DAG
             node_states: {}, # {[workflow_id, revision] => {node_id => state}}
             attempts: {},    # {attempt_id => attempt_record}
             attempts_index: {}, # {workflow_id => [attempt_id, ...]}
+            committed_result_projections: {}, # {[workflow_id, revision, node_id] => DAG::Success}
             attempt_seq: {}, # {workflow_id => Integer} monotonic, never reset
             effects: {}, # {effect_id => DAG::Effects::Record}
             effects_by_ref: {}, # {ref => effect_id}
@@ -57,6 +58,13 @@ module DAG
           state[:effect_seq] ||= state[:effects].size
           state[:attempt_effect_links] ||= {}
           state[:node_effect_links] ||= {}
+        end
+
+        # Internal: initialize committed-result projections for snapshots
+        # created before plan-version carry-forward existed.
+        # @api private
+        def ensure_committed_result_projection_state!(state)
+          state[:committed_result_projections] ||= {}
         end
 
         # Implements `Ports::Storage#create_workflow`.
@@ -115,6 +123,7 @@ module DAG
             raise StaleRevisionError,
               "workflow #{id} current_revision is #{row[:current_revision]}, expected #{parent_revision}"
           end
+          ensure_committed_result_projection_state!(state)
 
           new_revision = parent_revision + 1
           stored_definition = (definition.revision == new_revision) ? definition : definition.with_revision(new_revision)
@@ -122,16 +131,23 @@ module DAG
 
           previous_states = state[:node_states][[id, parent_revision]] || {}
           invalidated = invalidated_node_ids.map(&:to_sym)
+          result_projections = {}
           new_states = stored_definition.nodes.each_with_object({}) do |node_id, acc|
             acc[node_id] = if invalidated.include?(node_id)
               :invalidated
             elsif !previous_states.key?(node_id)
               :pending
             else
-              previous_states[node_id]
+              previous_state = previous_states[node_id]
+              if previous_state == :committed
+                result = canonical_committed_result_for_node(state, id, parent_revision, node_id)
+                result_projections[[id, new_revision, node_id]] = result if result
+              end
+              previous_state
             end
           end
           state[:node_states][[id, new_revision]] = new_states
+          result_projections.each { |key, result| state[:committed_result_projections][key] = result }
           row[:current_revision] = new_revision
           stamped = event ? append_event_internal(state, id, event) : nil
           {id: id, revision: new_revision, event: stamped}
@@ -423,6 +439,7 @@ module DAG
         # Implements `Ports::Storage#list_committed_results_for_predecessors`.
         # @api private
         def list_committed_results_for_predecessors(state, workflow_id:, revision:, predecessors:)
+          ensure_committed_result_projection_state!(state)
           predecessor_ids = predecessors.map(&:to_sym)
           predecessor_set = predecessor_ids.to_set
           best_by_node = {}
@@ -437,9 +454,15 @@ module DAG
             best_by_node[attempt[:node_id]] = attempt if better_committed_attempt?(attempt, current)
           end
 
+          states_for_rev = state[:node_states].fetch([workflow_id, revision], {})
           predecessor_ids.each_with_object({}) do |node_id, results|
             attempt = best_by_node[node_id]
-            results[node_id] = attempt[:result] if attempt
+            if attempt
+              results[node_id] = attempt[:result]
+            elsif states_for_rev[node_id] == :committed
+              projected = state[:committed_result_projections][[workflow_id, revision, node_id]]
+              results[node_id] = projected if projected
+            end
           end
         end
 
@@ -703,6 +726,24 @@ module DAG
           end
 
           raise DAG::StaleStateError, "workflow #{id} cannot append revision from #{state.inspect}"
+        end
+
+        # Internal: find the canonical committed result already scoped to a
+        # revision, either from a real attempt or from an explicit projection.
+        # @api private
+        def canonical_committed_result_for_node(state, workflow_id, revision, node_id)
+          best = nil
+          state[:attempts_index].fetch(workflow_id, []).each do |attempt_id|
+            attempt = state[:attempts][attempt_id]
+            next unless attempt[:revision] == revision
+            next unless attempt[:node_id] == node_id
+            next unless attempt[:state] == :committed
+
+            best = attempt if better_committed_attempt?(attempt, best)
+          end
+          return best[:result] if best
+
+          state[:committed_result_projections][[workflow_id, revision, node_id]]
         end
 
         # Internal: canonical committed-attempt ordering.

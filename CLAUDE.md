@@ -195,6 +195,12 @@ Two layers, in order of dependency:
     config: {})` and `add_edge(from, to, **meta)` return new frozen instances.
     `revision` starts at 1; `fingerprint(via: port)` defers to
     `Ports::Fingerprint`.
+  - `DAG::PlanVersion` — immutable `{workflow_id, revision}` coordinate.
+    Runner evaluates one plan version at a time. When mutation carries a
+    preserved node forward as `:committed`, storage must materialize an
+    explicit committed-result projection for the new revision; do not
+    synthesize attempts or look up arbitrary older revision attempts at run
+    time.
   - `DAG::ExecutionContext` — deep-frozen copy-on-write hash wrapper.
     `merge` returns a new context; `to_h` returns a fresh deep-dup.
   - `DAG::Step::Base` + `DAG::StepProtocol` — steps return
@@ -226,6 +232,7 @@ lib/dag/graph.rb                          # Graph class
 lib/dag/graph/builder.rb                  # Builder.build { |b| ... } -> frozen Graph
 lib/dag/graph/validator.rb                # Structural validation -> Validator::Report
 lib/dag/result.rb                         # DAG::Result marker + Result.try / assert_result!
+lib/dag/plan_version.rb                   # PlanVersion[workflow_id:, revision:]
 lib/dag/success.rb                        # Success(value:, context_patch:, proposed_mutations:, proposed_effects:, metadata:)
 lib/dag/failure.rb                        # Failure(error:, retriable:, metadata:)
 lib/dag/types.rb                          # Loads tagged types

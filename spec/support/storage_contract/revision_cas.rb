@@ -55,6 +55,41 @@ module StorageContract
       assert_equal result[:event], storage.read_events(workflow_id: workflow_id).last
     end
 
+    def test_contract_append_revision_projects_committed_results_without_synthetic_attempts
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      attempt_id = storage.begin_attempt(
+        workflow_id: workflow_id,
+        revision: 1,
+        node_id: :a,
+        expected_node_state: :pending,
+        attempt_number: 1
+      )
+      storage.commit_attempt(
+        attempt_id: attempt_id,
+        result: DAG::Success[value: :a, context_patch: {a: true}],
+        node_state: :committed,
+        event: contract_event(workflow_id: workflow_id, node_id: :a, attempt_id: attempt_id)
+      )
+      next_definition = contract_definition.add_node(:c, type: :passthrough).add_edge(:b, :c)
+
+      storage.append_revision(
+        id: workflow_id,
+        parent_revision: 1,
+        definition: next_definition,
+        invalidated_node_ids: [:b],
+        event: contract_event(type: :mutation_applied, workflow_id: workflow_id)
+      )
+
+      carried = storage.list_committed_results_for_predecessors(
+        workflow_id: workflow_id,
+        revision: 2,
+        predecessors: [:a]
+      )
+      assert_equal({a: true}, carried.fetch(:a).context_patch)
+      assert_empty storage.list_attempts(workflow_id: workflow_id, revision: 2, node_id: :a)
+    end
+
     def test_contract_append_revision_if_workflow_state_rejects_disallowed_state_atomically
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)

@@ -268,9 +268,12 @@ module DAG
       end
 
       # Port extension: return the canonical committed result for each
-      # predecessor node in one storage call. The canonical result is the
-      # committed attempt with the highest `attempt_number`, using
-      # `attempt_id.to_s` ASCII as a defensive tie-break.
+      # predecessor node in one storage call. The canonical result is either
+      # the committed attempt with the highest `attempt_number` in the
+      # requested revision, using `attempt_id.to_s` ASCII as a defensive
+      # tie-break, or an explicit committed-result projection carried forward
+      # when a preserved node remains `:committed` across a revision append.
+      # Projections are not attempts and must not affect attempt counts.
       #
       # @param workflow_id [String]
       # @param revision [Integer]
