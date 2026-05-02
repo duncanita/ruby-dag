@@ -4,4 +4,5 @@
 --readme README.md
 --files CONTRACT.md,CHANGELOG.md,LICENSE
 --output-dir doc
+--exclude lib/dag/testing/.*
 lib/**/*.rb

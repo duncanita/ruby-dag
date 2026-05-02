@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module StorageContract
+module DAG::Testing::StorageContract
   module RevisionCAS
     include Helpers
 

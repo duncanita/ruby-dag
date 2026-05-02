@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `DAG::Testing::StorageContract::All` now groups the reusable storage adapter conformance
+  suite around G1-G13 behavior: lifecycle, state transitions, attempts,
+  canonical predecessor selection, effect ledger atomicity, leases,
+  waiting-node release, workflow retry, revision CAS, event ordering,
+  immutable reads, standard errors, and consumer-neutrality.
+
 ## 1.0.1 — 2026-05-01
 
 Patch release for the v1.0 kernel line. No runtime dependencies added and no

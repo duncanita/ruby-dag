@@ -349,6 +349,41 @@ any newly satisfied waiting nodes in the same logical storage transaction.
 They return `{record:, released:}`. Retriable failures return an empty
 `released:` array.
 
+## Storage Behavioral Contract Suite
+
+Reusable storage adapters should validate the public durability boundary by
+requiring `dag/testing/storage_contract`, including
+`DAG::Testing::StorageContract::All` in their own adapter test, and
+implementing:
+
+```ruby
+def build_contract_storage
+  MyAdapter::Storage.new
+end
+```
+
+The shared suite is behavior-oriented: failures describe the public storage
+contract instead of depending on `DAG::Adapters::Memory::Storage` internals. It
+covers these groups:
+
+- **G1** workflow create/load/current revision.
+- **G2** atomic workflow state transition plus optional event append.
+- **G3** begin/commit attempt one-shot semantics.
+- **G4** deterministic canonical predecessor result selection.
+- **G5** atomic effect reservation and idempotency conflict rollback.
+- **G6** effect claim/lease ownership and stale lease protection.
+- **G7** terminal effect completion and waiting-node release.
+- **G8** atomic workflow retry and retry-budget enforcement.
+- **G9** revision append CAS plus workflow-state guard.
+- **G10** durable event ordering and filtering.
+- **G11** immutable/fresh returned values.
+- **G12** standard error/failure vocabulary.
+- **G13** no consumer-specific semantics in the storage contract.
+
+`DAG::Adapters::Memory::Storage` runs the suite in this repository. Consumer or
+production adapters can reuse the same module to prove conformance without
+copying memory-adapter implementation details into their own tests.
+
 ## Execution Context
 
 Execution context is a copy-on-write dictionary managed by the kernel. Keys and
