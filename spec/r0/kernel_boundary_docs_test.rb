@@ -50,6 +50,19 @@ class R0KernelBoundaryDocsTest < Minitest::Test
     refute_includes normalized_contract, "`RunResult`"
   end
 
+  def test_contract_documents_step_input_runtime_snapshot_boundary
+    contract = File.read(File.join(ROOT, "CONTRACT.md"))
+    normalized_contract = normalized(contract)
+
+    assert_includes normalized_contract, "## StepInput Runtime Snapshot"
+    assert_includes normalized_contract, "`input.runtime_snapshot`"
+    assert_includes normalized_contract, "current workflow id, revision, node id, attempt id, and attempt number"
+    assert_includes normalized_contract, "predecessor snapshots are limited to canonical committed `Success` results for the current revision"
+    assert_includes normalized_contract, "node-scoped effect snapshots for the current workflow/revision/node"
+    assert_includes normalized_contract, "JSON-safe extension metadata"
+    assert_includes normalized_contract, "does not expose lease owners, lease deadlines, storage timestamps, unrelated node attempts, or consumer runtime objects"
+  end
+
   def test_readme_explains_production_ports_and_consumer_adapters
     readme = File.read(File.join(ROOT, "README.md"))
     normalized_readme = normalized(readme)

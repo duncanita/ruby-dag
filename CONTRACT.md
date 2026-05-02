@@ -172,6 +172,46 @@ effect_refs: [...]
 effect_count: Integer
 ```
 
+## StepInput Runtime Snapshot
+
+Steps can read the public runtime boundary through:
+
+```ruby
+snapshot = input.runtime_snapshot
+```
+
+`input.runtime_snapshot` returns an immutable `DAG::RuntimeSnapshot` with the
+current workflow id, revision, node id, attempt id, and attempt number. It also
+carries the same `DAG::PlanVersion` coordinate as `snapshot.plan_version`.
+
+The snapshot includes predecessor snapshots under `#predecessors`. These
+predecessor snapshots are limited to canonical committed `Success` results for
+the current revision and are keyed by predecessor node id. Each value is a
+plain frozen Hash with:
+
+```text
+value
+context_patch
+metadata
+```
+
+Predecessor lookup uses storage's canonical committed-result projection when
+available, so preserved nodes after a revision append can contribute explicit
+current-revision context without exposing older attempts. It does not expose
+unrelated node attempts or implicit results from older revisions.
+
+The snapshot includes node-scoped effect snapshots for the current
+workflow/revision/node under `#effects`. Values are the same public frozen Hashes
+used by `input.metadata[:effects]`; they contain stable effect data only. The
+snapshot does not expose lease owners, lease deadlines, storage timestamps,
+unrelated node attempts, or consumer runtime objects.
+
+`#metadata` is reserved for JSON-safe extension metadata supplied by the kernel
+or future compatible adapters. It is intentionally separate from the internal
+`StepInput#metadata` carrier so steps get a stable public runtime shape instead
+of storage internals. All nested values in `RuntimeSnapshot` are JSON-safe and
+deep-frozen.
+
 ## Effect Dispatcher Contract
 
 `DAG::Effects::Dispatcher` is an abstract boundary coordinator. It claims
