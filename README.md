@@ -76,6 +76,34 @@ left in `:running` is unwedged by aborting in-flight attempts before
 recomputing eligibility. Already-committed nodes are not rerun in the
 same revision.
 
+## Step input runtime snapshot
+
+Custom steps receive a `DAG::StepInput`. For workflow/runtime coordinates and
+stable predecessor/effect data, prefer the public snapshot boundary:
+
+```ruby
+class InspectInputStep < DAG::Step::Base
+  def call(input)
+    snapshot = input.runtime_snapshot
+    DAG::Success[value: {
+      workflow_id: snapshot.workflow_id,
+      revision: snapshot.revision,
+      node_id: snapshot.node_id,
+      attempt: snapshot.attempt_number,
+      predecessor_values: snapshot.predecessors.transform_values { |p| p.fetch(:value) },
+      effect_refs: snapshot.effects.keys
+    }]
+  end
+end
+```
+
+`DAG::RuntimeSnapshot` is immutable and JSON-safe. It exposes current workflow,
+revision, node, and attempt coordinates; canonical committed predecessor
+`Success` snapshots for the current revision; and node-scoped effect snapshots.
+It intentionally excludes dispatcher lease fields, storage timestamps,
+unrelated node attempts, and consumer-owned runtime objects. See
+`examples/runtime_snapshot.rb` for a runnable end-to-end example.
+
 ## Effect Intents
 
 Steps describe side effects as abstract intents instead of performing

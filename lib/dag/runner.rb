@@ -224,7 +224,7 @@ module DAG
         attempt_id: attempt_id,
         payload: {attempt_number: attempt_number})
 
-      input = build_step_input(run, node_id, attempt_number)
+      input = build_step_input(run, node_id, attempt_id, attempt_number)
       result = safe_call_step(run, node_id, input)
 
       handle_outcome(run, node_id, attempt_id, attempt_number, result)
@@ -298,14 +298,19 @@ module DAG
       @event_bus.publish(stamped)
     end
 
-    def build_step_input(run, node_id, attempt_number)
+    def build_step_input(run, node_id, attempt_id, attempt_number)
+      predecessors = run.predecessors_by_node[node_id]
+      committed_results = committed_results_for_predecessors(run, predecessors)
+
       DAG::StepInput[
-        context: effective_context(run, node_id),
+        context: effective_context_from_results(run.base_context, predecessors, committed_results),
         node_id: node_id,
         attempt_number: attempt_number,
         metadata: {
           workflow_id: run.workflow_id,
           revision: run.revision,
+          attempt_id: attempt_id,
+          predecessors: predecessor_snapshots(predecessors, committed_results),
           effects: effects_snapshot_for(run, node_id)
         }
       ]
@@ -356,10 +361,8 @@ module DAG
         end
     end
 
-    def effective_context(run, node_id)
-      ctx = run.base_context
-      predecessors = run.predecessors_by_node[node_id]
-      committed_results = committed_results_for_predecessors(run, predecessors)
+    def effective_context_from_results(base_context, predecessors, committed_results)
+      ctx = base_context
       predecessors.each do |pred|
         result = committed_results[pred]
         next unless result
@@ -367,6 +370,19 @@ module DAG
         ctx = ctx.merge(result.context_patch)
       end
       ctx
+    end
+
+    def predecessor_snapshots(predecessors, committed_results)
+      predecessors.each_with_object({}) do |pred, snapshots|
+        result = committed_results[pred]
+        next unless result
+
+        snapshots[pred] = {
+          value: result.value,
+          context_patch: result.context_patch,
+          metadata: result.metadata
+        }
+      end
     end
 
     def committed_results_for_predecessors(run, predecessors)
