@@ -40,6 +40,7 @@ Tracked phases:
 | Effects PR3 (runner integration) | —    | Done (#153) |
 | Effects PR4 (abstract dispatcher)| —    | Done (#154) |
 | Effects PR5 (docs + release gate)| #149 | In progress (#155) |
+| V1.1 kernel hardening          | #157 | In progress (#166, #167, #168, #161) |
 | S0 (SQLite adapter, in Delphi)   | TBD  | Next |
 | Release v1.0                     | #74  | Backlog |
 

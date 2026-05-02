@@ -244,6 +244,12 @@ taxonomy used by Delphi.
   `Memory::EventBus`, `Null::EventBus`, plus `Stdlib::{Clock,
   IdGenerator, Fingerprint, Serializer}`.
 
+`dag/testing/storage_contract` exposes
+`DAG::Testing::StorageContract::All`, a reusable G1-G13 behavioral suite for
+adapters that implement `DAG::Ports::Storage`. This repository runs it against
+`DAG::Adapters::Memory::Storage`; production adapters can include the same
+suite without depending on memory-adapter internals.
+
 See `CONTRACT.md` for the closed event types, allowed transitions, and
 boundary contract; `docs/plans/2026-04-26-r1-deterministic-kernel.md`
 for the R1 implementation notes.

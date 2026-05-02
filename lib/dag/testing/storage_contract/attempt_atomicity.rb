@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-module StorageContract
+module DAG::Testing::StorageContract
   module AttemptAtomicity
     include Helpers
 
@@ -102,6 +102,35 @@ module StorageContract
       assert_equal [:b, :a], results.keys
       assert_equal({b: 2}, results.fetch(:b).context_patch)
       assert_equal({a: 1}, results.fetch(:a).context_patch)
+    end
+
+    def test_contract_committed_predecessor_selection_uses_highest_attempt_number
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      first_attempt_id = contract_begin_attempt(storage, workflow_id, :a, attempt_number: 1)
+      storage.commit_attempt(
+        attempt_id: first_attempt_id,
+        result: DAG::Success[value: :old, context_patch: {a: :old}],
+        node_state: :committed,
+        event: contract_event(workflow_id: workflow_id, node_id: :a, attempt_id: first_attempt_id)
+      )
+      storage.transition_node_state(workflow_id: workflow_id, revision: 1, node_id: :a, from: :committed, to: :pending)
+      second_attempt_id = contract_begin_attempt(storage, workflow_id, :a, attempt_number: 2)
+      storage.commit_attempt(
+        attempt_id: second_attempt_id,
+        result: DAG::Success[value: :new, context_patch: {a: :new}],
+        node_state: :committed,
+        event: contract_event(workflow_id: workflow_id, node_id: :a, attempt_id: second_attempt_id)
+      )
+
+      results = storage.list_committed_results_for_predecessors(
+        workflow_id: workflow_id,
+        revision: 1,
+        predecessors: [:a]
+      )
+
+      assert_equal :new, results.fetch(:a).value
+      assert_equal({a: :new}, results.fetch(:a).context_patch)
     end
 
     def test_contract_commit_attempt_is_one_shot
