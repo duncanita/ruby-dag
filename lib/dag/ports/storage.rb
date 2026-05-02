@@ -58,7 +58,7 @@ module DAG
       # @param invalidated_node_ids [Array<Symbol>] nodes whose committed
       #   results should be discarded in the new revision
       # @param event [DAG::Event, nil] optional `mutation_applied` event
-      # @return [Hash] {id:, revision:, event: stamped_event}
+      # @return [Hash] {id:, revision:, event: stamped_event_or_nil}
       # @raise [DAG::StaleRevisionError] when `parent_revision` no longer matches
       def append_revision(id:, parent_revision:, definition:, invalidated_node_ids:, event:)
         raise PortNotImplementedError
@@ -74,7 +74,7 @@ module DAG
       # @param definition [DAG::Workflow::Definition] new revision graph
       # @param invalidated_node_ids [Array<Symbol>]
       # @param event [DAG::Event, nil]
-      # @return [Hash] {id:, revision:, event: stamped_event}
+      # @return [Hash] {id:, revision:, event: stamped_event_or_nil}
       # @raise [DAG::ConcurrentMutationError] when current state is :running
       # @raise [DAG::StaleStateError] when current state is not allowed
       # @raise [DAG::StaleRevisionError] when `parent_revision` no longer matches
@@ -185,7 +185,8 @@ module DAG
       # @param result [Object] JSON-safe result
       # @param external_ref [Object, nil] JSON-safe external reference
       # @param now_ms [Integer]
-      # @return [DAG::Effects::Record]
+      # @return [DAG::Effects::Record] updated terminal record
+      # @raise [DAG::Effects::UnknownEffectError] when `effect_id` is unknown
       # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
       def mark_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
         raise PortNotImplementedError
@@ -199,7 +200,8 @@ module DAG
       # @param retriable [Boolean]
       # @param not_before_ms [Integer, nil] retry delay hint for retriable failures
       # @param now_ms [Integer]
-      # @return [DAG::Effects::Record]
+      # @return [DAG::Effects::Record] updated failed record
+      # @raise [DAG::Effects::UnknownEffectError] when `effect_id` is unknown
       # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
       def mark_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
         raise PortNotImplementedError
@@ -215,7 +217,10 @@ module DAG
       # @param result [Object] JSON-safe result
       # @param external_ref [Object, nil] JSON-safe external reference
       # @param now_ms [Integer]
-      # @return [Hash] {record:, released:}
+      # @return [Hash] {record: DAG::Effects::Record, released: Array<Hash>}
+      #   Each release receipt is shaped as
+      #   {workflow_id:, revision:, node_id:, attempt_id:, released_at_ms:}.
+      # @raise [DAG::Effects::UnknownEffectError] when `effect_id` is unknown
       # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
       def complete_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
         raise PortNotImplementedError
@@ -230,7 +235,10 @@ module DAG
       # @param retriable [Boolean]
       # @param not_before_ms [Integer, nil] retry delay hint for retriable failures
       # @param now_ms [Integer]
-      # @return [Hash] {record:, released:}
+      # @return [Hash] {record: DAG::Effects::Record, released: Array<Hash>}
+      #   Each release receipt is shaped as
+      #   {workflow_id:, revision:, node_id:, attempt_id:, released_at_ms:}.
+      # @raise [DAG::Effects::UnknownEffectError] when `effect_id` is unknown
       # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
       def complete_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
         raise PortNotImplementedError
@@ -242,7 +250,9 @@ module DAG
       #
       # @param effect_id [String]
       # @param now_ms [Integer]
-      # @return [Array<Hash>] released workflow/node coordinates
+      # @return [Array<Hash>] release receipts shaped as
+      #   {workflow_id:, revision:, node_id:, attempt_id:, released_at_ms:}
+      # @raise [DAG::Effects::UnknownEffectError] when `effect_id` is unknown
       def release_nodes_satisfied_by_effect(effect_id:, now_ms:)
         raise PortNotImplementedError
       end

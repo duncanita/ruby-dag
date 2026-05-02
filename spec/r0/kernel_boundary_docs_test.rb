@@ -63,6 +63,18 @@ class R0KernelBoundaryDocsTest < Minitest::Test
     assert_includes normalized_contract, "does not expose lease owners, lease deadlines, storage timestamps, unrelated node attempts, or consumer runtime objects"
   end
 
+  def test_contract_documents_storage_receipts_and_error_vocabulary
+    contract = File.read(File.join(ROOT, "CONTRACT.md"))
+    normalized_contract = normalized(contract)
+
+    assert_includes normalized_contract, "## Storage Receipts And Failure Vocabulary"
+    assert_includes normalized_contract, "`transition_node_state` -> `{workflow_id:, revision:, node_id:, state:}`"
+    assert_includes normalized_contract, "`complete_effect_succeeded` and `complete_effect_failed` -> `{record:, released:}`"
+    assert_includes normalized_contract, "`prepare_workflow_retry` -> `{id:, state:, reset:, workflow_retry_count:, event:}`"
+    assert_includes normalized_contract, "Exception messages are diagnostics only"
+    assert_includes normalized_contract, "Runner and consumers must branch on classes and structured receipts"
+  end
+
   def test_readme_explains_production_ports_and_consumer_adapters
     readme = File.read(File.join(ROOT, "README.md"))
     normalized_readme = normalized(readme)
