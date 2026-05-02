@@ -1,7 +1,31 @@
 # ruby-dag Boundary Contract
 
-`ruby-dag` exposes the kernel contracts below. Consumers own application
-semantics, external side effects, approvals, budgets, and UI streaming.
+`ruby-dag` is an implementation-agnostic DAG execution kernel. Its public
+contract defines where kernel scheduling and durable execution protocols end and
+consumer application behavior begins.
+
+## Kernel Boundary
+
+`ruby-dag` owns only:
+
+- graph, definition, revision, and scheduling semantics;
+- `Runner` orchestration over injected ports;
+- step result transport;
+- abstract effect intent reservation and dispatch coordination;
+- mutation/revision APIs;
+- retry/recovery rules;
+- event log and diagnostic contract.
+
+### Non-goals
+
+Consumers own:
+
+- concrete storage adapters beyond memory examples;
+- concrete effect handlers;
+- LLM/model/tool semantics;
+- application-level budgets, approvals, policy, and UI streaming;
+- consumer-owned runtime/domain objects, orchestration facades, per-run
+  application context/results, and channel/stream behavior.
 
 ## Step Protocol
 

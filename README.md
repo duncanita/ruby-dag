@@ -22,9 +22,17 @@ workflow retries are disabled unless you opt in. For workflows that should be
 retryable, pass a profile with a positive `max_workflow_retries`; `3` is a
 reasonable starting point for scripts and small durable consumers.
 
-`DAG::Toolkit.in_memory_kit` is a convenience for examples and tests; production
-callers construct the seven `DAG::Runner` ports explicitly so production-grade
-adapters can be injected.
+`DAG::Toolkit.in_memory_kit` is a convenience for examples and tests.
+Production callers inject the public ports (`storage:`,
+`event_bus:`, `registry:`, `clock:`, `id_generator:`, `fingerprint:`, and
+`serializer:`) when constructing `DAG::Runner`; durable production adapters can
+live in consumer repositories. Delphi can be treated as a reference consumer,
+not part of the kernel contract.
+
+> Non-normative reference-consumer note: consumer-owned runtime objects,
+> application context, result wrappers, and channel behavior are examples of
+> application semantics. A consumer wrapper is not `DAG::RunResult`, and
+> reference-consumer choices do not constrain other consumers.
 
 ## Resume after waiting
 
