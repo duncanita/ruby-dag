@@ -104,6 +104,28 @@ It intentionally excludes dispatcher lease fields, storage timestamps,
 unrelated node attempts, and consumer-owned runtime objects. See
 `examples/runtime_snapshot.rb` for a runnable end-to-end example.
 
+## Diagnostics
+
+Execution diagnostics are kernel-level values derived from the public storage
+port. They are useful for dashboards, logs, support tooling, and durable
+debugging without leaking consumer runtime objects:
+
+```ruby
+trace = DAG::Diagnostics.trace_records(storage: kit.storage, workflow_id: id)
+nodes = DAG::Diagnostics.node_diagnostics(storage: kit.storage, workflow_id: id)
+
+trace.map(&:event_type)     # => [:workflow_started, :node_started, ...]
+nodes.first.effect_statuses # => {"http_get:..." => :succeeded}
+```
+
+`DAG::TraceRecord` normalizes durable event-log coordinates
+(`workflow_id`, `revision`, `node_id`, `attempt_id`, `at_ms`, `status`,
+`event_type`, `seq`, and `payload`). `DAG::NodeDiagnostic` summarizes node
+state, attempt count, failure attribution, waiting reason, effect refs/statuses,
+and effect terminality. Values are immutable, JSON-safe, deterministic, and do
+not include prompt/model/tool/channel semantics. See `examples/diagnostics.rb`
+for a runnable example.
+
 ## Effect Intents
 
 Steps describe side effects as abstract intents instead of performing

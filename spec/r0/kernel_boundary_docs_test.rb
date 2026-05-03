@@ -63,6 +63,19 @@ class R0KernelBoundaryDocsTest < Minitest::Test
     assert_includes normalized_contract, "does not expose lease owners, lease deadlines, storage timestamps, unrelated node attempts, or consumer runtime objects"
   end
 
+  def test_contract_documents_kernel_diagnostic_values
+    contract = File.read(File.join(ROOT, "CONTRACT.md"))
+    normalized_contract = normalized(contract)
+
+    assert_includes normalized_contract, "## Diagnostic Values"
+    assert_includes normalized_contract, "`DAG::TraceRecord` is a normalized view of the append-only event log"
+    assert_includes normalized_contract, "workflow_id revision node_id attempt_id at_ms status event_type seq payload"
+    assert_includes normalized_contract, "`DAG::NodeDiagnostic` summarizes the current node state"
+    assert_includes normalized_contract, "attempt_count last_attempt_id last_error_code last_error_attempt_id waiting_reason"
+    assert_includes normalized_contract, "Diagnostic values do not expose prompt/model/tool/channel concepts"
+    assert_includes normalized_contract, "consumer runtime objects"
+  end
+
   def test_contract_documents_storage_receipts_and_error_vocabulary
     contract = File.read(File.join(ROOT, "CONTRACT.md"))
     normalized_contract = normalized(contract)
@@ -91,6 +104,10 @@ class R0KernelBoundaryDocsTest < Minitest::Test
     assert_includes normalized_readme, "application context, result wrappers, and channel behavior"
     assert_includes normalized_readme, "not `DAG::RunResult`"
     assert_includes normalized_readme, "do not constrain other consumers"
+    assert_includes normalized_readme, "## Diagnostics"
+    assert_includes normalized_readme, "`DAG::TraceRecord` normalizes durable event-log coordinates"
+    assert_includes normalized_readme, "`DAG::NodeDiagnostic` summarizes node state"
+    assert_includes normalized_readme, "examples/diagnostics.rb"
     refute_includes normalized_readme, "`Plan`"
     refute_includes normalized_readme, "`Agent`"
     refute_includes normalized_readme, "`RunContext`"
