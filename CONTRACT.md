@@ -212,6 +212,67 @@ or future compatible adapters. It is intentionally separate from the internal
 of storage internals. All nested values in `RuntimeSnapshot` are JSON-safe and
 deep-frozen.
 
+## Diagnostic Values
+
+The kernel exposes two immutable, JSON-safe diagnostic value objects for
+consumers that need to render or persist execution state without depending on
+adapter internals:
+
+```ruby
+DAG::TraceRecord.from_event(event)
+DAG::Diagnostics.trace_records(storage:, workflow_id:, after_seq: nil, limit: nil)
+DAG::Diagnostics.node_diagnostics(storage:, workflow_id:, revision: nil)
+```
+
+`DAG::TraceRecord` is a normalized view of the append-only event log. Its
+public shape is:
+
+```text
+workflow_id
+revision
+node_id
+attempt_id
+at_ms
+status
+event_type
+seq
+payload
+```
+
+`status` is derived from the closed event type set (`:started`, `:success`,
+`:waiting`, `:failed`, `:paused`, `:completed`, or `:mutation_applied`) while
+`event_type`, `seq`, and `payload` preserve the durable event coordinates.
+
+`DAG::NodeDiagnostic` summarizes the current node state for one workflow
+revision. It is derived only from `load_node_states`, `list_attempts`, and
+`list_effects_for_node`, and has this public shape:
+
+```text
+workflow_id
+revision
+node_id
+state
+terminal
+attempt_count
+last_attempt_id
+last_error_code
+last_error_attempt_id
+waiting_reason
+effect_refs
+effect_statuses
+effects_terminal
+```
+
+`last_error_attempt_id` attributes failures to the durable node attempt that
+produced the last `Failure`; `last_error_code` is a String, Symbol, or Integer
+when the failure payload provides a scalar `code`, and `nil` otherwise.
+`waiting_reason` is populated only for currently
+waiting nodes. `effect_refs` and `effect_statuses` are sorted by effect ref;
+`effects_terminal` is `nil` when the node has no linked effects, otherwise it
+reports whether all linked effects are terminal. Diagnostic values do not
+expose prompt/model/tool/channel concepts, lease owners, adapter locks, or
+consumer runtime objects.
+
 ## Effect Dispatcher Contract
 
 `DAG::Effects::Dispatcher` is an abstract boundary coordinator. It claims
