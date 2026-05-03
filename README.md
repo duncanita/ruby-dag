@@ -279,12 +279,31 @@ See `CONTRACT.md` for the closed event types, allowed transitions, and
 boundary contract; `docs/plans/2026-04-26-r1-deterministic-kernel.md`
 for the R1 implementation notes.
 
+## Compatibility matrix
+
+The V1.1 contract release hardens the kernel boundary for durable consumers.
+`CONTRACT.md` now lists stable consumer APIs plus the
+required/recommended/optional port extension checklist for durable adapters.
+Use it as the adoption checklist for Delphi's SQLite adapter and for any other
+consumer-owned storage implementation.
+
+Stable V1.1 surfaces include:
+
+- `DAG::Runner#call`, `#resume`, and `#retry_workflow`.
+- Immutable workflow/result values such as `DAG::Workflow::Definition`,
+  `DAG::PlanVersion`, `DAG::RuntimeProfile`, `DAG::Success`, `DAG::Waiting`,
+  `DAG::Failure`, and `DAG::StepInput`.
+- `DAG::RuntimeSnapshot`, `DAG::TraceRecord`, `DAG::NodeDiagnostic`, and
+  `DAG::Diagnostics` for runtime input and diagnostics projection.
+- `DAG::Testing::StorageContract::All` for adapter conformance against G1-G13.
+
 ## Status
 
-R0-R3 and the effect-aware kernel work have landed. The `1.0.0` release
-gate is tracked in #74. S0 is the first SQLite storage adapter, but it
-lives in the Delphi consumer (`nexus`, branch `delphi-v1`) and implements
-this repo's public `DAG::Ports::Storage` contract.
+V1.1 kernel hardening is complete. R0-R3, the effect-aware kernel work, and
+RD-01 through RD-08 of #157 have landed as a contract release with no
+consumer-specific implementation in this repository. S0 remains the first
+SQLite storage adapter, but it lives in the Delphi consumer and implements this
+repo's public `DAG::Ports::Storage` contract.
 
 Roadmap board: <https://github.com/users/duncanita/projects/2>.
 

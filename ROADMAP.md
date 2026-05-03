@@ -39,10 +39,11 @@ Tracked phases:
 | Effects PR2 (storage ledger)     | —    | Done (#152) |
 | Effects PR3 (runner integration) | —    | Done (#153) |
 | Effects PR4 (abstract dispatcher)| —    | Done (#154) |
-| Effects PR5 (docs + release gate)| #149 | In progress (#155) |
-| V1.1 kernel hardening          | #157 | In progress (#166, #167, #168, #169, #170; current #163) |
+| Effects PR5 (docs + release gate)| #149 | Done (#155) |
+| V1.1 kernel hardening          | #157 | Done (#158-#164 via #166, #167, #168, #169, #170, #171, #172) |
+| Release v1.1                   | #165 | Done |
 | S0 (SQLite adapter, in Delphi)   | TBD  | Next |
-| Release v1.0                     | #74  | Backlog |
+| Release v1.0                     | #74  | Done (#126, #156) |
 
 S0 is no longer a phase of `ruby-dag` itself: per execution-plan §5, the
 first durable storage adapter lives in the `Delphi` consumer (in repo
