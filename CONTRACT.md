@@ -480,6 +480,80 @@ covers these groups:
 production adapters can reuse the same module to prove conformance without
 copying memory-adapter implementation details into their own tests.
 
+## V1.1 Consumer Compatibility Matrix
+
+V1.1 is a contract release. Stable consumer APIs are the public kernel boundary
+that durable hosts can adopt without depending on memory-adapter internals:
+
+- `DAG::Runner#call`, `DAG::Runner#resume`, and
+  `DAG::Runner#retry_workflow` for pending, recovery, and explicit retry
+  entry points.
+- `DAG::Workflow::Definition`, `DAG::PlanVersion`, `DAG::RuntimeProfile`,
+  `DAG::Success`, `DAG::Waiting`, `DAG::Failure`, and `DAG::StepInput` for
+  immutable workflow data and result transport.
+- `DAG::RuntimeSnapshot` for step-visible workflow/revision/node coordinates,
+  canonical predecessor values, and scoped effect snapshots.
+- `DAG::Effects::{Intent, PreparedIntent, Record, HandlerResult,
+  DispatchReport}` and `DAG::Effects::Dispatcher` for abstract effect
+  reservation and dispatch coordination.
+- `DAG::TraceRecord`, `DAG::NodeDiagnostic`, and `DAG::Diagnostics` for
+  consumer-facing trace and node state projection.
+- `DAG::DefinitionEditor` and `DAG::MutationService` for immutable structural
+  planning and guarded mutation application.
+- `DAG::Testing::StorageContract::All` for reusable storage conformance.
+
+Durable adapter adoption checklist:
+
+### Required for durable adapters
+
+- Persist workflows, definition revisions, node states, attempts, effect
+  records, attempt-effect links, and event logs durably and atomically at the
+  documented boundaries.
+- Implement the full `DAG::Ports::Storage` method set and return the documented
+  receipt shapes for every mutating operation.
+- Preserve the public failure vocabulary: `UnknownWorkflowError`,
+  `StaleStateError`, `StaleRevisionError`, `ConcurrentMutationError`,
+  `WorkflowRetryExhaustedError`, `Effects::UnknownEffectError`,
+  `Effects::IdempotencyConflictError`, and `Effects::StaleLeaseError`.
+- Bind workflow terminal state transitions and their durable events in one
+  storage boundary through `transition_workflow_state(..., event:)`.
+- Bind retry state CAS, retry-budget enforcement, failed-node reset, aborted
+  failed attempts, workflow state transition, and optional event append inside
+  `prepare_workflow_retry`.
+- Bind mutation workflow-state guard and revision CAS inside
+  `append_revision_if_workflow_state`.
+- Make `commit_attempt` one-shot and persist attempt result, node state, event,
+  and effect reservations in one logical transaction.
+- Implement effect claim/lease/completion semantics, including atomic terminal
+  completion with waiting-node release through `complete_effect_succeeded` and
+  `complete_effect_failed`.
+- Return immutable or fresh values from all read methods so consumers cannot
+  mutate adapter state through returned objects.
+- Run `DAG::Testing::StorageContract::All` against the adapter and keep all
+  G1-G13 groups passing.
+
+### Recommended for durable adapters
+
+- Implement `list_committed_results_for_predecessors` so runners can load
+  canonical predecessor results and carried-forward committed projections in a
+  single adapter-owned query.
+- Namespace effect keys by workflow, revision, and node at the consumer edge so
+  global `(type, key)` effect identity cannot collide across workflow runs.
+- Store enough indexed event, attempt, node, and effect data for
+  `DAG::Diagnostics.trace_records` and `DAG::Diagnostics.node_diagnostics` to
+  remain cheap and deterministic.
+- Treat retry exhaustion, waiting, and paused workflows as bounded kernel
+  outcomes and expose consumer-owned alerting, approval, backoff, and
+  replacement-workflow policy outside the adapter.
+
+### Optional for simple consumers
+
+- Use `DAG::Toolkit.in_memory_kit` and `DAG::Adapters::Memory::Storage` for
+  single-process examples, tests, or ephemeral scripts.
+- Omit concrete effect handlers when workflows do not use `proposed_effects`.
+- Skip live event-bus publication by injecting `DAG::Adapters::Null::EventBus`
+  when durable event-log reads are sufficient.
+
 ## Execution Context
 
 Execution context is a copy-on-write dictionary managed by the kernel. Keys and

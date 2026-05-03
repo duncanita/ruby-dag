@@ -2,20 +2,39 @@
 
 ## Unreleased
 
+- No changes yet.
+
+## 1.1.0 — 2026-05-03
+
+V1.1 is a contract hardening release for durable consumers. RD-01 through RD-08
+are complete, and this release contains no Delphi-specific implementation:
+consumer repositories own concrete storage adapters, handlers, planning policy,
+escalation policy, and product semantics.
+
 ### Added
 
-- `DAG::Testing::StorageContract::All` now groups the reusable storage adapter conformance
-  suite around G1-G13 behavior: lifecycle, state transitions, attempts,
-  canonical predecessor selection, effect ledger atomicity, leases,
-  waiting-node release, workflow retry, revision CAS, event ordering,
-  immutable reads, standard receipts/errors, and consumer-neutrality.
-- Storage receipt contract tests now assert the documented return shapes for
-  workflow/node transitions, revision append, workflow retry, and atomic
-  effect completion, and the port docs require every public storage method to
-  document its return value.
+- `DAG::RuntimeSnapshot` exposes immutable, JSON-safe workflow/revision/node
+  coordinates plus scoped predecessor and effect snapshots for custom steps.
 - `DAG::TraceRecord`, `DAG::NodeDiagnostic`, and `DAG::Diagnostics` now expose
   immutable, JSON-safe trace/node diagnostic values derived from durable events,
   attempts, node state, and effect records.
+- `DAG::Testing::StorageContract::All` now groups the reusable storage adapter
+  conformance suite around G1-G13 behavior: lifecycle, state transitions,
+  attempts, canonical predecessor selection, effect ledger atomicity, leases,
+  waiting-node release, workflow retry, revision CAS, event ordering,
+  immutable reads, standard receipts/errors, and consumer-neutrality.
+- A V1.1 consumer compatibility matrix documents stable kernel APIs and the
+  required/recommended/optional durable adapter extension checklist.
+
+### Changed
+
+- Storage receipt contract tests now assert the documented return shapes for
+  workflow/node transitions, revision append, workflow retry, and atomic effect
+  completion, and the port docs require every public storage method to document
+  its return value.
+- Bounded recovery controls are explicitly documented and covered: retry
+  exhaustion, waiting, and paused states are bounded kernel outcomes; consumers
+  own escalation, alerting, approval, backoff, and replacement workflows.
 
 ## 1.0.1 — 2026-05-01
 
