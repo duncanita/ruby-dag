@@ -588,7 +588,9 @@ The storage operation marks in-flight attempts as `:aborted` and resets any
 matching current-revision node still in `:running` back to `:pending`. Nodes
 already `:committed` are never rerun in that revision. Nodes in `:waiting` are
 not rerun automatically; a consumer must make an explicit app-level decision
-and update state/context before retrying them.
+and update state/context before retrying them. Retry exhaustion, waiting, and
+paused states are bounded kernel outcomes; consumers own escalation policy,
+alerting, approval, backoff, and replacement workflows.
 
 `commit_attempt` is the atomic durability boundary for node execution. When it
 returns, result, attempt state, node state, the durable event, and any prepared
