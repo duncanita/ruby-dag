@@ -62,4 +62,58 @@ class R0V11ReleaseGateTest < Minitest::Test
     assert_includes roadmap, "Release v1.1"
     assert_includes roadmap, "Done"
   end
+
+  def test_readme_effect_examples_use_valid_colon_free_identity_parts
+    readme = File.read(File.join(ROOT, "README.md"))
+
+    refute_includes readme, '"wf:#{input.metadata.fetch(:workflow_id)}"'
+    refute_includes readme, '"rev:#{input.metadata.fetch(:revision)}"'
+    refute_includes readme, '"node:#{input.node_id}"'
+    assert_includes readme, '"wf", input.metadata.fetch(:workflow_id)'
+    assert_includes readme, '"rev", input.metadata.fetch(:revision)'
+    assert_includes readme, '"node", input.node_id'
+    assert_includes readme, '.join("/")'
+    assert_includes readme, "must not include `:`"
+  end
+
+  def test_execution_plan_effect_examples_use_valid_colon_free_identity_parts
+    plan = File.read(File.join(ROOT, "Delphi Ruby DAG Execution Plan.md"))
+
+    refute_includes plan, "delphi:v1:wf:<workflow_id>"
+    refute_includes plan, '"delphi:v1"'
+    refute_includes plan, '"wf:#{input.metadata.fetch(:workflow_id)}"'
+    refute_includes plan, '"rev:#{input.metadata.fetch(:revision)}"'
+    refute_includes plan, '"node:#{input.node_id}"'
+    refute_includes plan, '"prompt:#{prompt_fingerprint}"'
+    assert_includes plan, "delphi/v1/wf/<workflow_id>/rev/<revision>/node/<node_id>/planner/<prompt_fingerprint>"
+    assert_includes plan, '"delphi", "v1"'
+    assert_includes plan, '"prompt", prompt_fingerprint'
+  end
+
+  def test_execution_plan_marks_original_implementation_sequence_as_historical
+    plan = File.read(File.join(ROOT, "Delphi Ruby DAG Execution Plan.md"))
+
+    refute_includes plan, "## 10. Ordine operativo per oggi"
+    refute_includes plan, "Eseguire in questo ordine."
+    assert_includes plan, "## 10. Sequenza storica di implementazione"
+    assert_includes plan, "Questa sezione conserva l'ordine originale"
+  end
+
+  def test_execution_plan_uses_generic_provider_language_in_public_gates
+    plan = File.read(File.join(ROOT, "Delphi Ruby DAG Execution Plan.md"))
+
+    refute_includes plan, "OpenAI"
+    assert_includes plan, "LLMProviderClient"
+    assert_includes plan, "Adapter concreti per provider LLM/GitHub/email dentro ruby-dag."
+  end
+
+  def test_public_contract_docs_are_self_contained
+    contract = File.read(File.join(ROOT, "CONTRACT.md"))
+    storage_port = File.read(File.join(ROOT, "lib/dag/ports/storage.rb"))
+
+    refute_includes contract, "CLAUDE.md"
+    refute_includes storage_port, "CLAUDE.md"
+    assert_includes contract, "This is a port extension over the canonical roadmap signature"
+    assert_includes storage_port, "Port extension: with a CAS guard"
+  end
 end

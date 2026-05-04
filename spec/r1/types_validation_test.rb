@@ -50,6 +50,20 @@ class TypesValidationTest < Minitest::Test
     end
   end
 
+  def test_runtime_profile_copies_string_event_bus_kind_for_yaml_compatibility
+    event_bus_kind = +"null"
+    profile = DAG::RuntimeProfile[
+      durability: :ephemeral,
+      max_attempts_per_node: 1,
+      max_workflow_retries: 0,
+      event_bus_kind: event_bus_kind
+    ]
+    event_bus_kind << "-mutated"
+
+    assert_equal "null", profile.event_bus_kind
+    assert profile.event_bus_kind.frozen?
+  end
+
   def test_waiting_rejects_non_symbol_reason
     assert_raises(ArgumentError) { DAG::Waiting[reason: "external"] }
   end

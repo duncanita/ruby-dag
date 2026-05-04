@@ -188,8 +188,12 @@ semantic_input_fingerprint
 Esempio:
 
 ```text
-delphi:v1:wf:<workflow_id>:rev:<revision>:node:<node_id>:planner:<prompt_fingerprint>
+delphi/v1/wf/<workflow_id>/rev/<revision>/node/<node_id>/planner/<prompt_fingerprint>
 ```
+
+Usare delimitatori interni diversi da `:` nella `key`: il kernel riserva `:`
+per costruire `ref = "#{type}:#{key}"`, quindi `type` e `key` devono restare
+parti non ambigue e prive di `:`.
 
 ---
 
@@ -963,13 +967,13 @@ class Delphi::Steps::PlannerStep < DAG::Step::Base
     intent = DAG::Effects::Intent[
       type: "delphi.llm.chat_completion",
       key: [
-        "delphi:v1",
-        "wf:#{input.metadata.fetch(:workflow_id)}",
-        "rev:#{input.metadata.fetch(:revision)}",
-        "node:#{input.node_id}",
+        "delphi", "v1",
+        "wf", input.metadata.fetch(:workflow_id),
+        "rev", input.metadata.fetch(:revision),
+        "node", input.node_id,
         "planner",
-        "prompt:#{prompt_fingerprint}"
-      ].join(":"),
+        "prompt", prompt_fingerprint
+      ].join("/"),
       payload: {
         model: config.fetch(:model),
         messages: prompt,
@@ -1102,7 +1106,7 @@ Grep obbligatori:
 ```bash
 ! grep -R "require ['\"]dag['\"]" lib spec
 ! grep -R "Delphic\|delphic" lib spec
-! grep -R "Net::HTTP\|Faraday\|HTTParty\|OpenAI\|Github\|Mail" lib/delphi/steps spec/delphi/steps
+! grep -R "Net::HTTP\|Faraday\|HTTParty\|LLMProviderClient\|Github\|Mail" lib/delphi/steps spec/delphi/steps
 ```
 
 La presenza di client esterni è ammessa solo sotto:
@@ -1114,9 +1118,10 @@ lib/delphi/adapters/**
 
 ---
 
-## 10. Ordine operativo per oggi
+## 10. Sequenza storica di implementazione
 
-Eseguire in questo ordine.
+Questa sezione conserva l'ordine originale di implementazione; gli elementi
+upstream sono completati per V1.1 e restano qui come riferimento storico.
 
 ### Blocco A — Upstream kernel
 
@@ -1166,7 +1171,7 @@ Non implementare:
 - Idempotency key basate su timestamp casuali.
 - Idempotency key basate su attempt_number per effetti semantici.
 - Dipendenza non pinnata da branch main in produzione.
-- Adapter concreti OpenAI/GitHub/email dentro ruby-dag.
+- Adapter concreti per provider LLM/GitHub/email dentro ruby-dag.
 - Transizioni node/workflow fuori dal port storage.
 - Dispatcher che completa direttamente lo step senza passare dal runner.
 ```

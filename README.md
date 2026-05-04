@@ -147,7 +147,10 @@ reference consumer; see `Delphi Ruby DAG Execution Plan.md`) — not in
 `(type, key)` is the global semantic identity of an effect. Real keys must
 namespace by workflow/revision/node so that two workflows or two revisions
 never collide on a shared name; payload differences for the same `(type,
-key)` are rejected with `DAG::Effects::IdempotencyConflictError`.
+key)` are rejected with `DAG::Effects::IdempotencyConflictError`. `type` and
+`key` must not include `:` because `DAG::Effects::Record#ref` uses `type:key`
+as its unambiguous storage identity; use another delimiter (such as `/`) inside
+consumer-owned key strings.
 
 ### Awaited abstract effect
 
@@ -164,11 +167,11 @@ class FetchStep < DAG::Step::Base
     intent = DAG::Effects::Intent[
       type: "http_get",
       key: [
-        "wf:#{input.metadata.fetch(:workflow_id)}",
-        "rev:#{input.metadata.fetch(:revision)}",
-        "node:#{input.node_id}",
+        "wf", input.metadata.fetch(:workflow_id),
+        "rev", input.metadata.fetch(:revision),
+        "node", input.node_id,
         "fetch"
-      ].join(":"),
+      ].join("/"),
       payload: {"url" => url}
     ]
 
@@ -193,11 +196,11 @@ class NotifyStep < DAG::Step::Base
     intent = DAG::Effects::Intent[
       type: "email",
       key: [
-        "wf:#{input.metadata.fetch(:workflow_id)}",
-        "rev:#{input.metadata.fetch(:revision)}",
-        "node:#{input.node_id}",
+        "wf", input.metadata.fetch(:workflow_id),
+        "rev", input.metadata.fetch(:revision),
+        "node", input.node_id,
         "welcome"
-      ].join(":"),
+      ].join("/"),
       payload: {"to" => "user@example.com"}
     ]
     DAG::Success[value: :ok, proposed_effects: [intent]]

@@ -53,7 +53,7 @@ module DAG
         durability: durability,
         max_attempts_per_node: max_attempts_per_node,
         max_workflow_retries: max_workflow_retries,
-        event_bus_kind: event_bus_kind,
+        event_bus_kind: DAG.frozen_copy(event_bus_kind),
         metadata: DAG.frozen_copy(metadata)
       )
     end

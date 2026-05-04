@@ -323,8 +323,8 @@ module DAG
         raise PortNotImplementedError
       end
 
-      # Port extension (see CLAUDE.md "Port extensions"). With a CAS guard on
-      # workflow state and on the retry budget, atomically:
+      # Port extension: with a CAS guard on workflow state and on the retry
+      # budget, atomically:
       # (a) find :failed nodes for the workflow's current revision,
       # (b) mark each corresponding :failed attempt as :aborted,
       # (c) transition those nodes back to :pending,

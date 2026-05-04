@@ -49,6 +49,30 @@ class R3MutationActiveRunGuardTest < Minitest::Test
     assert_empty event_bus.events
   end
 
+  def test_apply_preserves_legacy_append_revision_storage_compatibility
+    storage = DAG::Adapters::Memory::Storage.new
+    workflow_id = create_workflow(storage, simple_definition)
+    storage.transition_workflow_state(id: workflow_id, from: :pending, to: :paused)
+    legacy_storage = LegacyAppendOnlyStorage.new(storage)
+    event_bus = DAG::Adapters::Memory::EventBus.new
+    service = DAG::MutationService.new(
+      storage: legacy_storage,
+      event_bus: event_bus,
+      clock: DAG::Adapters::Stdlib::Clock.new
+    )
+
+    result = service.apply(
+      workflow_id: workflow_id,
+      mutation: DAG::ProposedMutation[kind: :invalidate, target_node_id: :a],
+      expected_revision: 1
+    )
+
+    assert_equal 2, result.revision
+    assert_equal 2, storage.load_current_definition(id: workflow_id).revision
+    assert_equal :mutation_applied, storage.read_events(workflow_id: workflow_id).last.type
+    assert_equal :mutation_applied, event_bus.events.last.type
+  end
+
   class StateRacingStorage
     def initialize(storage, workflow_id:, from:, to:)
       @storage = storage
@@ -71,6 +95,28 @@ class R3MutationActiveRunGuardTest < Minitest::Test
     end
 
     def respond_to_missing?(name, include_private = false)
+      @storage.respond_to?(name, include_private) || super
+    end
+  end
+
+  class LegacyAppendOnlyStorage
+    def initialize(storage)
+      @storage = storage
+    end
+
+    def append_revision(**kwargs)
+      @storage.append_revision(**kwargs)
+    end
+
+    def method_missing(name, ...)
+      return super if name == :append_revision_if_workflow_state
+
+      @storage.public_send(name, ...)
+    end
+
+    def respond_to_missing?(name, include_private = false)
+      return false if name == :append_revision_if_workflow_state
+
       @storage.respond_to?(name, include_private) || super
     end
   end

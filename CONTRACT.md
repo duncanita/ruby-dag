@@ -691,9 +691,9 @@ transitions that have no associated event (e.g. `:pending -> :running` in
 idempotent path that scans the event log).
 
 This is a port extension over the canonical roadmap signature
-`(id:, from:, to:)`. See `CLAUDE.md` "Port extensions" for the full
-justification. SQLite (S0) implements the same atomicity via a single
-transaction.
+`(id:, from:, to:)`. The justification is the crash-resume invariant above:
+workflow state and its corresponding terminal event must be durable together.
+SQLite (S0) implements the same atomicity via a single transaction.
 
 `prepare_workflow_retry` is the atomic durability boundary for explicit
 workflow retry:
