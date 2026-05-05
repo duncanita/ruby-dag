@@ -193,10 +193,6 @@ Usare delimitatori interni diversi da `:` nella `key`: il kernel riserva `:`
 per costruire `ref = "#{type}:#{key}"`, quindi `type` e `key` devono restare
 parti non ambigue e prive di `:`.
 
-Usare delimitatori interni diversi da `:` nella `key`: il kernel riserva `:`
-per costruire `ref = "#{type}:#{key}"`, quindi `type` e `key` devono restare
-parti non ambigue e prive di `:`.
-
 ---
 
 ### 3.3 `DAG::Effects::PreparedIntent`

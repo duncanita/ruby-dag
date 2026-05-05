@@ -14,6 +14,12 @@ class R0V11ReleaseGateTest < Minitest::Test
     text.fetch_after(start_marker).fetch_before(end_marker).split.join(" ")
   end
 
+  def section_between(text, start_marker, end_marker)
+    start_index = text.index(start_marker) || flunk("missing start marker: #{start_marker}")
+    end_index = text.index(end_marker, start_index) || flunk("missing end marker: #{end_marker}")
+    text[start_index...end_index]
+  end
+
   def test_version_is_bumped_to_contract_release
     assert_equal "1.1.0", DAG::VERSION
   end
@@ -65,14 +71,18 @@ class R0V11ReleaseGateTest < Minitest::Test
 
   def test_readme_effect_examples_use_valid_colon_free_identity_parts
     readme = File.read(File.join(ROOT, "README.md"))
+    awaited_effect_example = section_between(readme, "class FetchStep", "### Detached effect")
+    detached_effect_example = section_between(readme, "class NotifyStep", "### Handler failures")
 
     refute_includes readme, '"wf:#{input.metadata.fetch(:workflow_id)}"'
     refute_includes readme, '"rev:#{input.metadata.fetch(:revision)}"'
     refute_includes readme, '"node:#{input.node_id}"'
-    assert_includes readme, "wf"
-    assert_includes readme, "rev"
-    assert_includes readme, "node"
-    assert_includes readme, '.join("/")'
+    [awaited_effect_example, detached_effect_example].each do |example|
+      assert_includes example, '"wf", input.metadata.fetch(:workflow_id)'
+      assert_includes example, '"rev", input.metadata.fetch(:revision)'
+      assert_includes example, '"node", input.node_id'
+      assert_includes example, '.join("/")'
+    end
     assert_includes readme, "must not include `:`"
   end
 
@@ -99,7 +109,7 @@ class R0V11ReleaseGateTest < Minitest::Test
     assert_includes plan, "Questa sezione conserva l'ordine originale"
   end
 
-  def test_execution_plan_uses_generic_provider_language_in_public_gates
+  def test_execution_plan_gates_concrete_clients_out_of_steps
     plan = File.read(File.join(ROOT, "Delphi Ruby DAG Execution Plan.md"))
 
     assert_includes plan, "OpenAI"
