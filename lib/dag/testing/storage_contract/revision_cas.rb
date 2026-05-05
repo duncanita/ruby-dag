@@ -55,6 +55,33 @@ module DAG::Testing::StorageContract
       assert_equal result[:event], storage.read_events(workflow_id: workflow_id).last
     end
 
+    def test_contract_append_revision_copies_mutable_workflow_id
+      storage = build_contract_storage
+      workflow_id = +"wf-contract-revision"
+      storage.create_workflow(
+        id: workflow_id,
+        initial_definition: contract_definition,
+        initial_context: {seed: 1},
+        runtime_profile: contract_runtime_profile
+      )
+      workflow_id << "-after-create"
+
+      append_workflow_id = +"wf-contract-revision"
+      next_definition = contract_definition.add_node(:c, type: :passthrough).add_edge(:b, :c)
+      storage.append_revision(
+        id: append_workflow_id,
+        parent_revision: 1,
+        definition: next_definition,
+        invalidated_node_ids: [:b],
+        event: contract_event(type: :mutation_applied, workflow_id: "wf-contract-revision")
+      )
+      append_workflow_id << "-after-append"
+
+      assert_equal 2, storage.load_current_definition(id: "wf-contract-revision").revision
+      assert_equal :pending, storage.load_node_states(workflow_id: "wf-contract-revision", revision: 2)[:c]
+      assert_equal :mutation_applied, storage.read_events(workflow_id: "wf-contract-revision").last.type
+    end
+
     def test_contract_append_revision_projects_committed_results_without_synthetic_attempts
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)

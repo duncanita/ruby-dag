@@ -53,5 +53,22 @@ module DAG::Testing::StorageContract
 
       assert_equal :pending, storage.load_node_states(workflow_id: workflow_id, revision: 1)[:a]
     end
+
+    def test_contract_create_workflow_copies_mutable_workflow_id
+      storage = build_contract_storage
+      workflow_id = +"wf-contract-mutable"
+      storage.create_workflow(
+        id: workflow_id,
+        initial_definition: contract_definition,
+        initial_context: {seed: 1},
+        runtime_profile: contract_runtime_profile
+      )
+      workflow_id << "-mutated"
+
+      workflow = storage.load_workflow(id: "wf-contract-mutable")
+      assert_equal "wf-contract-mutable", workflow.fetch(:id)
+      assert_equal 1, storage.load_current_definition(id: "wf-contract-mutable").revision
+      assert_equal({a: :pending, b: :pending}, storage.load_node_states(workflow_id: "wf-contract-mutable", revision: 1))
+    end
   end
 end

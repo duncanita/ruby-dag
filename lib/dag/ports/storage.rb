@@ -9,6 +9,9 @@ module DAG
     # attempts, and the durable event log. Every method that returns
     # storage-owned values must return a deep-frozen value or a fresh deep
     # dup; callers must not mutate adapter state through returned objects.
+    # Implementations must also isolate mutable string coordinates before
+    # persisting them so caller-owned buffers cannot mutate storage-owned
+    # identity fields after the call returns.
     #
     # @api public
     module Storage
@@ -323,8 +326,8 @@ module DAG
         raise PortNotImplementedError
       end
 
-      # Port extension (see CLAUDE.md "Port extensions"). With a CAS guard on
-      # workflow state and on the retry budget, atomically:
+      # Port extension: with a CAS guard on workflow state and on the retry
+      # budget, atomically:
       # (a) find :failed nodes for the workflow's current revision,
       # (b) mark each corresponding :failed attempt as :aborted,
       # (c) transition those nodes back to :pending,

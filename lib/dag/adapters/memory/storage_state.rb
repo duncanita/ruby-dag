@@ -70,6 +70,7 @@ module DAG
         # Implements `Ports::Storage#create_workflow`.
         # @api private
         def create_workflow(state, id:, initial_definition:, initial_context:, runtime_profile:)
+          id = DAG.frozen_copy(id)
           raise ArgumentError, "workflow #{id} already exists" if state[:workflows].key?(id)
           DAG::Validation.instance!(
             initial_definition,
@@ -118,6 +119,7 @@ module DAG
         # Implements `Ports::Storage#append_revision`.
         # @api private
         def append_revision(state, id:, parent_revision:, definition:, invalidated_node_ids:, event:)
+          id = DAG.frozen_copy(id)
           row = fetch_workflow!(state, id)
           unless row[:current_revision] == parent_revision
             raise StaleRevisionError,
@@ -204,6 +206,7 @@ module DAG
         # Implements `Ports::Storage#begin_attempt`.
         # @api private
         def begin_attempt(state, workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:)
+          workflow_id = DAG.frozen_copy(workflow_id)
           DAG::Validation.positive_integer!(attempt_number, "attempt_number")
 
           states_for_rev = fetch_node_states!(state, workflow_id, revision)

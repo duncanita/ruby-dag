@@ -63,6 +63,39 @@ module DAG::Testing::StorageContract
       assert_equal 7, attempt[:attempt_number]
     end
 
+    def test_contract_begin_attempt_copies_mutable_workflow_id
+      storage = build_contract_storage
+      workflow_id = +"wf-contract-attempt"
+      storage.create_workflow(
+        id: workflow_id,
+        initial_definition: contract_definition,
+        initial_context: {seed: 1},
+        runtime_profile: contract_runtime_profile
+      )
+      workflow_id << "-after-create"
+
+      attempt_workflow_id = +"wf-contract-attempt"
+      attempt_id = storage.begin_attempt(
+        workflow_id: attempt_workflow_id,
+        revision: 1,
+        node_id: :a,
+        expected_node_state: :pending,
+        attempt_number: 1
+      )
+      attempt_workflow_id << "-after-begin"
+
+      storage.commit_attempt(
+        attempt_id: attempt_id,
+        result: DAG::Success[value: :a, context_patch: {a: 1}],
+        node_state: :committed,
+        event: contract_event(workflow_id: "wf-contract-attempt", node_id: :a, attempt_id: attempt_id)
+      )
+
+      attempt = storage.list_attempts(workflow_id: "wf-contract-attempt", revision: 1, node_id: :a).first
+      assert_equal "wf-contract-attempt", attempt.fetch(:workflow_id)
+      assert_equal :committed, storage.load_node_states(workflow_id: "wf-contract-attempt", revision: 1)[:a]
+    end
+
     def test_contract_lists_committed_results_for_predecessors_in_one_call
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)

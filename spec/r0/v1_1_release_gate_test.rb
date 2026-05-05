@@ -14,6 +14,12 @@ class R0V11ReleaseGateTest < Minitest::Test
     text.fetch_after(start_marker).fetch_before(end_marker).split.join(" ")
   end
 
+  def section_between(text, start_marker, end_marker)
+    start_index = text.index(start_marker) || flunk("missing start marker: #{start_marker}")
+    end_index = text.index(end_marker, start_index) || flunk("missing end marker: #{end_marker}")
+    text[start_index...end_index]
+  end
+
   def test_version_is_bumped_to_contract_release
     assert_equal "1.1.0", DAG::VERSION
   end
@@ -61,5 +67,62 @@ class R0V11ReleaseGateTest < Minitest::Test
     assert_includes roadmap, "Done (#158-#164 via #166, #167, #168, #169, #170, #171, #172)"
     assert_includes roadmap, "Release v1.1"
     assert_includes roadmap, "Done"
+  end
+
+  def test_readme_effect_examples_use_valid_colon_free_identity_parts
+    readme = File.read(File.join(ROOT, "README.md"))
+    awaited_effect_example = section_between(readme, "class FetchStep", "### Detached effect")
+    detached_effect_example = section_between(readme, "class NotifyStep", "### Handler failures")
+
+    refute_includes readme, '"wf:#{input.metadata.fetch(:workflow_id)}"'
+    refute_includes readme, '"rev:#{input.metadata.fetch(:revision)}"'
+    refute_includes readme, '"node:#{input.node_id}"'
+    [awaited_effect_example, detached_effect_example].each do |example|
+      assert_includes example, '"wf", input.metadata.fetch(:workflow_id)'
+      assert_includes example, '"rev", input.metadata.fetch(:revision)'
+      assert_includes example, '"node", input.node_id'
+      assert_includes example, '.join("/")'
+    end
+    assert_includes readme, "must not include `:`"
+  end
+
+  def test_execution_plan_effect_examples_use_valid_colon_free_identity_parts
+    plan = File.read(File.join(ROOT, "Delphi Ruby DAG Execution Plan.md"))
+
+    refute_includes plan, "delphi:v1:wf:<workflow_id>"
+    refute_includes plan, '"wf:#{input.metadata.fetch(:workflow_id)}"'
+    refute_includes plan, '"rev:#{input.metadata.fetch(:revision)}"'
+    refute_includes plan, '"node:#{input.node_id}"'
+    refute_includes plan, '"prompt:#{prompt_fingerprint}"'
+    assert_includes plan, "delphi/v1/wf/<workflow_id>/rev/<revision>/node/<node_id>/planner/<prompt_fingerprint>"
+    assert_includes plan, "validate_ref_part!"
+    assert_includes plan, "ref_for(type, key)"
+    assert_includes plan, "prive di `:`"
+  end
+
+  def test_execution_plan_marks_original_implementation_sequence_as_historical
+    plan = File.read(File.join(ROOT, "Delphi Ruby DAG Execution Plan.md"))
+
+    refute_includes plan, "## 10. Ordine operativo per oggi"
+    refute_includes plan, "Eseguire in questo ordine."
+    assert_includes plan, "## 10. Sequenza storica di implementazione"
+    assert_includes plan, "Questa sezione conserva l'ordine originale"
+  end
+
+  def test_execution_plan_gates_concrete_clients_out_of_steps
+    plan = File.read(File.join(ROOT, "Delphi Ruby DAG Execution Plan.md"))
+
+    assert_includes plan, "OpenAI"
+    assert_includes plan, "Adapter concreti OpenAI/GitHub/email dentro ruby-dag."
+  end
+
+  def test_public_contract_docs_are_self_contained
+    contract = File.read(File.join(ROOT, "CONTRACT.md"))
+    storage_port = File.read(File.join(ROOT, "lib/dag/ports/storage.rb"))
+
+    refute_includes contract, "CLAUDE.md"
+    refute_includes storage_port, "CLAUDE.md"
+    assert_includes contract, "workflow state and its corresponding terminal event must be durable together"
+    assert_includes storage_port, "Port extension: with a CAS guard"
   end
 end

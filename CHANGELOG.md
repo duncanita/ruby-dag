@@ -2,7 +2,14 @@
 
 ## Unreleased
 
-- No changes yet.
+- Hardened runtime profile, memory storage, and event values against mutable
+  workflow, attempt, and event-bus-kind inputs without changing public API
+  signatures.
+- Clarified effect key examples to avoid `:` inside consumer-owned `type` and
+  `key` parts, preserving the unambiguous `type:key` record identity, and
+  refreshed stale execution-plan wording as historical reference.
+- Added API-stability guard tests for release documentation, runtime profile
+  compatibility, and legacy mutation storage adapters.
 
 ## 1.1.0 — 2026-05-03
 

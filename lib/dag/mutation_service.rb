@@ -53,30 +53,14 @@ module DAG
     private
 
     def append_revision_with_state_guard(id:, allowed_states:, parent_revision:, definition:, invalidated_node_ids:, event:)
-      if storage_overrides?(:append_revision_if_workflow_state)
-        return @storage.append_revision_if_workflow_state(
-          id: id,
-          allowed_states: allowed_states,
-          parent_revision: parent_revision,
-          definition: definition,
-          invalidated_node_ids: invalidated_node_ids,
-          event: event
-        )
-      end
-
-      @storage.append_revision(
+      @storage.append_revision_if_workflow_state(
         id: id,
+        allowed_states: allowed_states,
         parent_revision: parent_revision,
         definition: definition,
         invalidated_node_ids: invalidated_node_ids,
         event: event
       )
-    end
-
-    def storage_overrides?(method_name)
-      return false unless @storage.respond_to?(method_name)
-
-      @storage.method(method_name).owner != DAG::Ports::Storage
     end
 
     def guard_workflow_state!(workflow_id, state)

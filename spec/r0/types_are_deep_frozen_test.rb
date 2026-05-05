@@ -41,4 +41,30 @@ class R0TypesAreDeepFrozenTest < Minitest::Test
     assert_equal "mutable", copied
     assert copied.frozen?
   end
+
+  def test_event_copies_and_freezes_coordinate_strings
+    workflow_id = +"wf-1"
+    node_id = +"node-a"
+    attempt_id = +"wf-1/1"
+
+    event = DAG::Event[
+      type: :node_committed,
+      workflow_id: workflow_id,
+      revision: 1,
+      node_id: node_id,
+      attempt_id: attempt_id,
+      at_ms: 1_700_000_000_000,
+      payload: {}
+    ]
+    workflow_id << "-mutated"
+    node_id << "-mutated"
+    attempt_id << "-mutated"
+
+    assert_equal "wf-1", event.workflow_id
+    assert_equal "node-a", event.node_id
+    assert_equal "wf-1/1", event.attempt_id
+    assert event.workflow_id.frozen?
+    assert event.node_id.frozen?
+    assert event.attempt_id.frozen?
+  end
 end

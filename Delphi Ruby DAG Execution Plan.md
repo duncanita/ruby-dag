@@ -143,22 +143,20 @@ module DAG
       end
 
       def initialize(type:, key:, payload: {}, metadata: {})
-        raise ArgumentError, "type must be String" unless type.is_a?(String)
-        raise ArgumentError, "key must be String" unless key.is_a?(String)
+        DAG::Effects.validate_ref_part!(type, "type")
+        DAG::Effects.validate_ref_part!(key, "key")
         DAG.json_safe!(payload, "$root.payload")
         DAG.json_safe!(metadata, "$root.metadata")
 
         super(
-          type: type.freeze,
-          key: key.freeze,
-          payload: DAG.deep_freeze(DAG.deep_dup(payload)),
-          metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
+          type: DAG.frozen_copy(type),
+          key: DAG.frozen_copy(key),
+          payload: DAG.frozen_copy(payload),
+          metadata: DAG.frozen_copy(metadata)
         )
       end
 
-      def ref
-        "#{type}:#{key}"
-      end
+      def ref = DAG::Effects.ref_for(type, key)
     end
   end
 end
@@ -188,8 +186,12 @@ semantic_input_fingerprint
 Esempio:
 
 ```text
-delphi:v1:wf:<workflow_id>:rev:<revision>:node:<node_id>:planner:<prompt_fingerprint>
+delphi/v1/wf/<workflow_id>/rev/<revision>/node/<node_id>/planner/<prompt_fingerprint>
 ```
+
+Usare delimitatori interni diversi da `:` nella `key`: il kernel riserva `:`
+per costruire `ref = "#{type}:#{key}"`, quindi `type` e `key` devono restare
+parti non ambigue e prive di `:`.
 
 ---
 
@@ -963,13 +965,13 @@ class Delphi::Steps::PlannerStep < DAG::Step::Base
     intent = DAG::Effects::Intent[
       type: "delphi.llm.chat_completion",
       key: [
-        "delphi:v1",
-        "wf:#{input.metadata.fetch(:workflow_id)}",
-        "rev:#{input.metadata.fetch(:revision)}",
-        "node:#{input.node_id}",
+        "delphi", "v1",
+        "wf", input.metadata.fetch(:workflow_id),
+        "rev", input.metadata.fetch(:revision),
+        "node", input.node_id,
         "planner",
-        "prompt:#{prompt_fingerprint}"
-      ].join(":"),
+        "prompt", prompt_fingerprint
+      ].join("/"),
       payload: {
         model: config.fetch(:model),
         messages: prompt,
@@ -1114,9 +1116,10 @@ lib/delphi/adapters/**
 
 ---
 
-## 10. Ordine operativo per oggi
+## 10. Sequenza storica di implementazione
 
-Eseguire in questo ordine.
+Questa sezione conserva l'ordine originale di implementazione; gli elementi
+upstream sono completati per V1.1 e restano qui come riferimento storico.
 
 ### Blocco A — Upstream kernel
 

@@ -47,10 +47,10 @@ module DAG
       super(
         seq: seq,
         type: type,
-        workflow_id: workflow_id,
+        workflow_id: DAG.frozen_copy(workflow_id),
         revision: revision,
-        node_id: node_id,
-        attempt_id: attempt_id,
+        node_id: DAG.frozen_copy(node_id),
+        attempt_id: DAG.frozen_copy(attempt_id),
         at_ms: at_ms,
         payload: DAG.frozen_copy(payload)
       )
