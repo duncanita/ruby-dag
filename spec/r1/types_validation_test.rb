@@ -64,6 +64,17 @@ class TypesValidationTest < Minitest::Test
     assert profile.event_bus_kind.frozen?
   end
 
+  def test_runtime_profile_rejects_non_string_or_symbol_event_bus_kind
+    assert_raises(ArgumentError) do
+      DAG::RuntimeProfile[
+        durability: :ephemeral,
+        max_attempts_per_node: 1,
+        max_workflow_retries: 0,
+        event_bus_kind: Object.new
+      ]
+    end
+  end
+
   def test_waiting_rejects_non_symbol_reason
     assert_raises(ArgumentError) { DAG::Waiting[reason: "external"] }
   end

@@ -143,22 +143,20 @@ module DAG
       end
 
       def initialize(type:, key:, payload: {}, metadata: {})
-        raise ArgumentError, "type must be String" unless type.is_a?(String)
-        raise ArgumentError, "key must be String" unless key.is_a?(String)
+        DAG::Effects.validate_ref_part!(type, "type")
+        DAG::Effects.validate_ref_part!(key, "key")
         DAG.json_safe!(payload, "$root.payload")
         DAG.json_safe!(metadata, "$root.metadata")
 
         super(
-          type: type.freeze,
-          key: key.freeze,
-          payload: DAG.deep_freeze(DAG.deep_dup(payload)),
-          metadata: DAG.deep_freeze(DAG.deep_dup(metadata))
+          type: DAG.frozen_copy(type),
+          key: DAG.frozen_copy(key),
+          payload: DAG.frozen_copy(payload),
+          metadata: DAG.frozen_copy(metadata)
         )
       end
 
-      def ref
-        "#{type}:#{key}"
-      end
+      def ref = DAG::Effects.ref_for(type, key)
     end
   end
 end
@@ -190,6 +188,10 @@ Esempio:
 ```text
 delphi/v1/wf/<workflow_id>/rev/<revision>/node/<node_id>/planner/<prompt_fingerprint>
 ```
+
+Usare delimitatori interni diversi da `:` nella `key`: il kernel riserva `:`
+per costruire `ref = "#{type}:#{key}"`, quindi `type` e `key` devono restare
+parti non ambigue e prive di `:`.
 
 Usare delimitatori interni diversi da `:` nella `key`: il kernel riserva `:`
 per costruire `ref = "#{type}:#{key}"`, quindi `type` e `key` devono restare
@@ -1106,7 +1108,7 @@ Grep obbligatori:
 ```bash
 ! grep -R "require ['\"]dag['\"]" lib spec
 ! grep -R "Delphic\|delphic" lib spec
-! grep -R "Net::HTTP\|Faraday\|HTTParty\|LLMProviderClient\|Github\|Mail" lib/delphi/steps spec/delphi/steps
+! grep -R "Net::HTTP\|Faraday\|HTTParty\|OpenAI\|Github\|Mail" lib/delphi/steps spec/delphi/steps
 ```
 
 La presenza di client esterni è ammessa solo sotto:
@@ -1171,7 +1173,7 @@ Non implementare:
 - Idempotency key basate su timestamp casuali.
 - Idempotency key basate su attempt_number per effetti semantici.
 - Dipendenza non pinnata da branch main in produzione.
-- Adapter concreti per provider LLM/GitHub/email dentro ruby-dag.
+- Adapter concreti OpenAI/GitHub/email dentro ruby-dag.
 - Transizioni node/workflow fuori dal port storage.
 - Dispatcher che completa direttamente lo step senza passare dal runner.
 ```

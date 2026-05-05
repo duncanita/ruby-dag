@@ -9,6 +9,9 @@ module DAG
     # attempts, and the durable event log. Every method that returns
     # storage-owned values must return a deep-frozen value or a fresh deep
     # dup; callers must not mutate adapter state through returned objects.
+    # Implementations must also isolate mutable string coordinates before
+    # persisting them so caller-owned buffers cannot mutate storage-owned
+    # identity fields after the call returns.
     #
     # @api public
     module Storage

@@ -11,7 +11,7 @@ module DAG
       # @param durability [Symbol] one of {DURABILITY}
       # @param max_attempts_per_node [Integer] positive
       # @param max_workflow_retries [Integer] non-negative
-      # @param event_bus_kind [Symbol]
+      # @param event_bus_kind [String, Symbol]
       # @param metadata [Hash] JSON-safe
       # @return [RuntimeProfile]
       def [](durability:, max_attempts_per_node:, max_workflow_retries:, event_bus_kind:, metadata: {})
@@ -46,6 +46,7 @@ module DAG
       )
       DAG::Validation.positive_integer!(max_attempts_per_node, "max_attempts_per_node")
       DAG::Validation.nonnegative_integer!(max_workflow_retries, "max_workflow_retries")
+      DAG::Validation.string_or_symbol!(event_bus_kind, "event_bus_kind")
 
       DAG.json_safe!(metadata, "$root.metadata")
 
