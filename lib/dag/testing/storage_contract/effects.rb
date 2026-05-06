@@ -196,6 +196,137 @@ module DAG::Testing::StorageContract
       assert_nil updated.lease_until_ms
     end
 
+    def test_contract_renew_effect_lease_extends_active_lease
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      effect = commit_waiting_effect(storage, workflow_id, :a)
+      storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
+
+      renewed = storage.renew_effect_lease(
+        effect_id: effect.id,
+        owner_id: "worker-a",
+        until_ms: 5_000,
+        now_ms: 1_100
+      )
+
+      assert_equal :dispatching, renewed.status
+      assert_equal "worker-a", renewed.lease_owner
+      assert_equal 5_000, renewed.lease_until_ms
+
+      assert_empty storage.claim_ready_effects(limit: 1, owner_id: "worker-b", lease_ms: 500, now_ms: 4_999)
+      reclaimed = storage.claim_ready_effects(limit: 1, owner_id: "worker-b", lease_ms: 500, now_ms: 5_001)
+      assert_equal [effect.id], reclaimed.map(&:id)
+    end
+
+    def test_contract_renew_effect_lease_is_idempotent_when_until_ms_unchanged
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      effect = commit_waiting_effect(storage, workflow_id, :a)
+      storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
+
+      renewed = storage.renew_effect_lease(
+        effect_id: effect.id,
+        owner_id: "worker-a",
+        until_ms: 1_500,
+        now_ms: 1_100
+      )
+
+      assert_equal 1_500, renewed.lease_until_ms
+    end
+
+    def test_contract_renew_effect_lease_rejects_wrong_owner
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      effect = commit_waiting_effect(storage, workflow_id, :a)
+      storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
+
+      assert_raises(DAG::Effects::StaleLeaseError) do
+        storage.renew_effect_lease(
+          effect_id: effect.id,
+          owner_id: "worker-b",
+          until_ms: 5_000,
+          now_ms: 1_100
+        )
+      end
+    end
+
+    def test_contract_renew_effect_lease_rejects_expired_lease
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      effect = commit_waiting_effect(storage, workflow_id, :a)
+      storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
+
+      assert_raises(DAG::Effects::StaleLeaseError) do
+        storage.renew_effect_lease(
+          effect_id: effect.id,
+          owner_id: "worker-a",
+          until_ms: 5_000,
+          now_ms: 1_501
+        )
+      end
+    end
+
+    def test_contract_renew_effect_lease_rejects_unclaimed_effect
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      effect = commit_waiting_effect(storage, workflow_id, :a)
+
+      assert_raises(DAG::Effects::StaleLeaseError) do
+        storage.renew_effect_lease(
+          effect_id: effect.id,
+          owner_id: "worker-a",
+          until_ms: 5_000,
+          now_ms: 1_100
+        )
+      end
+    end
+
+    def test_contract_renew_effect_lease_rejects_unknown_effect
+      storage = build_contract_storage
+      contract_create_workflow(storage)
+
+      assert_raises(DAG::Effects::UnknownEffectError) do
+        storage.renew_effect_lease(
+          effect_id: "effect/unknown",
+          owner_id: "worker-a",
+          until_ms: 5_000,
+          now_ms: 1_100
+        )
+      end
+    end
+
+    def test_contract_renew_effect_lease_rejects_until_ms_not_in_future
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      effect = commit_waiting_effect(storage, workflow_id, :a)
+      storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
+
+      assert_raises(ArgumentError) do
+        storage.renew_effect_lease(
+          effect_id: effect.id,
+          owner_id: "worker-a",
+          until_ms: 1_100,
+          now_ms: 1_100
+        )
+      end
+    end
+
+    def test_contract_renew_effect_lease_rejects_shrink
+      storage = build_contract_storage
+      workflow_id = contract_create_workflow(storage)
+      effect = commit_waiting_effect(storage, workflow_id, :a)
+      storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
+
+      assert_raises(ArgumentError) do
+        storage.renew_effect_lease(
+          effect_id: effect.id,
+          owner_id: "worker-a",
+          until_ms: 1_200,
+          now_ms: 1_100
+        )
+      end
+    end
+
     def test_contract_complete_effect_succeeded_releases_waiting_node_atomically
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)

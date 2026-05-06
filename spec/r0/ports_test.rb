@@ -27,6 +27,7 @@ class R0PortsTest < Minitest::Test
     claim_ready_effects: {limit: 1, owner_id: "worker", lease_ms: 1, now_ms: 1},
     mark_effect_succeeded: {effect_id: "x", owner_id: "worker", result: {}, external_ref: nil, now_ms: 1},
     mark_effect_failed: {effect_id: "x", owner_id: "worker", error: {}, retriable: true, not_before_ms: nil, now_ms: 1},
+    renew_effect_lease: {effect_id: "x", owner_id: "worker", until_ms: 2, now_ms: 1},
     complete_effect_succeeded: {effect_id: "x", owner_id: "worker", result: {}, external_ref: nil, now_ms: 1},
     complete_effect_failed: {effect_id: "x", owner_id: "worker", error: {}, retriable: false, not_before_ms: nil, now_ms: 1},
     release_nodes_satisfied_by_effect: {effect_id: "x", now_ms: 1},

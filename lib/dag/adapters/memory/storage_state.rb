@@ -345,6 +345,31 @@ module DAG
           state[:effects][effect_id] = updated
         end
 
+        # Implements `Ports::Storage#renew_effect_lease`.
+        # @api private
+        def renew_effect_lease(state, effect_id:, owner_id:, until_ms:, now_ms:)
+          ensure_effect_state!(state)
+          DAG::Validation.string!(owner_id, "owner_id")
+          DAG::Validation.integer!(until_ms, "until_ms")
+          DAG::Validation.integer!(now_ms, "now_ms")
+          unless until_ms > now_ms
+            raise ArgumentError, "until_ms (#{until_ms}) must be greater than now_ms (#{now_ms})"
+          end
+
+          record = fetch_effect!(state, effect_id)
+          validate_effect_lease!(record, owner_id: owner_id, now_ms: now_ms)
+
+          current_until = record.lease_until_ms
+          if until_ms < current_until
+            raise ArgumentError,
+              "until_ms (#{until_ms}) must not shrink lease_until_ms (#{current_until})"
+          end
+          return record if until_ms == current_until
+
+          updated = record.with(lease_until_ms: until_ms, updated_at_ms: now_ms)
+          state[:effects][effect_id] = updated
+        end
+
         # Implements `Ports::Storage#complete_effect_succeeded`.
         # @api private
         def complete_effect_succeeded(state, effect_id:, owner_id:, result:, external_ref:, now_ms:)

@@ -207,6 +207,32 @@ module DAG
         raise PortNotImplementedError
       end
 
+      # Port extension: cooperatively extend the lease of an effect currently
+      # held by `owner_id`. This separates admission control (worker-death
+      # detection via expired lease) from handler execution time, so the
+      # dispatcher's default `lease_ms` can stay tight without forcing
+      # legitimately long-running handlers to lose their claim mid-run.
+      #
+      # The CAS guard is identical to `mark_effect_*`: status `:dispatching`,
+      # `lease_owner == owner_id`, and `lease_until_ms >= now_ms`. Adapters
+      # update `lease_until_ms` and `updated_at_ms` atomically. Renewal is
+      # monotonic: `until_ms` must be strictly greater than `now_ms` and not
+      # less than the current `lease_until_ms`. `until_ms == lease_until_ms`
+      # is a no-op success that returns the unchanged record.
+      #
+      # @param effect_id [String]
+      # @param owner_id [String] current lease owner
+      # @param until_ms [Integer] new lease deadline in wall-clock milliseconds
+      # @param now_ms [Integer]
+      # @return [DAG::Effects::Record] updated record with the extended lease
+      # @raise [DAG::Effects::UnknownEffectError] when `effect_id` is unknown
+      # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
+      # @raise [ArgumentError] when `until_ms` is not greater than `now_ms`,
+      #   or would shrink the existing `lease_until_ms`
+      def renew_effect_lease(effect_id:, owner_id:, until_ms:, now_ms:)
+        raise PortNotImplementedError
+      end
+
       # Port extension: atomically mark a claimed effect as succeeded and
       # release any waiting nodes that become satisfied by that terminal
       # effect state. This closes the crash window between a terminal mark and
