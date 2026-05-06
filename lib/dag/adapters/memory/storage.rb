@@ -136,6 +136,17 @@ module DAG
           )
         end
 
+        # (see Ports::Storage#renew_effect_lease)
+        def renew_effect_lease(effect_id:, owner_id:, until_ms:, now_ms:)
+          frozen StorageState.renew_effect_lease(
+            @state,
+            effect_id: effect_id,
+            owner_id: owner_id,
+            until_ms: until_ms,
+            now_ms: now_ms
+          )
+        end
+
         # (see Ports::Storage#complete_effect_succeeded)
         def complete_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
           frozen StorageState.complete_effect_succeeded(
