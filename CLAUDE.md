@@ -152,6 +152,26 @@ plan: `ruby-dag` must durably reserve abstract effect intents and enforce
 idempotency on `(type, key)` plus `payload_fingerprint`, while concrete
 handlers and exactly-once external-system guarantees remain in consumers.
 
+V1.2 adds cooperative lease renewal so the dispatcher's default `lease_ms`
+no longer has to absorb worst-case handler runtime:
+
+- **`renew_effect_lease(effect_id:, owner_id:, until_ms:, now_ms:)`**
+  applies the same lease CAS as `mark_effect_*` (status `:dispatching`,
+  owner match, non-expired lease) and updates `lease_until_ms` plus
+  `updated_at_ms` atomically. Renewal is monotonic: `until_ms` must exceed
+  `now_ms` and must not shrink the existing `lease_until_ms`
+  (`ArgumentError` otherwise). `until_ms == lease_until_ms` is a no-op
+  success. A stale, foreign, or non-`:dispatching` lease raises
+  `DAG::Effects::StaleLeaseError`.
+
+This is justified by the effect safety invariant: without renewal,
+admission control (worker-death detection) and handler execution time are
+conflated into the same `lease_ms` knob, so consumers either accept retry
+storms on legitimately long handlers or pay a longer worker-death MTTR.
+The dispatcher does not yet emit a durable event when it observes a stale
+lease; that diagnostic and the consumer-side heartbeat helper remain
+out-of-scope for V1.2 and require their own design pass.
+
 Effect PR4 adds the abstract dispatcher boundary on top of those storage
 methods:
 

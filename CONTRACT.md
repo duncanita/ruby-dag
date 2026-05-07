@@ -414,6 +414,7 @@ storage.list_effects_for_attempt(attempt_id:)
 storage.claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:)
 storage.mark_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
 storage.mark_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
+storage.renew_effect_lease(effect_id:, owner_id:, until_ms:, now_ms:)
 storage.complete_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
 storage.complete_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
 storage.release_nodes_satisfied_by_effect(effect_id:, now_ms:)
@@ -431,6 +432,18 @@ owner and a non-expired lease; otherwise they raise
 the JSON-safe result and external reference. Retriable failure sets
 `status: :failed_retriable`, stores the JSON-safe error, and may set
 `not_before_ms`. Terminal failure sets `status: :failed_terminal`.
+
+`renew_effect_lease` cooperatively extends the lease of an effect still
+held by `owner_id`, separating admission control (worker-death detection
+via expired lease) from the time a legitimately long-running handler needs
+to finish. It applies the same lease CAS as `mark_effect_*` (status
+`:dispatching`, owner match, non-expired lease) and updates `lease_until_ms`
+and `updated_at_ms` atomically. `until_ms` must be strictly greater than
+`now_ms` and not less than the current `lease_until_ms`; violating either
+constraint raises `ArgumentError`. `until_ms == lease_until_ms` is a no-op
+success that returns the unchanged record so heartbeat callers can ignore
+order-of-arrival. A stale, foreign, or non-`:dispatching` lease raises
+`DAG::Effects::StaleLeaseError`.
 
 `:succeeded` and `:failed_terminal` are terminal effect states.
 `release_nodes_satisfied_by_effect` resets linked nodes from `:waiting` to

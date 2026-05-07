@@ -10,6 +10,24 @@
   refreshed stale execution-plan wording as historical reference.
 - Added API-stability guard tests for release documentation, runtime profile
   compatibility, and legacy mutation storage adapters.
+- `DAG::Ports::Storage#renew_effect_lease(effect_id:, owner_id:, until_ms:,
+  now_ms:)` cooperatively extends the lease of an effect currently held by
+  `owner_id`, separating admission control (worker-death detection via
+  expired lease) from handler execution time. Applies the same lease CAS as
+  `mark_effect_*` (status `:dispatching`, owner match, non-expired lease)
+  and updates `lease_until_ms` and `updated_at_ms` atomically. Renewal is
+  monotonic: `until_ms` must exceed `now_ms` and not shrink the current
+  `lease_until_ms` (`ArgumentError` otherwise); `until_ms == lease_until_ms`
+  is a no-op success. A stale, foreign, or non-`:dispatching` lease raises
+  `DAG::Effects::StaleLeaseError`. Motivated by a Delphi retry-storm trace
+  (workflows `7134e4d6` and `b540702c`, 2026-05-06) where a 30s default
+  `lease_ms` was shorter than legitimate LLM handler runtime (~110s),
+  causing repeated re-claims and duplicate paid external work.
+- `DAG::Adapters::Memory::Storage` implements the new method.
+- `DAG::Testing::StorageContract::Effects` extends G6 with renewal
+  coverage: success, idempotency on equal `until_ms`, wrong owner, expired
+  lease, unclaimed effect, unknown effect, and rejection of both
+  `until_ms <= now_ms` and shrinking `until_ms`.
 
 ## 1.1.0 — 2026-05-03
 
