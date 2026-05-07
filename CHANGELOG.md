@@ -2,32 +2,45 @@
 
 ## Unreleased
 
-- Hardened runtime profile, memory storage, and event values against mutable
-  workflow, attempt, and event-bus-kind inputs without changing public API
-  signatures.
-- Clarified effect key examples to avoid `:` inside consumer-owned `type` and
-  `key` parts, preserving the unambiguous `type:key` record identity, and
-  refreshed stale execution-plan wording as historical reference.
-- Added API-stability guard tests for release documentation, runtime profile
-  compatibility, and legacy mutation storage adapters.
+- No changes yet.
+
+## 1.2.0 — 2026-05-07
+
+V1.2 extends the effect-aware storage contract with cooperative lease renewal
+so dispatchers can keep their default `lease_ms` short (fast worker-death
+recovery) while still letting legitimately long-running handlers extend
+their own claim. Originated from a Delphi-side retry-storm trace
+(workflows `7134e4d6` and `b540702c`, 2026-05-06) where a 30s default
+`lease_ms` was shorter than legitimate LLM handler runtime (~110s),
+causing repeated re-claims and duplicate paid external work.
+
+### Added
+
 - `DAG::Ports::Storage#renew_effect_lease(effect_id:, owner_id:, until_ms:,
   now_ms:)` cooperatively extends the lease of an effect currently held by
-  `owner_id`, separating admission control (worker-death detection via
-  expired lease) from handler execution time. Applies the same lease CAS as
-  `mark_effect_*` (status `:dispatching`, owner match, non-expired lease)
-  and updates `lease_until_ms` and `updated_at_ms` atomically. Renewal is
-  monotonic: `until_ms` must exceed `now_ms` and not shrink the current
+  `owner_id`. Applies the same lease CAS as `mark_effect_*` (status
+  `:dispatching`, owner match, non-expired lease) and updates
+  `lease_until_ms` and `updated_at_ms` atomically. Renewal is monotonic:
+  `until_ms` must exceed `now_ms` and not shrink the current
   `lease_until_ms` (`ArgumentError` otherwise); `until_ms == lease_until_ms`
   is a no-op success. A stale, foreign, or non-`:dispatching` lease raises
-  `DAG::Effects::StaleLeaseError`. Motivated by a Delphi retry-storm trace
-  (workflows `7134e4d6` and `b540702c`, 2026-05-06) where a 30s default
-  `lease_ms` was shorter than legitimate LLM handler runtime (~110s),
-  causing repeated re-claims and duplicate paid external work.
-- `DAG::Adapters::Memory::Storage` implements the new method.
-- `DAG::Testing::StorageContract::Effects` extends G6 with renewal
-  coverage: success, idempotency on equal `until_ms`, wrong owner, expired
-  lease, unclaimed effect, unknown effect, and rejection of both
-  `until_ms <= now_ms` and shrinking `until_ms`.
+  `DAG::Effects::StaleLeaseError`.
+- `DAG::Adapters::Memory::Storage` implements `renew_effect_lease`.
+- `DAG::Testing::StorageContract::Effects` extends G6 with renewal coverage:
+  success, idempotency on equal `until_ms`, wrong owner, expired lease,
+  unclaimed effect, unknown effect, and rejection of both `until_ms <= now_ms`
+  and shrinking `until_ms`.
+- API-stability guard tests for release documentation, runtime profile
+  compatibility, and legacy mutation storage adapters.
+
+### Changed
+
+- Runtime profile, memory storage, and event values are hardened against
+  mutable workflow, attempt, and event-bus-kind inputs without changing
+  public API signatures.
+- Effect key examples avoid `:` inside consumer-owned `type` and `key`
+  parts so the `type:key` record identity stays unambiguous, and stale
+  execution-plan wording is preserved as historical reference.
 
 ## 1.1.0 — 2026-05-03
 
