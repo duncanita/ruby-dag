@@ -5,10 +5,6 @@ require_relative "../test_helper"
 class R0V12ReleaseGateTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__)
 
-  def normalized(path)
-    File.read(File.join(ROOT, path)).split.join(" ")
-  end
-
   def test_version_is_bumped_to_contract_release
     assert_equal "1.2.0", DAG::VERSION
   end
@@ -34,7 +30,7 @@ class R0V12ReleaseGateTest < Minitest::Test
     port = File.read(File.join(ROOT, "lib/dag/ports/storage.rb"))
 
     assert_includes port, "def renew_effect_lease(effect_id:, owner_id:, until_ms:, now_ms:)"
-    assert_includes port.downcase, "cooperatively extend the lease"
+    assert_includes port, "cooperatively extend the lease"
   end
 
   def test_contract_documents_renew_effect_lease

@@ -222,7 +222,7 @@ module DAG::Testing::StorageContract
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
       effect = commit_waiting_effect(storage, workflow_id, :a)
-      storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
+      claimed = storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000).first
 
       renewed = storage.renew_effect_lease(
         effect_id: effect.id,
@@ -232,6 +232,9 @@ module DAG::Testing::StorageContract
       )
 
       assert_equal 1_500, renewed.lease_until_ms
+      assert_equal "worker-a", renewed.lease_owner
+      assert_equal :dispatching, renewed.status
+      assert_equal claimed.updated_at_ms, renewed.updated_at_ms
     end
 
     def test_contract_renew_effect_lease_rejects_wrong_owner

@@ -26,6 +26,7 @@ require_relative "support/runner_factory"
 require_relative "support/workflow_builders"
 require_relative "support/step_helpers"
 require_relative "support/event_helpers"
+require_relative "support/release_gate_helpers"
 
 TEST_TMPDIR = File.expand_path(ENV.fetch("TMPDIR", "~/.tmp/ruby-dag-tests"))
 FileUtils.mkdir_p(TEST_TMPDIR)
@@ -37,5 +38,6 @@ module Minitest
     include WorkflowBuilders
     include StepHelpers
     include EventHelpers
+    include ReleaseGateHelpers
   end
 end
