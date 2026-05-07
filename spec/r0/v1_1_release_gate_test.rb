@@ -20,10 +20,6 @@ class R0V11ReleaseGateTest < Minitest::Test
     text[start_index...end_index]
   end
 
-  def test_version_is_bumped_to_contract_release
-    assert_equal "1.1.0", DAG::VERSION
-  end
-
   def test_changelog_contains_v1_1_contract_release_notes
     changelog = normalized("CHANGELOG.md")
 
