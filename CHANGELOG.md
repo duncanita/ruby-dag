@@ -2,7 +2,27 @@
 
 ## Unreleased
 
-- No changes yet.
+### Added
+
+- `DAG::Event::TYPES` gains `:effect_dispatch_stale_lease`, emitted by
+  `DAG::Effects::Dispatcher` when a handler returns but the storage lease
+  has already expired and the completion mark cannot be applied. The
+  dispatcher appends the event durably via `storage.append_event` before
+  recording the in-memory `DispatchReport#errors` entry, so the failure
+  mode is visible in the workflow event log instead of having to be
+  reconstructed from process-local state. Payload carries
+  `code: :stale_lease`, `effect_id`, `ref`, `type`, `lease_owner`,
+  `lease_until_ms`, and `message`.
+- `DAG::TraceRecord::STATUSES` gains `:effect_dispatch_stale_lease` and
+  the matching entry in `EVENT_STATUS`, mirroring the
+  `mutation_applied` 1:1 mapping pattern so trace consumers can render
+  the diagnostic without confusing it with a node-level failure.
+
+### Changed
+
+- `DAG::Effects::Dispatcher` now requires the storage adapter to
+  implement `append_event`. The Memory adapter already does;
+  `validate_storage!` is updated to reject adapters that don't.
 
 ## 1.2.0 — 2026-05-07
 

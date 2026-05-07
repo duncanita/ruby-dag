@@ -172,7 +172,7 @@ class EffectsDispatcherTest < Minitest::Test
     dispatcher = DAG::Effects::Dispatcher.new(
       storage: storage,
       handlers: {"success" => ->(_record) { DAG::Effects::HandlerResult.succeeded(result: {ok: true}) }},
-      clock: SequenceClock.new(1_000, 1_501),
+      clock: SequenceClock.new(1_000, 1_501, 1_502),
       owner_id: "worker",
       lease_ms: 500
     )
@@ -183,6 +183,38 @@ class EffectsDispatcherTest < Minitest::Test
     assert_empty report.succeeded
     assert_equal :stale_lease, report.errors.first[:code]
     assert_equal :dispatching, storage.list_effects_for_attempt(attempt_id: effect.attempt_id).first.status
+  end
+
+  def test_stale_lease_emits_durable_diagnostic_event
+    storage = DAG::Adapters::Memory::Storage.new
+    effect = commit_waiting_effect(storage, node_id: :a, effect_type: "success")
+    seq_before = storage.read_events(workflow_id: effect.workflow_id).last.seq
+    dispatcher = DAG::Effects::Dispatcher.new(
+      storage: storage,
+      handlers: {"success" => ->(_record) { DAG::Effects::HandlerResult.succeeded(result: {ok: true}) }},
+      clock: SequenceClock.new(1_000, 1_501, 1_502),
+      owner_id: "worker",
+      lease_ms: 500
+    )
+
+    dispatcher.tick(limit: 1)
+
+    new_events = storage.read_events(workflow_id: effect.workflow_id, after_seq: seq_before)
+    stale_event = new_events.find { |e| e.type == :effect_dispatch_stale_lease }
+    refute_nil stale_event, "expected an :effect_dispatch_stale_lease event in the durable log"
+    assert_equal effect.workflow_id, stale_event.workflow_id
+    assert_equal 1, stale_event.revision
+    assert_equal :a, stale_event.node_id
+    assert_equal effect.attempt_id, stale_event.attempt_id
+    assert_equal 1_502, stale_event.at_ms
+    payload = stale_event.payload
+    assert_equal :stale_lease, payload[:code]
+    assert_equal effect.id, payload[:effect_id]
+    assert_equal effect.ref, payload[:ref]
+    assert_equal "success", payload[:type]
+    assert_equal "worker", payload[:lease_owner]
+    assert_equal 1_500, payload[:lease_until_ms]
+    assert_kind_of String, payload[:message]
   end
 
   private
@@ -275,5 +307,12 @@ class EffectsDispatcherTest < Minitest::Test
     def release_nodes_satisfied_by_effect(effect_id:, now_ms:)
       []
     end
+
+    def append_event(workflow_id:, event:)
+      (@events ||= []) << event
+      event
+    end
+
+    attr_reader :events
   end
 end

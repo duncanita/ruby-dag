@@ -164,7 +164,29 @@ module DAG
         outcome = handler_outcome_for(record)
         apply_handler_result(record, outcome.result, @clock.now_ms, outcome.error)
       rescue DAG::Effects::StaleLeaseError => stale
+        emit_stale_lease_event(record, stale)
         DispatchOutcome.claimed_not_marked(error: stale_lease_error(record, stale))
+      end
+
+      def emit_stale_lease_event(record, stale)
+        event = DAG::Event[
+          type: :effect_dispatch_stale_lease,
+          workflow_id: record.workflow_id,
+          revision: record.revision,
+          node_id: record.node_id,
+          attempt_id: record.attempt_id,
+          at_ms: @clock.now_ms,
+          payload: {
+            code: :stale_lease,
+            effect_id: record.id,
+            ref: record.ref,
+            type: record.type,
+            lease_owner: record.lease_owner,
+            lease_until_ms: record.lease_until_ms,
+            message: stale.message
+          }
+        ]
+        @storage.append_event(workflow_id: record.workflow_id, event: event)
       end
 
       def handler_outcome_for(record)
@@ -322,6 +344,7 @@ module DAG
           mark_effect_succeeded
           mark_effect_failed
           release_nodes_satisfied_by_effect
+          append_event
         ].each do |method_name|
           DAG::Validation.dependency!(value, method_name, "storage")
         end

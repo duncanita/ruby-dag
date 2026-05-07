@@ -321,8 +321,9 @@ After a successful handler result or terminal failure, waiting nodes are
 released only when every blocking effect linked to the waiting attempt is
 terminal. Retriable failures do not release waiting nodes.
 `DAG::Effects::StaleLeaseError` from a completion or mark operation is
-recorded in `errors` and the tick continues with the remaining claimed
-records.
+recorded in `errors`, durably appended to the workflow event log as a
+`:effect_dispatch_stale_lease` event, and the tick continues with the
+remaining claimed records.
 
 Handler exceptions and invalid handler return values become retriable effect
 failures with JSON-safe error payloads. Unknown effect types default to terminal
@@ -834,11 +835,27 @@ EVENT_TYPES = %i[
   workflow_completed
   workflow_failed
   mutation_applied
+  effect_dispatch_stale_lease
 ].freeze
 ```
 
 Events are durably appended by storage operations, then published live through
 `EventBus#publish` after commit.
+
+`:effect_dispatch_stale_lease` is the only event emitted by
+`DAG::Effects::Dispatcher` rather than by `DAG::Runner`. It records that a
+handler returned but the storage lease had already expired, so the
+completion mark could not be applied. The payload is JSON-safe and shaped:
+
+```text
+code            # always :stale_lease
+effect_id
+ref
+type            # the effect type (not the event type)
+lease_owner
+lease_until_ms
+message         # storage-supplied diagnostic
+```
 
 ## Runtime Profile
 

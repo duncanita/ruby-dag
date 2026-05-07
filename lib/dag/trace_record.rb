@@ -114,7 +114,7 @@ module DAG
   end
 
   # Closed normalized status vocabulary used by TraceRecord.
-  TraceRecord::STATUSES = %i[started success waiting failed paused completed mutation_applied].freeze
+  TraceRecord::STATUSES = %i[started success waiting failed paused completed mutation_applied effect_dispatch_stale_lease].freeze
 
   # Mapping from durable event types to normalized trace statuses.
   TraceRecord::EVENT_STATUS = {
@@ -127,6 +127,7 @@ module DAG
     workflow_waiting: :waiting,
     workflow_completed: :completed,
     workflow_failed: :failed,
-    mutation_applied: :mutation_applied
+    mutation_applied: :mutation_applied,
+    effect_dispatch_stale_lease: :effect_dispatch_stale_lease
   }.freeze
 end
