@@ -183,6 +183,13 @@ methods:
   DAG::Effects::HandlerResult`**. Handler exceptions and invalid return values
   become retriable failures; unknown effect types default to terminal failure
   unless `unknown_handler_policy: :raise` is selected.
+- When the dispatcher catches `DAG::Effects::StaleLeaseError` after a
+  handler returns (the handler ran longer than `lease_ms`, so the mark
+  cannot be applied), it appends a durable
+  `:effect_dispatch_stale_lease` event via `storage.append_event` before
+  recording the error in `DispatchReport#errors`. This makes the failure
+  mode visible in the workflow event log instead of only in the in-memory
+  `DispatchReport`.
 
 This keeps concrete external integrations in Delphi while `ruby-dag` supplies
 the lease-aware, deterministic coordination contract.

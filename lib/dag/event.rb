@@ -69,5 +69,6 @@ module DAG
     workflow_completed
     workflow_failed
     mutation_applied
+    effect_dispatch_stale_lease
   ].freeze
 end
