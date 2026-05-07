@@ -5,10 +5,6 @@ require_relative "../test_helper"
 class R0V11ReleaseGateTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__)
 
-  def normalized(path)
-    File.read(File.join(ROOT, path)).split.join(" ")
-  end
-
   def normalized_section(path, start_marker, end_marker)
     text = File.read(File.join(ROOT, path))
     text.fetch_after(start_marker).fetch_before(end_marker).split.join(" ")
