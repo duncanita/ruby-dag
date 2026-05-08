@@ -48,8 +48,9 @@ Hard rules:
 - **Single V1.3 carve-out.** `lib/dag/effects/dispatcher.rb` is the one
   file in `lib/dag/**` allowed to use the concurrency primitives needed
   to implement bounded parallel dispatch within a `Dispatcher#tick`:
-  `Thread` and `Queue` (cop `Dag/NoThreadOrRactor`) for the worker
-  pool, plus `<<`, `pop`, and `[]=` mutating ops (cop
+  `Thread.new` and `Queue` (cop `Dag/NoThreadOrRactor`) for the worker
+  pool — `Thread.start` and `Thread.fork` stay banned even here —
+  plus `<<`, `pop`, and `[]=` mutating ops (cop
   `Dag/NoInPlaceMutation`) for queue feed, worker drain, and
   slot-indexed result writes. Both cops encode the same
   `dispatcher_relaxed_file?` carve-out. `Mutex`, `Monitor`,

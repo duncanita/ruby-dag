@@ -10,6 +10,12 @@ module RuboCop
         FORBIDDEN_CONS = %w[Thread Ractor Mutex Monitor Queue SizedQueue ConditionVariable].freeze
         DISPATCHER_RELAXED_CONS = %w[Thread Queue].freeze
         FORBIDDEN_THREAD_SENDS = %i[new start fork].freeze
+        # The carve-out documented in Roadmap §2.4 / §9.1 is "Thread for the
+        # worker pool", which structurally means `Thread.new`. `Thread.start`
+        # and `Thread.fork` stay banned even in the dispatcher: bounded
+        # parallel_map does not need them, and keeping them blocked closes
+        # the gap between the documented exception and the cop allow-list.
+        DISPATCHER_RELAXED_THREAD_SENDS = %i[new].freeze
         FORBIDDEN_PROCESS_SENDS = %i[fork spawn daemon].freeze
 
         def on_const(node)
@@ -29,7 +35,10 @@ module RuboCop
           end
 
           if receiver&.const_type? && %w[Thread Ractor].include?(receiver.const_name)
-            return if dispatcher_relaxed_file? && receiver.const_name == "Thread"
+            if dispatcher_relaxed_file? && receiver.const_name == "Thread" &&
+                DISPATCHER_RELAXED_THREAD_SENDS.include?(method_name)
+              return
+            end
 
             add_offense(node) if FORBIDDEN_THREAD_SENDS.include?(method_name)
             return

@@ -28,6 +28,26 @@ class R0RuboCopCopsTest < Minitest::Test
     assert_empty offenses
   end
 
+  def test_no_thread_or_ractor_still_flags_thread_start_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoThreadOrRactor,
+      "Thread.start { :work }\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    refute_empty offenses
+  end
+
+  def test_no_thread_or_ractor_still_flags_thread_fork_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoThreadOrRactor,
+      "Thread.fork { :work }\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    refute_empty offenses
+  end
+
   def test_no_thread_or_ractor_allows_queue_in_dispatcher
     offenses = inspect_source(
       RuboCop::Cop::DAG::NoThreadOrRactor,
