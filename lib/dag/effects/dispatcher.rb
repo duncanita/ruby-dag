@@ -182,23 +182,24 @@ module DAG
       # worker: `Thread#join` re-raises any exception that escaped a
       # worker thread, which would short-circuit the join loop and let
       # peer workers keep mutating storage past `tick`'s return. So each
-      # worker rescues every exception, parks it in `errors`, *drains
-      # the work queue* (so peer workers see `ThreadError` on their next
-      # `pop` and exit instead of pulling more records), and breaks out
-      # of the loop normally. Once every worker has joined we raise the
-      # first captured exception. Draining uses the queue itself as the
-      # abort signal, so synchronization rides on `Queue`'s built-in
-      # thread-safety rather than on Ruby's array-mutation visibility
-      # across threads.
+      # worker rescues every exception, parks it in its own slot of the
+      # `worker_errors` array (no contention: each worker writes a
+      # different index), *drains the work queue* (so peer workers see
+      # `ThreadError` on their next `pop` and exit instead of pulling
+      # more records), and breaks out of the loop normally. Once every
+      # worker has joined we raise the first captured exception.
+      # Draining uses the queue itself as the abort signal, so
+      # synchronization rides on `Queue`'s built-in thread-safety rather
+      # than on Ruby's array-mutation visibility across threads.
       def parallel_map(items)
         return items.map { |item| yield item } if @parallelism <= 1 || items.length <= 1
 
+        pool_size = (@parallelism < items.length) ? @parallelism : items.length
         results = Array.new(items.length)
-        errors = []
+        worker_errors = Array.new(pool_size)
         queue = Queue.new
         items.each_with_index { |item, idx| queue << [item, idx] }
-        pool_size = (@parallelism < items.length) ? @parallelism : items.length
-        workers = Array.new(pool_size) do
+        workers = Array.new(pool_size) do |worker_idx|
           Thread.new do
             loop do
               pair = begin
@@ -210,7 +211,7 @@ module DAG
               begin
                 results[idx] = yield item
               rescue Exception => exception # standard:disable Lint/RescueException
-                errors << exception
+                worker_errors[worker_idx] = exception
                 drain_queue(queue)
                 break
               end
@@ -218,7 +219,8 @@ module DAG
           end
         end
         workers.each(&:join)
-        raise errors.first unless errors.empty?
+        first_error = worker_errors.compact.first
+        raise first_error if first_error
 
         results
       end

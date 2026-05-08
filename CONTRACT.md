@@ -393,19 +393,31 @@ processes) and is now explicit: handler `#call` may be invoked by
 distinct threads on distinct records simultaneously, and must not
 share unsynchronized mutable state across calls.
 
-The dispatcher itself does not introduce shared mutable state across
-worker threads beyond the bounded work queue: claimed records are
-pushed onto a queue once, each worker pops, dispatches, and writes its
-outcome into a pre-allocated slot. Order preservation in
-`DispatchReport` is per collection: `succeeded.map(&:id)` is a
-subsequence of `claimed.map(&:id)` in original order, but the
-collections do not promise positional alignment with `claimed`.
+The dispatcher introduces three pieces of shared mutable state across
+worker threads, all bounded and contention-isolated: the work queue
+(an `Stdlib::Queue` whose own synchronization protects pushes and
+pops), the result Array (each worker writes only to its own
+pre-allocated slot, so writes do not contend), and a per-pool error
+slot Array (each worker writes only to its own slot on failure).
+Claimed records are pushed onto the queue once; each worker pops,
+dispatches, and writes its outcome into the matching pre-allocated
+result slot. Order preservation in `DispatchReport` is per
+collection: `succeeded.map(&:id)` is a subsequence of
+`claimed.map(&:id)` in original order, but the collections do not
+promise positional alignment with `claimed`.
 
-Unexpected exceptions raised inside a worker thread re-emerge from
-`#tick`: `dispatch_record` continues to catch only
-`DAG::Effects::StaleLeaseError`, and any other exception propagates via
-`Thread#value` re-raise after `join`. The serial map's exception
-semantics are preserved.
+`dispatch_record` continues to catch only
+`DAG::Effects::StaleLeaseError`. Any other exception raised inside a
+worker thread is captured by the worker (so the thread terminates
+normally, which prevents `Thread#join` from short-circuiting the join
+loop and re-raising before peer workers have finished), parked in
+the per-worker error slot, and the worker drains the remaining work
+queue so peer workers see `ThreadError` on their next `pop` and
+exit. After every worker has joined, `#tick` raises the first
+captured exception. This guarantees no worker is still mutating
+storage when `#tick` raises, preserving the V1.2 serial-map
+exception semantics: the caller observes a stable post-tick state
+on both success and failure paths.
 
 ## Storage Receipts And Failure Vocabulary
 
