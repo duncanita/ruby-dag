@@ -18,6 +18,46 @@ class R0RuboCopCopsTest < Minitest::Test
     refute_empty offenses
   end
 
+  def test_no_thread_or_ractor_allows_thread_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoThreadOrRactor,
+      "Thread.new { :work }.value\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    assert_empty offenses
+  end
+
+  def test_no_thread_or_ractor_allows_queue_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoThreadOrRactor,
+      "queue = Queue.new\nqueue << :item\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    assert_empty offenses
+  end
+
+  def test_no_thread_or_ractor_still_flags_mutex_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoThreadOrRactor,
+      "lock = Mutex.new\nlock.synchronize { :work }\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    refute_empty offenses
+  end
+
+  def test_no_thread_or_ractor_still_flags_thread_in_runner
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoThreadOrRactor,
+      "Thread.new { :work }\n",
+      path: runtime_path("runner.rb")
+    )
+
+    refute_empty offenses
+  end
+
   def test_no_thread_or_ractor_flags_runtime_process_spawn
     offenses = inspect_source(
       RuboCop::Cop::DAG::NoThreadOrRactor,

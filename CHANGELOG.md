@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Changed
+
+- Roadmap v3.4 §2.4 / §9.1 carve out a single V1.3+ exception to the
+  no-`Thread`/no-`Queue` ban: `lib/dag/effects/dispatcher.rb` is the
+  one file in `lib/dag/**` permitted to use `Thread` and `Queue` for
+  bounded parallel dispatch inside a `Dispatcher#tick`. `Mutex`,
+  `Monitor`, `SizedQueue`, `ConditionVariable`, `Fiber`,
+  `Process.fork`/`spawn`/`daemon`, and `Ractor` remain banned in that
+  file as everywhere else. The `Dag/NoThreadOrRactor` cop encodes the
+  carve-out via `dispatcher_relaxed_file?`; tests in
+  `spec/r0/rubocop_cops_test.rb` cover both the allow-list (Thread,
+  Queue) and the still-banned types (Mutex in the dispatcher) and
+  files (Thread in the runner). Rationale: the Dispatcher is already
+  an I/O-bound boundary and already non-deterministic by design
+  (handlers complete in network/LLM/disk order), so allowing
+  intra-tick parallelism does not move the §2.1 Determinism pillar —
+  Runner, Memory adapters, and every other `lib/dag/**` file remain
+  single-threaded. The `parallelism:` kwarg itself ships with the
+  V1.3 feature release; this changelog entry documents only the
+  governance carve-out it depends on. `CONTRACT.md` gains a
+  "Dispatcher Concurrency Contract" subsection covering storage and
+  handler thread-safety responsibilities and the
+  `Memory::Storage` + `parallelism > 1` `ArgumentError` rule.
+
 ### Added
 
 - `DAG::Event::TYPES` gains `:effect_dispatch_stale_lease`, emitted by

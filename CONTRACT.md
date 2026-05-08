@@ -342,6 +342,68 @@ type
 Code-specific entries may add fields. `:handler_raised` adds `class` and
 `message`; `:handler_bad_return` adds `class`; `:stale_lease` adds `message`.
 
+### Dispatcher Concurrency Contract
+
+`DAG::Effects::Dispatcher` is the single file in `lib/dag/**` permitted
+to use `Thread` and `Queue` (Roadmap v3.4 §2.4 / §9.1 V1.3 carve-out).
+The default behavior is unchanged: a `Dispatcher` dispatches claimed
+records sequentially within a `tick`. This subsection documents the
+contract a consumer agrees to when opting into bounded parallel
+dispatch via the `parallelism:` kwarg introduced in V1.3. The kwarg
+itself ships with the feature release; this section is the binding
+contract that release implements against.
+
+A `Dispatcher` constructed with `parallelism: > 1` dispatches its
+claimed records concurrently with at most `parallelism` worker threads
+in flight, regardless of the batch size. Two responsibilities flow to
+the consumer:
+
+**Storage thread-safety.** When `parallelism > 1`, the storage adapter
+must be safe for concurrent invocation, from up to `parallelism`
+threads, of every method the dispatcher touches:
+
+```text
+claim_ready_effects
+mark_effect_succeeded
+mark_effect_failed
+complete_effect_succeeded
+complete_effect_failed
+release_nodes_satisfied_by_effect
+append_event
+renew_effect_lease
+```
+
+`DAG::Adapters::Memory::Storage` is single-process and **does not**
+declare this property; constructing
+`Dispatcher.new(storage: memory_storage, parallelism: > 1)` raises
+`ArgumentError`. Durable adapters that bind every dispatcher-touched
+method to a backend transaction (typically a single SQL transaction
+per call) satisfy the contract by construction. Consumer adapters
+declare the property explicitly so the dispatcher can validate it at
+construction.
+
+**Handler thread-safety.** When `parallelism > 1`, every registered
+handler must be safe for concurrent invocation. This was an implicit
+property in V1.2 single-thread tick (where handler concurrency could
+only come from running multiple `Dispatcher` instances in distinct
+processes) and is now explicit: handler `#call` may be invoked by
+distinct threads on distinct records simultaneously, and must not
+share unsynchronized mutable state across calls.
+
+The dispatcher itself does not introduce shared mutable state across
+worker threads beyond the bounded work queue: claimed records are
+pushed onto a queue once, each worker pops, dispatches, and writes its
+outcome into a pre-allocated slot. Order preservation in
+`DispatchReport` is per collection: `succeeded.map(&:id)` is a
+subsequence of `claimed.map(&:id)` in original order, but the
+collections do not promise positional alignment with `claimed`.
+
+Unexpected exceptions raised inside a worker thread re-emerge from
+`#tick`: `dispatch_record` continues to catch only
+`DAG::Effects::StaleLeaseError`, and any other exception propagates via
+`Thread#value` re-raise after `join`. The serial map's exception
+semantics are preserved.
+
 ## Storage Receipts And Failure Vocabulary
 
 Public storage methods must not require consumers to infer success from `nil`
