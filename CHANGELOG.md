@@ -8,7 +8,10 @@
   two cop gates so bounded parallel dispatch can be implemented inside
   the kernel:
   - `Dag/NoThreadOrRactor` lets `lib/dag/effects/dispatcher.rb` use
-    `Thread` and `Queue` for the worker pool.
+    `Thread.new` and `Queue` for the worker pool. `Thread.start` and
+    `Thread.fork` stay banned even in this file: bounded
+    `parallel_map` does not need them, and keeping them blocked closes
+    the gap between the documented carve-out and the cop allow-list.
   - `Dag/NoInPlaceMutation` lets the same file use `<<`, `pop`, and
     `[]=` for queue feed, worker drain, and slot-indexed result
     writes.

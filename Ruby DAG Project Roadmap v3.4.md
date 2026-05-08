@@ -111,8 +111,9 @@ Regole operative:
 A partire da V1.3, il singolo file `lib/dag/effects/dispatcher.rb` può
 usare:
 
-- `Thread` e `Queue` (cop `DAG::NoThreadOrRactor`) per orchestrare il
-  pool worker bounded;
+- `Thread.new` e `Queue` (cop `DAG::NoThreadOrRactor`) per orchestrare
+  il pool worker bounded; `Thread.start` e `Thread.fork` restano
+  bandite anche in questo file;
 - `<<` (push su `Queue`), `pop` (worker drain di `Queue`), e `[]=`
   (slot-indexed write su array pre-allocato) (cop
   `DAG::NoInPlaceMutation`) per alimentare la coda, drenarla nei
@@ -1505,7 +1506,8 @@ Una PR che introduce anche solo una di queste violazioni non passa review.
 | Anti-pattern | Dove è vietato | Mitigazione |
 |---|---|---|
 | `Ractor`, `Ractor.new`, `Ractor.receive`, `Ractor.yield` | tutto il repo, incluso `test/**` | `DAG::NoThreadOrRactor` |
-| `Thread.new`, `Thread.start`, `Thread.fork` | tutto il repo, incluso `test/**`, **tranne `lib/dag/effects/dispatcher.rb`** (eccezione V1.3) | `DAG::NoThreadOrRactor` |
+| `Thread.start`, `Thread.fork` | tutto il repo, incluso `test/**` e `lib/dag/effects/dispatcher.rb` | `DAG::NoThreadOrRactor` |
+| `Thread.new` | tutto il repo, incluso `test/**`, **tranne `lib/dag/effects/dispatcher.rb`** (eccezione V1.3 per worker pool) | `DAG::NoThreadOrRactor` |
 | `Mutex`, `Monitor`, `SizedQueue`, `ConditionVariable` | tutto il repo, incluso `test/**` e adapter Memory | `DAG::NoThreadOrRactor` |
 | `Queue` | tutto il repo, incluso `test/**` e adapter Memory, **tranne `lib/dag/effects/dispatcher.rb`** (eccezione V1.3) | `DAG::NoThreadOrRactor` |
 | `Process.fork`, `Process.spawn`, `system`, backtick shell, `%x` | `lib/dag/**` | `DAG::NoThreadOrRactor`; `Process.clock_gettime` resta consentito |
@@ -2303,7 +2305,8 @@ Vincoli per `Memory::Storage`:
 
 Regole:
 
-- vieta `Thread.new`, `Thread.start`, `Thread.fork` ovunque, incluso `test/**`, **tranne `lib/dag/effects/dispatcher.rb`** (eccezione V1.3 per parallel dispatch bounded);
+- vieta `Thread.start`, `Thread.fork` ovunque, incluso `test/**` e `lib/dag/effects/dispatcher.rb`;
+- vieta `Thread.new` ovunque, incluso `test/**`, **tranne `lib/dag/effects/dispatcher.rb`** (eccezione V1.3 per worker pool);
 - vieta `Ractor`, `Ractor.new`, `Ractor.receive`, `Ractor.yield` ovunque, incluso `test/**`;
 - vieta `Mutex.new`, `Monitor.new`, `SizedQueue.new`, `ConditionVariable.new` ovunque, incluso `test/**` e adapter Memory;
 - vieta `Queue.new` ovunque, incluso `test/**` e adapter Memory, **tranne `lib/dag/effects/dispatcher.rb`** (eccezione V1.3);
