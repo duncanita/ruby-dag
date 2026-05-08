@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Changed
+
+- Roadmap v3.4 §2.4 / §9.1 carve out a single V1.3+ exception against
+  two cop gates so bounded parallel dispatch can be implemented inside
+  the kernel:
+  - `Dag/NoThreadOrRactor` lets `lib/dag/effects/dispatcher.rb` use
+    `Thread` and `Queue` for the worker pool.
+  - `Dag/NoInPlaceMutation` lets the same file use `<<`, `pop`, and
+    `[]=` for queue feed, worker drain, and slot-indexed result
+    writes.
+  Both cops use the same `dispatcher_relaxed_file?` predicate.
+  `Mutex`, `Monitor`, `SizedQueue`, `ConditionVariable`, `Fiber`,
+  `Process.fork`/`spawn`/`daemon`, `Ractor`, and the other mutating
+  ops (`merge!`, `update`, `delete`, `clear`, `shift`, `push`)
+  remain banned even in the dispatcher. Tests in
+  `spec/r0/rubocop_cops_test.rb` cover both cops' allow-lists
+  (Thread/Queue and `<<`/`pop`/`[]=` in the dispatcher) and the
+  still-banned cases (Mutex and `merge!` in the dispatcher; Thread in
+  the runner; `<<` in other `lib/dag/effects/**` files). Rationale: the
+  Dispatcher is already an I/O-bound boundary and already
+  non-deterministic by design (handlers complete in network/LLM/disk
+  order), so allowing intra-tick parallelism does not move the §2.1
+  Determinism pillar — Runner, Memory adapters, and every other
+  `lib/dag/**` file remain single-threaded and pure-value. The
+  `parallelism:` kwarg itself ships with the V1.3 feature release;
+  this changelog entry documents only the governance carve-out it
+  depends on. `CONTRACT.md` gains a "Dispatcher Concurrency Contract"
+  subsection covering storage and handler thread-safety
+  responsibilities and the `Memory::Storage` + `parallelism > 1`
+  `ArgumentError` rule.
+
 ### Added
 
 - `DAG::Event::TYPES` gains `:effect_dispatch_stale_lease`, emitted by

@@ -39,11 +39,26 @@ Hard rules:
   documented extension with explicit justification — see "Port extensions"
   below.
 - **Anti-patterns in §9.1 do not pass review.** No `Thread`/`Ractor`/
-  `Mutex`/`Queue` anywhere; no `Process.fork`/`spawn`/`system` in
-  `lib/dag/**`; no `attr_accessor` in `lib/dag/**`; no in-place mutation in
-  pure-kernel files; no non-stdlib `require` at runtime; no AI/LLM terms in
-  the kernel; no budget/approval inside `Runner`; no default-singleton
-  injected dependencies on `Runner.new` (all 7 keyword args are required).
+  `Mutex`/`Queue` anywhere (carve-out below); no `Process.fork`/`spawn`/
+  `system` in `lib/dag/**`; no `attr_accessor` in `lib/dag/**`; no
+  in-place mutation in pure-kernel files; no non-stdlib `require` at
+  runtime; no AI/LLM terms in the kernel; no budget/approval inside
+  `Runner`; no default-singleton injected dependencies on `Runner.new`
+  (all 7 keyword args are required).
+- **Single V1.3 carve-out.** `lib/dag/effects/dispatcher.rb` is the one
+  file in `lib/dag/**` allowed to use the concurrency primitives needed
+  to implement bounded parallel dispatch within a `Dispatcher#tick`:
+  `Thread` and `Queue` (cop `Dag/NoThreadOrRactor`) for the worker
+  pool, plus `<<`, `pop`, and `[]=` mutating ops (cop
+  `Dag/NoInPlaceMutation`) for queue feed, worker drain, and
+  slot-indexed result writes. Both cops encode the same
+  `dispatcher_relaxed_file?` carve-out. `Mutex`, `Monitor`,
+  `SizedQueue`, `ConditionVariable`, `Fiber`,
+  `Process.fork`/`spawn`/`daemon`, `Ractor`, and the other mutating
+  ops (`merge!`, `update`, `delete`, `clear`, `shift`, `push`) remain
+  banned even in this file. Every other file in `lib/dag/**` —
+  including `Runner`, `Memory::Storage`, and the rest of
+  `lib/dag/effects/**` — stays single-thread and pure-value.
 - **Frozen decisions (§3) are not negotiable.** Ruby ≥ 3.4. Zero runtime
   deps. Test framework Minitest. Memory adapters single-process. SQLite
   for durable concurrency in S0. No Ractor anywhere.
@@ -386,8 +401,11 @@ public surface) without paying ceremony for private scaffolding.
   registry:, clock:, id_generator:, fingerprint:, serializer:`); a
   missing or `nil` keyword raises `ArgumentError`.
 - No `Thread`, `Mutex`, `Queue`, `Ractor`, `Monitor`, or `ConditionVariable`
-  anywhere in `lib/dag/**`. The `Dag/NoThreadOrRactor` cop enforces this
-  globally.
+  anywhere in `lib/dag/**`, with the single carve-out for `Thread` + `Queue`
+  in `lib/dag/effects/dispatcher.rb` (V1.3+, see "Hard rules" above).
+  `Mutex`, `Monitor`, `SizedQueue`, `ConditionVariable`, and `Ractor`
+  remain banned even in the dispatcher. The `Dag/NoThreadOrRactor` cop
+  encodes both the global ban and the carve-out.
 - Event types are the closed set in `DAG::Event::TYPES`. The Runner
   emits `:workflow_started` once per workflow (idempotent via event log
   inspection), `:node_started` / `:node_committed` / `:node_waiting` /

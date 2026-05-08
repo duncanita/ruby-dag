@@ -18,6 +18,46 @@ class R0RuboCopCopsTest < Minitest::Test
     refute_empty offenses
   end
 
+  def test_no_thread_or_ractor_allows_thread_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoThreadOrRactor,
+      "Thread.new { :work }.value\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    assert_empty offenses
+  end
+
+  def test_no_thread_or_ractor_allows_queue_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoThreadOrRactor,
+      "queue = Queue.new\nqueue << :item\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    assert_empty offenses
+  end
+
+  def test_no_thread_or_ractor_still_flags_mutex_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoThreadOrRactor,
+      "lock = Mutex.new\nlock.synchronize { :work }\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    refute_empty offenses
+  end
+
+  def test_no_thread_or_ractor_still_flags_thread_in_runner
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoThreadOrRactor,
+      "Thread.new { :work }\n",
+      path: runtime_path("runner.rb")
+    )
+
+    refute_empty offenses
+  end
+
   def test_no_thread_or_ractor_flags_runtime_process_spawn
     offenses = inspect_source(
       RuboCop::Cop::DAG::NoThreadOrRactor,
@@ -89,6 +129,56 @@ class R0RuboCopCopsTest < Minitest::Test
   end
 
   def test_no_in_place_mutation_flags_effect_value_mutation
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoInPlaceMutation,
+      "values = []\nvalues << :item\n",
+      path: runtime_path("effects/intent.rb")
+    )
+
+    refute_empty offenses
+  end
+
+  def test_no_in_place_mutation_allows_queue_push_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoInPlaceMutation,
+      "queue = Queue.new\nitems.each_with_index { |item, idx| queue << [item, idx] }\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    assert_empty offenses
+  end
+
+  def test_no_in_place_mutation_allows_slot_write_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoInPlaceMutation,
+      "results = Array.new(items.length)\nresults[idx] = block.call(item)\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    assert_empty offenses
+  end
+
+  def test_no_in_place_mutation_allows_queue_pop_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoInPlaceMutation,
+      "queue = Queue.new\npair = queue.pop(true)\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    assert_empty offenses
+  end
+
+  def test_no_in_place_mutation_still_flags_merge_bang_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoInPlaceMutation,
+      "config = {}\nconfig.merge!(extra: 1)\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    refute_empty offenses
+  end
+
+  def test_no_in_place_mutation_still_flags_push_in_other_effects_file
     offenses = inspect_source(
       RuboCop::Cop::DAG::NoInPlaceMutation,
       "values = []\nvalues << :item\n",

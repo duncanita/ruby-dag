@@ -100,12 +100,39 @@ Ogni oggetto che attraversa il confine pubblico del kernel deve essere deep-froz
 Regole operative:
 
 - Nessun `Ractor` in nessun repo.
-- Nessun `Thread`, `Mutex`, `Monitor`, `Queue`, `SizedQueue`, `ConditionVariable` nel kernel e negli adapter Memory.
+- Nessun `Thread`, `Mutex`, `Monitor`, `Queue`, `SizedQueue`, `ConditionVariable` nel kernel e negli adapter Memory, **eccezione puntuale V1.3** documentata sotto per `lib/dag/effects/dispatcher.rb`.
 - Nessun `Process.fork`, `Process.spawn`, backtick shell o `system` in `lib/dag/**`.
 - I test possono usare processi solo dove serve verificare la concorrenza reale; per `ruby-dag` core i test restano single-process, mentre i test process-level vivono in S0 su SQLite dentro `delphic`.
 - `Memory::Storage` e `Memory::EventBus` sono adapter **single-process** per test, REPL e sviluppo. Non sono backend process-safe e non devono fingere di esserlo.
 - `Delphic::Adapters::Sqlite::Storage` è il primo backend process-safe: ogni processo apre una propria connessione SQLite e si coordina tramite transazioni.
 - `delphic` usa `Async::Task` / fiber per concorrenza applicativa. I processi sono ammessi solo per isolamento esplicito di tool esterni, worker o test di integrazione; non per rendere concorrente il kernel.
+
+**Eccezione puntuale V1.3 — `lib/dag/effects/dispatcher.rb`.**
+A partire da V1.3, il singolo file `lib/dag/effects/dispatcher.rb` può
+usare:
+
+- `Thread` e `Queue` (cop `DAG::NoThreadOrRactor`) per orchestrare il
+  pool worker bounded;
+- `<<` (push su `Queue`), `pop` (worker drain di `Queue`), e `[]=`
+  (slot-indexed write su array pre-allocato) (cop
+  `DAG::NoInPlaceMutation`) per alimentare la coda, drenarla nei
+  worker, e raccogliere i risultati.
+
+L'eccezione è chirurgica per file e per primitiva. Restano
+universalmente banditi anche in questo file: `Mutex`, `Monitor`,
+`SizedQueue`, `ConditionVariable`, `Fiber`,
+`Process.fork`/`spawn`/`daemon`, `system`/backtick shell, `Ractor`, e
+le mutating ops `merge!`, `update`, `delete`, `clear`, `shift`,
+`push`. Razionale: il Dispatcher è già un boundary I/O-bound e già
+non-deterministico per design (gli handler completano nell'ordine in
+cui finiscono il network/LLM/disk, non in un ordine prescritto),
+quindi parallelizzare *dentro* un tick non muove il pillar §2.1
+Determinismo — il Runner, gli adapter Memory, e ogni altro file
+`lib/dag/**` restano single-thread invariati. `parallelism > 1`
+richiede uno storage adapter che dichiari thread-safety per le
+chiamate dispatcher-touched; `Memory::Storage` non lo dichiara e resta
+`parallelism = 1` only. Vedi `CONTRACT.md` "Dispatcher concurrency
+contract".
 
 Sono kernel puro:
 
@@ -138,6 +165,7 @@ DAG::Adapters::Memory::CrashableStorage
 | `lib/dag/definition_editor.rb` | vietati | vietato | vietati | vietata | kernel puro |
 | `lib/dag/adapters/memory/storage.rb` | vietati | vietato | vietati | consentita privata | single-process adapter |
 | `lib/dag/adapters/memory/event_bus.rb` | vietati | vietato | vietati | consentita privata | single-process adapter |
+| `lib/dag/effects/dispatcher.rb` | `Thread` consentito, `Ractor` vietato | vietato | `Queue` consentito; `Mutex`/`Monitor`/`SizedQueue`/`ConditionVariable` vietati | `<<`, `pop` e `[]=` consentiti per pool feed/drain e slot writes; altre mutating ops vietate | **eccezione V1.3** per parallel dispatch bounded |
 | `test/**` core | vietati | consentito solo se dichiarato nel test | vietati | consentito nei fake | niente Ractor |
 | `test/s0/**` in `delphic` | vietati | consentito | vietati | consentito nei fixture | process concurrency SQLite |
 | `lib/delphic/**` | vietati | consentito solo in adapter/process runner espliciti | vietati | consentita negli storage applicativi | fiber-first |
@@ -1477,11 +1505,13 @@ Una PR che introduce anche solo una di queste violazioni non passa review.
 | Anti-pattern | Dove è vietato | Mitigazione |
 |---|---|---|
 | `Ractor`, `Ractor.new`, `Ractor.receive`, `Ractor.yield` | tutto il repo, incluso `test/**` | `DAG::NoThreadOrRactor` |
-| `Thread.new`, `Thread.start`, `Thread.fork` | tutto il repo, incluso `test/**` | `DAG::NoThreadOrRactor` |
-| `Mutex`, `Monitor`, `Queue`, `SizedQueue`, `ConditionVariable` | tutto il repo, incluso `test/**` e adapter Memory | `DAG::NoThreadOrRactor` |
+| `Thread.new`, `Thread.start`, `Thread.fork` | tutto il repo, incluso `test/**`, **tranne `lib/dag/effects/dispatcher.rb`** (eccezione V1.3) | `DAG::NoThreadOrRactor` |
+| `Mutex`, `Monitor`, `SizedQueue`, `ConditionVariable` | tutto il repo, incluso `test/**` e adapter Memory | `DAG::NoThreadOrRactor` |
+| `Queue` | tutto il repo, incluso `test/**` e adapter Memory, **tranne `lib/dag/effects/dispatcher.rb`** (eccezione V1.3) | `DAG::NoThreadOrRactor` |
 | `Process.fork`, `Process.spawn`, `system`, backtick shell, `%x` | `lib/dag/**` | `DAG::NoThreadOrRactor`; `Process.clock_gettime` resta consentito |
 | `attr_accessor`, `attr_writer` | tutto `lib/dag/**` | `DAG::NoMutableAccessors` |
-| `push`, `<<`, `merge!`, `update`, `delete`, `clear`, `shift`, `pop`, `[]=` su stato kernel | kernel puro | `DAG::NoInPlaceMutation` |
+| `push`, `merge!`, `update`, `delete`, `clear`, `shift` su stato kernel | kernel puro | `DAG::NoInPlaceMutation` |
+| `<<`, `[]=`, `pop` su stato kernel | kernel puro, **tranne `lib/dag/effects/dispatcher.rb`** (eccezione V1.3 per pool feed/drain e slot writes) | `DAG::NoInPlaceMutation` |
 | `add_dependency` nel gemspec `ruby-dag` | gemspec | test zero runtime deps |
 | `require` di librerie non stdlib | runtime | `DAG::NoExternalRequires` |
 | Termini AI nel kernel: `prompt`, `token`, `model`, `skill`, `conversation`, `llm` | kernel | grep test + review |
@@ -2273,9 +2303,10 @@ Vincoli per `Memory::Storage`:
 
 Regole:
 
-- vieta `Thread.new`, `Thread.start`, `Thread.fork` ovunque, incluso `test/**`;
+- vieta `Thread.new`, `Thread.start`, `Thread.fork` ovunque, incluso `test/**`, **tranne `lib/dag/effects/dispatcher.rb`** (eccezione V1.3 per parallel dispatch bounded);
 - vieta `Ractor`, `Ractor.new`, `Ractor.receive`, `Ractor.yield` ovunque, incluso `test/**`;
-- vieta `Mutex.new`, `Monitor.new`, `Queue.new`, `SizedQueue.new`, `ConditionVariable.new` ovunque, incluso `test/**` e adapter Memory;
+- vieta `Mutex.new`, `Monitor.new`, `SizedQueue.new`, `ConditionVariable.new` ovunque, incluso `test/**` e adapter Memory;
+- vieta `Queue.new` ovunque, incluso `test/**` e adapter Memory, **tranne `lib/dag/effects/dispatcher.rb`** (eccezione V1.3);
 - vieta process spawn nel runtime `lib/dag/**`: `Process.fork`, `Process.spawn`, `Process.daemon`, `Kernel.system`, backtick shell e `%x`; `Process.clock_gettime` resta consentito;
 - i test S0 possono usare `Process.fork` perché verificano il backend SQLite, non il kernel.
 
@@ -2411,7 +2442,7 @@ end
 
 #### `NoInPlaceMutation`
 
-Scope: kernel puro. Gli adapter stateful sono esclusi ma non devono esporre riferimenti mutabili.
+Scope: kernel puro. Gli adapter stateful sono esclusi ma non devono esporre riferimenti mutabili. Eccezione V1.3 chirurgica: `lib/dag/effects/dispatcher.rb` può usare `<<` (queue feed), `pop` (worker drain) e `[]=` (slot-indexed result writes) per il `parallel_map` bounded; gli altri metodi mutating restano banditi anche in questo file.
 
 Metodi minimi da intercettare:
 
