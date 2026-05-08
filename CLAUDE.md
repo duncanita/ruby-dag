@@ -46,13 +46,19 @@ Hard rules:
   `Runner`; no default-singleton injected dependencies on `Runner.new`
   (all 7 keyword args are required).
 - **Single V1.3 carve-out.** `lib/dag/effects/dispatcher.rb` is the one
-  file allowed to use `Thread` and `Queue`, for bounded parallel
-  dispatch within a `Dispatcher#tick`. `Mutex`, `Monitor`, `SizedQueue`,
-  `ConditionVariable`, `Fiber`, `Process.fork`/`spawn`/`daemon`, and
-  `Ractor` remain banned even in this file. The `Dag/NoThreadOrRactor`
-  cop encodes the carve-out via `dispatcher_relaxed_file?`. Every other
-  file in `lib/dag/**` — including `Runner`, `Memory::Storage`, and the
-  rest of `lib/dag/effects/**` — stays single-thread.
+  file in `lib/dag/**` allowed to use the concurrency primitives needed
+  to implement bounded parallel dispatch within a `Dispatcher#tick`:
+  `Thread` and `Queue` (cop `Dag/NoThreadOrRactor`) for the worker
+  pool, plus `<<`, `pop`, and `[]=` mutating ops (cop
+  `Dag/NoInPlaceMutation`) for queue feed, worker drain, and
+  slot-indexed result writes. Both cops encode the same
+  `dispatcher_relaxed_file?` carve-out. `Mutex`, `Monitor`,
+  `SizedQueue`, `ConditionVariable`, `Fiber`,
+  `Process.fork`/`spawn`/`daemon`, `Ractor`, and the other mutating
+  ops (`merge!`, `update`, `delete`, `clear`, `shift`, `push`) remain
+  banned even in this file. Every other file in `lib/dag/**` —
+  including `Runner`, `Memory::Storage`, and the rest of
+  `lib/dag/effects/**` — stays single-thread and pure-value.
 - **Frozen decisions (§3) are not negotiable.** Ruby ≥ 3.4. Zero runtime
   deps. Test framework Minitest. Memory adapters single-process. SQLite
   for durable concurrency in S0. No Ractor anywhere.

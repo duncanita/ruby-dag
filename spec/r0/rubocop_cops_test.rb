@@ -138,6 +138,56 @@ class R0RuboCopCopsTest < Minitest::Test
     refute_empty offenses
   end
 
+  def test_no_in_place_mutation_allows_queue_push_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoInPlaceMutation,
+      "queue = Queue.new\nitems.each_with_index { |item, idx| queue << [item, idx] }\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    assert_empty offenses
+  end
+
+  def test_no_in_place_mutation_allows_slot_write_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoInPlaceMutation,
+      "results = Array.new(items.length)\nresults[idx] = block.call(item)\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    assert_empty offenses
+  end
+
+  def test_no_in_place_mutation_allows_queue_pop_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoInPlaceMutation,
+      "queue = Queue.new\npair = queue.pop(true)\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    assert_empty offenses
+  end
+
+  def test_no_in_place_mutation_still_flags_merge_bang_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoInPlaceMutation,
+      "config = {}\nconfig.merge!(extra: 1)\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    refute_empty offenses
+  end
+
+  def test_no_in_place_mutation_still_flags_push_in_other_effects_file
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoInPlaceMutation,
+      "values = []\nvalues << :item\n",
+      path: runtime_path("effects/intent.rb")
+    )
+
+    refute_empty offenses
+  end
+
   def test_no_external_requires_flags_non_stdlib_runtime_requires
     offenses = inspect_source(
       RuboCop::Cop::DAG::NoExternalRequires,
