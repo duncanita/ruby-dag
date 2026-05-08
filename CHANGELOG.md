@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+## 1.3.0 — 2026-05-08
+
+V1.3 introduces bounded intra-tick parallel dispatch so consumers can
+fan out N co-eligible effects (e.g. tool calls and LLM calls in a
+single workflow) instead of paying `N × per_record` wall time. The
+opt-in is a single additive kwarg; the default is identical to V1.2.
+
+### Added
+
+- `DAG::Effects::Dispatcher.new(parallelism: 1)` (default) preserves
+  the V1.2 serial contract bit-identical. Values `> 1` claim records
+  as before but dispatch them through a bounded worker pool of at
+  most `parallelism` `Thread.new` workers in flight regardless of
+  batch size. The pool reads from a `Queue` of `[record, slot_index]`
+  pairs and writes outcomes into a pre-allocated `Array.new(N)` at
+  the matching slot, so `succeeded.map(&:id)` is a subsequence of
+  `claimed.map(&:id)` in original order. Unexpected exceptions raised
+  inside a worker thread propagate out of `#tick` *only after every
+  worker has joined*: each worker rescues every exception, parks it
+  in a shared error list, *drains the work queue* so peer workers see
+  `ThreadError` on their next `pop` and exit (peers still finish
+  whatever record they were already processing), and exits its loop
+  normally. After `workers.each(&:join)` returns, `#tick` raises the
+  first captured exception. Synchronization rides on `Queue`'s
+  built-in thread-safety rather than on cross-thread visibility of
+  custom flags. This guarantees no worker is still mutating storage
+  when `#tick` raises and preserves the V1.2 serial-map exception
+  semantics where the caller observes a stable post-tick state.
+- `parallelism > 1` requires the storage adapter to declare
+  thread-safety by implementing `#thread_safe_for_dispatch?` returning
+  truthy. Adapters that do not declare it cause
+  `Dispatcher.new(..., parallelism: > 1)` to raise `ArgumentError`,
+  surfacing the contract mismatch at construction instead of at
+  runtime. `DAG::Adapters::Memory::Storage` is single-process by
+  Roadmap §2.4 and intentionally does not declare it; durable
+  adapters (typically SQLite-backed) bind every dispatcher-touched
+  method to a transaction and declare it explicitly.
+
 ### Changed
 
 - Roadmap v3.4 §2.4 / §9.1 carve out a single V1.3+ exception against

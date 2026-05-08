@@ -373,14 +373,17 @@ append_event
 renew_effect_lease
 ```
 
-`DAG::Adapters::Memory::Storage` is single-process and **does not**
-declare this property; constructing
-`Dispatcher.new(storage: memory_storage, parallelism: > 1)` raises
-`ArgumentError`. Durable adapters that bind every dispatcher-touched
-method to a backend transaction (typically a single SQL transaction
-per call) satisfy the contract by construction. Consumer adapters
-declare the property explicitly so the dispatcher can validate it at
-construction.
+Adapters declare thread-safety by implementing
+`#thread_safe_for_dispatch?` and answering truthy. The dispatcher
+calls it during `Dispatcher#initialize` whenever `parallelism > 1`
+and raises `ArgumentError` when the adapter either does not respond
+or answers falsy. `DAG::Adapters::Memory::Storage` is single-process
+and **does not** implement `thread_safe_for_dispatch?`, so
+constructing `Dispatcher.new(storage: memory_storage, parallelism: > 1)`
+raises `ArgumentError`. Durable adapters that bind every
+dispatcher-touched method to a backend transaction (typically a single
+SQL transaction per call) satisfy the contract by construction and
+declare it by implementing `thread_safe_for_dispatch? -> true`.
 
 **Handler thread-safety.** When `parallelism > 1`, every registered
 handler must be safe for concurrent invocation. This was an implicit

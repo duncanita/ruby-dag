@@ -5,10 +5,6 @@ require_relative "../test_helper"
 class R0V12ReleaseGateTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__)
 
-  def test_version_is_bumped_to_contract_release
-    assert_equal "1.2.0", DAG::VERSION
-  end
-
   def test_changelog_contains_v1_2_release_notes
     changelog = normalized("CHANGELOG.md")
 

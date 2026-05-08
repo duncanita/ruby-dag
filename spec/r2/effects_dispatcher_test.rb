@@ -217,16 +217,153 @@ class EffectsDispatcherTest < Minitest::Test
     assert_kind_of String, payload[:message]
   end
 
+  # ----- V1.3 parallelism: --------------------------------------------------
+
+  def test_parallelism_default_one_preserves_serial_max_in_flight
+    storage = DAG::Adapters::Memory::Storage.new
+    4.times { |n| commit_waiting_effect(storage, node_id: :"n#{n}", effect_type: "success", effect_key: "k#{n}") }
+    handler = IntervalRecordingHandler.new(sleep_seconds: 0.02)
+    dispatcher = build_dispatcher(storage, handlers: {"success" => handler})
+
+    dispatcher.tick(limit: 4)
+
+    assert_equal 1, handler.max_concurrent
+    assert_equal 4, handler.intervals.size
+  end
+
+  def test_parallelism_above_one_caps_workers_in_flight_to_parallelism
+    storage = TestThreadSafeMemoryStorage.new
+    6.times { |n| commit_waiting_effect(storage, node_id: :"n#{n}", effect_type: "success", effect_key: "k#{n}") }
+    handler = IntervalRecordingHandler.new(sleep_seconds: 0.03)
+    dispatcher = build_dispatcher(storage, handlers: {"success" => handler}, parallelism: 3)
+
+    dispatcher.tick(limit: 6)
+
+    # Bounded concurrency: pool size strictly capped at parallelism.
+    assert_operator handler.max_concurrent, :<=, 3,
+      "max_concurrent=#{handler.max_concurrent} exceeds parallelism cap"
+    # Sanity: we actually parallelized something rather than running serial.
+    assert_operator handler.max_concurrent, :>=, 2,
+      "expected at least 2 handlers in flight together; got #{handler.max_concurrent}"
+    assert_equal 6, handler.intervals.size
+  end
+
+  def test_parallelism_above_one_preserves_collection_order
+    storage = TestThreadSafeMemoryStorage.new
+    effects = 5.times.map { |n|
+      commit_waiting_effect(storage, node_id: :"n#{n}",
+        effect_type: (n.even? ? "success" : "fail"), effect_key: "k#{n}")
+    }
+    handler_success = ->(record) {
+      sleep((record.id.bytes.last % 5) * 0.005)
+      DAG::Effects::HandlerResult.succeeded(result: {id: record.id})
+    }
+    handler_fail = ->(record) {
+      sleep((record.id.bytes.last % 5) * 0.005)
+      DAG::Effects::HandlerResult.failed(error: {code: :nope, id: record.id}, retriable: false)
+    }
+    dispatcher = build_dispatcher(storage,
+      handlers: {"success" => handler_success, "fail" => handler_fail},
+      parallelism: 4)
+
+    report = dispatcher.tick(limit: 5)
+
+    claimed_ids = report.claimed.map(&:id)
+    assert_equal effects.map(&:id), claimed_ids, "claim order should match commit order"
+    succeeded_ids = report.succeeded.map(&:id)
+    failed_ids = report.failed.map(&:id)
+    assert_equal subsequence(claimed_ids, succeeded_ids), succeeded_ids,
+      "succeeded should be a subsequence of claimed in original order"
+    assert_equal subsequence(claimed_ids, failed_ids), failed_ids,
+      "failed should be a subsequence of claimed in original order"
+  end
+
+  # Custom non-StandardError class used to verify that exceptions outside
+  # the StandardError tree (which `invoke_handler` deliberately catches)
+  # propagate from worker threads via `Thread#value` after `join`.
+  # standard:disable Lint/InheritException
+  class WorkerPropagationError < Exception; end
+  # standard:enable Lint/InheritException
+
+  def test_parallelism_above_one_propagates_unexpected_worker_exceptions
+    storage = TestThreadSafeMemoryStorage.new
+    3.times { |n| commit_waiting_effect(storage, node_id: :"n#{n}", effect_type: "boom", effect_key: "k#{n}") }
+    boomer = ->(_record) { raise WorkerPropagationError, "non-StandardError must propagate" }
+    dispatcher = build_dispatcher(storage, handlers: {"boom" => boomer}, parallelism: 2)
+
+    error = silencing_stderr { assert_raises(WorkerPropagationError) { dispatcher.tick(limit: 3) } }
+    assert_match(/non-StandardError/, error.message)
+  end
+
+  def test_parallelism_above_one_joins_all_workers_before_raising
+    # Pins the invariant: when one worker raises, `tick` must not return to
+    # the caller while peer workers are still in flight. Without join-then-
+    # value the caller would observe `tick` raising while peer worker
+    # threads are still mutating storage (handler completion marks, event
+    # appends, waiting-node releases) — a half-state the V1.2 serial map
+    # never produced.
+    storage = TestThreadSafeMemoryStorage.new
+    4.times { |n| commit_waiting_effect(storage, node_id: :"n#{n}", effect_type: "mixed", effect_key: "k#{n}") }
+    finished_at = {}
+    handler = ->(record) {
+      if record.key == "k0"
+        # Sleep before raising so the peer worker has time to pop its
+        # first record and enter its handler — without this, the peer
+        # would see the abort flag set on its very first iteration and
+        # never start a record, which is not the invariant under test.
+        sleep 0.02
+        raise WorkerPropagationError, "boom"
+      end
+      sleep 0.1
+      finished_at[record.key] = Process.clock_gettime(Process::CLOCK_MONOTONIC, :nanosecond)
+      DAG::Effects::HandlerResult.succeeded(result: {ok: true})
+    }
+    dispatcher = build_dispatcher(storage, handlers: {"mixed" => handler}, parallelism: 2)
+
+    raised_at = nil
+    silencing_stderr do
+      assert_raises(WorkerPropagationError) { dispatcher.tick(limit: 4) }
+      raised_at = Process.clock_gettime(Process::CLOCK_MONOTONIC, :nanosecond)
+    end
+
+    refute_empty finished_at, "expected at least one peer worker to have completed before tick raised"
+    finished_at.each do |key, t|
+      assert_operator t, :<, raised_at,
+        "peer worker #{key} finished at #{t} after tick raised at #{raised_at}"
+    end
+  end
+
+  def test_parallelism_above_one_with_memory_storage_raises_argument_error
+    storage = DAG::Adapters::Memory::Storage.new
+    handlers = {"success" => ->(_record) { DAG::Effects::HandlerResult.succeeded(result: {}) }}
+
+    error = assert_raises(ArgumentError) do
+      build_dispatcher(storage, handlers: handlers, parallelism: 4)
+    end
+    assert_match(/thread_safe_for_dispatch\?/, error.message)
+  end
+
+  def test_parallelism_validates_positive_integer
+    storage = DAG::Adapters::Memory::Storage.new
+    handlers = {"success" => ->(_record) { DAG::Effects::HandlerResult.succeeded(result: {}) }}
+
+    assert_raises(ArgumentError) { build_dispatcher(storage, handlers: handlers, parallelism: 0) }
+    assert_raises(ArgumentError) { build_dispatcher(storage, handlers: handlers, parallelism: -1) }
+    assert_raises(ArgumentError) { build_dispatcher(storage, handlers: handlers, parallelism: 1.5) }
+  end
+
   private
 
-  def build_dispatcher(storage, handlers:, unknown_handler_policy: :terminal_failure)
+  def build_dispatcher(storage, handlers:, unknown_handler_policy: :terminal_failure,
+    parallelism: 1, clock: FixedClock[now_ms: 1_000])
     DAG::Effects::Dispatcher.new(
       storage: storage,
       handlers: handlers,
-      clock: FixedClock[now_ms: 1_000],
+      clock: clock,
       owner_id: "worker",
       lease_ms: 500,
-      unknown_handler_policy: unknown_handler_policy
+      unknown_handler_policy: unknown_handler_policy,
+      parallelism: parallelism
     )
   end
 
@@ -314,5 +451,85 @@ class EffectsDispatcherTest < Minitest::Test
     end
 
     attr_reader :events
+  end
+
+  # Memory storage that opts into the `parallelism > 1` contract for tests.
+  # Memory itself is single-process per Roadmap §2.4 and intentionally does
+  # not declare `thread_safe_for_dispatch?` in production. This subclass is
+  # test-scope only: we exercise the dispatcher's parallel_map with bounded
+  # batches and per-record-isolated state, where Memory's plain-Hash bookkeeping
+  # plus CRuby's GVL is sufficient. Production parallelism uses durable
+  # adapters that bind every dispatcher-touched method to a transaction.
+  class TestThreadSafeMemoryStorage < DAG::Adapters::Memory::Storage
+    def thread_safe_for_dispatch?
+      true
+    end
+  end
+
+  # Records each handler invocation's [entered_at_ms, exited_at_ms] interval
+  # in a per-record slot, so tests can compute the maximum number of handlers
+  # in flight at any moment ex post from the merged interval set. Avoids
+  # needing thread synchronization primitives in the test (writes are to
+  # disjoint keys).
+  class IntervalRecordingHandler
+    attr_reader :intervals
+
+    def initialize(sleep_seconds:)
+      @sleep_seconds = sleep_seconds
+      @intervals = {}
+    end
+
+    def call(record)
+      entered = monotonic_ns
+      sleep @sleep_seconds
+      exited = monotonic_ns
+      @intervals[record.id] = [entered, exited]
+      DAG::Effects::HandlerResult.succeeded(result: {id: record.id})
+    end
+
+    # Counts the maximum number of handlers in flight at any moment by
+    # sweeping start/end events. End-events sort before start-events at
+    # equal timestamps so that two handlers whose intervals abut at the
+    # same nanosecond are not falsely reported as concurrent.
+    def max_concurrent
+      events = []
+      @intervals.each_value do |entered, exited|
+        events << [exited, 0, :end]
+        events << [entered, 1, :start]
+      end
+      events.sort!
+      max = 0
+      cur = 0
+      delta = {start: 1, end: -1}
+      events.each do |_, _, kind|
+        cur += delta.fetch(kind)
+        max = cur if cur > max
+      end
+      max
+    end
+
+    private
+
+    def monotonic_ns
+      Process.clock_gettime(Process::CLOCK_MONOTONIC, :nanosecond)
+    end
+  end
+
+  # Suppresses Ruby's "Thread terminated with exception (report_on_exception
+  # is true)" diagnostic noise so the test output stays clean while still
+  # asserting that the exception propagates out of `tick`.
+  def silencing_stderr
+    original = $stderr
+    $stderr = StringIO.new
+    yield
+  ensure
+    $stderr = original
+  end
+
+  def subsequence(full, candidate)
+    indices = candidate.map { |id| full.index(id) }
+    return candidate if indices.none?(&:nil?) && indices == indices.sort
+
+    candidate.select { |id| full.include?(id) }.sort_by { |id| full.index(id) }
   end
 end

@@ -118,12 +118,21 @@ module DAG
       # @param owner_id [String]
       # @param lease_ms [Integer]
       # @param unknown_handler_policy [:terminal_failure, :raise]
-      def initialize(storage:, handlers:, clock:, owner_id:, lease_ms:, unknown_handler_policy: :terminal_failure)
+      # @param parallelism [Integer] worker pool size for parallel dispatch
+      #   within a single `#tick`. Default `1` preserves the V1.2 serial
+      #   contract bit-identical. Values `> 1` require a storage adapter
+      #   that declares `#thread_safe_for_dispatch?` and answers truthy;
+      #   `Memory::Storage` does not, so combining it with `parallelism > 1`
+      #   raises `ArgumentError`.
+      def initialize(storage:, handlers:, clock:, owner_id:, lease_ms:,
+        unknown_handler_policy: :terminal_failure, parallelism: 1)
         validate_storage!(storage)
         DAG::Validation.dependency!(clock, :now_ms, "clock")
         DAG::Validation.nonempty_string!(owner_id, "owner_id")
         DAG::Validation.positive_integer!(lease_ms, "lease_ms")
+        DAG::Validation.positive_integer!(parallelism, "parallelism")
         validate_unknown_handler_policy!(unknown_handler_policy)
+        validate_parallelism_storage!(storage, parallelism)
 
         @storage = storage
         @handlers = normalize_handlers(handlers)
@@ -131,6 +140,7 @@ module DAG
         @owner_id = owner_id
         @lease_ms = lease_ms
         @unknown_handler_policy = unknown_handler_policy
+        @parallelism = parallelism
         freeze
       end
 
@@ -147,7 +157,7 @@ module DAG
           lease_ms: @lease_ms,
           now_ms: now_ms
         )
-        outcomes = claimed.map { |record| dispatch_record(record) }
+        outcomes = parallel_map(claimed) { |record| dispatch_record(record) }
 
         DispatchReport[
           claimed: claimed,
@@ -159,6 +169,73 @@ module DAG
       end
 
       private
+
+      # Bounded-concurrency parallel map. At most `@parallelism` worker
+      # threads in flight regardless of `items.length`. Result order
+      # matches input order (slot-indexed writes; no shared mutation
+      # otherwise). Unexpected exceptions raised inside a worker thread
+      # re-emerge from `#tick` only after every worker has joined, so the
+      # caller is guaranteed that no worker is still mutating storage
+      # when `tick` raises.
+      #
+      # The exception path is *captured*, not *raised*, inside each
+      # worker: `Thread#join` re-raises any exception that escaped a
+      # worker thread, which would short-circuit the join loop and let
+      # peer workers keep mutating storage past `tick`'s return. So each
+      # worker rescues every exception, parks it in `errors`, *drains
+      # the work queue* (so peer workers see `ThreadError` on their next
+      # `pop` and exit instead of pulling more records), and breaks out
+      # of the loop normally. Once every worker has joined we raise the
+      # first captured exception. Draining uses the queue itself as the
+      # abort signal, so synchronization rides on `Queue`'s built-in
+      # thread-safety rather than on Ruby's array-mutation visibility
+      # across threads.
+      def parallel_map(items)
+        return items.map { |item| yield item } if @parallelism <= 1 || items.length <= 1
+
+        results = Array.new(items.length)
+        errors = []
+        queue = Queue.new
+        items.each_with_index { |item, idx| queue << [item, idx] }
+        pool_size = (@parallelism < items.length) ? @parallelism : items.length
+        workers = Array.new(pool_size) do
+          Thread.new do
+            loop do
+              pair = begin
+                queue.pop(true)
+              rescue ThreadError
+                break
+              end
+              item, idx = pair
+              begin
+                results[idx] = yield item
+              rescue Exception => exception # standard:disable Lint/RescueException
+                errors << exception
+                drain_queue(queue)
+                break
+              end
+            end
+          end
+        end
+        workers.each(&:join)
+        raise errors.first unless errors.empty?
+
+        results
+      end
+
+      # Empties `queue` non-blockingly. Used to signal peer workers to
+      # stop pulling new records after a failure: any peer that calls
+      # `queue.pop(true)` after a drain sees `ThreadError` and exits.
+      # Records popped from the drain are deliberately discarded — they
+      # remain in `:dispatching` state in storage; their leases will
+      # expire and a future `tick` can re-claim them.
+      def drain_queue(queue)
+        loop do
+          queue.pop(true)
+        end
+      rescue ThreadError
+        # queue empty
+      end
 
       def dispatch_record(record)
         outcome = handler_outcome_for(record)
@@ -356,6 +433,15 @@ module DAG
 
       def validate_unknown_handler_policy!(value)
         DAG::Validation.member!(value, UNKNOWN_HANDLER_POLICIES, "unknown_handler_policy")
+      end
+
+      def validate_parallelism_storage!(storage, parallelism)
+        return if parallelism <= 1
+        return if storage.respond_to?(:thread_safe_for_dispatch?) && storage.thread_safe_for_dispatch?
+
+        raise ArgumentError,
+          "parallelism > 1 requires a storage adapter that answers " \
+          "thread_safe_for_dispatch? truthy; the configured adapter does not"
       end
     end
   end

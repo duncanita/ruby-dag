@@ -44,6 +44,8 @@ Tracked phases:
 | Release v1.1                   | #165 | Done |
 | V1.2 cooperative lease renewal | —    | Done (#175, #176) |
 | Release v1.2                   | —    | Done |
+| V1.3 dispatcher parallelism    | —    | Done |
+| Release v1.3                   | —    | Done |
 | S0 (SQLite adapter, in Delphi)   | TBD  | Next |
 | Release v1.0                     | #74  | Done (#126, #156) |
 
