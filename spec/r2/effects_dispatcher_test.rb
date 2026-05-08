@@ -295,6 +295,44 @@ class EffectsDispatcherTest < Minitest::Test
     assert_match(/non-StandardError/, error.message)
   end
 
+  def test_parallelism_above_one_joins_all_workers_before_raising
+    # Pins the invariant: when one worker raises, `tick` must not return to
+    # the caller while peer workers are still in flight. Without join-then-
+    # value the caller would observe `tick` raising while peer worker
+    # threads are still mutating storage (handler completion marks, event
+    # appends, waiting-node releases) — a half-state the V1.2 serial map
+    # never produced.
+    storage = TestThreadSafeMemoryStorage.new
+    4.times { |n| commit_waiting_effect(storage, node_id: :"n#{n}", effect_type: "mixed", effect_key: "k#{n}") }
+    finished_at = {}
+    handler = ->(record) {
+      if record.key == "k0"
+        # Sleep before raising so the peer worker has time to pop its
+        # first record and enter its handler — without this, the peer
+        # would see the abort flag set on its very first iteration and
+        # never start a record, which is not the invariant under test.
+        sleep 0.02
+        raise WorkerPropagationError, "boom"
+      end
+      sleep 0.1
+      finished_at[record.key] = Process.clock_gettime(Process::CLOCK_MONOTONIC, :nanosecond)
+      DAG::Effects::HandlerResult.succeeded(result: {ok: true})
+    }
+    dispatcher = build_dispatcher(storage, handlers: {"mixed" => handler}, parallelism: 2)
+
+    raised_at = nil
+    silencing_stderr do
+      assert_raises(WorkerPropagationError) { dispatcher.tick(limit: 4) }
+      raised_at = Process.clock_gettime(Process::CLOCK_MONOTONIC, :nanosecond)
+    end
+
+    refute_empty finished_at, "expected at least one peer worker to have completed before tick raised"
+    finished_at.each do |key, t|
+      assert_operator t, :<, raised_at,
+        "peer worker #{key} finished at #{t} after tick raised at #{raised_at}"
+    end
+  end
+
   def test_parallelism_above_one_with_memory_storage_raises_argument_error
     storage = DAG::Adapters::Memory::Storage.new
     handlers = {"success" => ->(_record) { DAG::Effects::HandlerResult.succeeded(result: {}) }}

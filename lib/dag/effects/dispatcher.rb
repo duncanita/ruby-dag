@@ -174,28 +174,50 @@ module DAG
       # threads in flight regardless of `items.length`. Result order
       # matches input order (slot-indexed writes; no shared mutation
       # otherwise). Unexpected exceptions raised inside a worker thread
-      # re-emerge from `#tick` via `Thread#value` after `join`.
+      # re-emerge from `#tick` only after every worker has joined, so the
+      # caller is guaranteed that no worker is still mutating storage
+      # when `tick` raises.
+      #
+      # The exception path is *captured*, not *raised*, inside each
+      # worker: `Thread#join` re-raises any exception that escaped a
+      # worker thread, which would short-circuit the join loop and let
+      # peer workers keep mutating storage past `tick`'s return. So each
+      # worker rescues every exception, parks it in `errors`, sets the
+      # shared abort flag (so peers stop pulling new work after their
+      # current item completes), and exits the loop normally. Once every
+      # worker has joined we raise the first captured exception.
       def parallel_map(items)
         return items.map { |item| yield item } if @parallelism <= 1 || items.length <= 1
 
         results = Array.new(items.length)
+        errors = []
+        abort_flag = []
         queue = Queue.new
         items.each_with_index { |item, idx| queue << [item, idx] }
         pool_size = (@parallelism < items.length) ? @parallelism : items.length
         workers = Array.new(pool_size) do
           Thread.new do
             loop do
+              break unless abort_flag.empty?
               pair = begin
                 queue.pop(true)
               rescue ThreadError
                 break
               end
               item, idx = pair
-              results[idx] = yield item
+              begin
+                results[idx] = yield item
+              rescue Exception => exception # standard:disable Lint/RescueException
+                errors << exception
+                abort_flag << true
+                break
+              end
             end
           end
         end
-        workers.each(&:value)
+        workers.each(&:join)
+        raise errors.first unless errors.empty?
+
         results
       end
 
