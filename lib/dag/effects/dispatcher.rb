@@ -182,23 +182,25 @@ module DAG
       # worker: `Thread#join` re-raises any exception that escaped a
       # worker thread, which would short-circuit the join loop and let
       # peer workers keep mutating storage past `tick`'s return. So each
-      # worker rescues every exception, parks it in `errors`, sets the
-      # shared abort flag (so peers stop pulling new work after their
-      # current item completes), and exits the loop normally. Once every
-      # worker has joined we raise the first captured exception.
+      # worker rescues every exception, parks it in `errors`, *drains
+      # the work queue* (so peer workers see `ThreadError` on their next
+      # `pop` and exit instead of pulling more records), and breaks out
+      # of the loop normally. Once every worker has joined we raise the
+      # first captured exception. Draining uses the queue itself as the
+      # abort signal, so synchronization rides on `Queue`'s built-in
+      # thread-safety rather than on Ruby's array-mutation visibility
+      # across threads.
       def parallel_map(items)
         return items.map { |item| yield item } if @parallelism <= 1 || items.length <= 1
 
         results = Array.new(items.length)
         errors = []
-        abort_flag = []
         queue = Queue.new
         items.each_with_index { |item, idx| queue << [item, idx] }
         pool_size = (@parallelism < items.length) ? @parallelism : items.length
         workers = Array.new(pool_size) do
           Thread.new do
             loop do
-              break unless abort_flag.empty?
               pair = begin
                 queue.pop(true)
               rescue ThreadError
@@ -209,7 +211,7 @@ module DAG
                 results[idx] = yield item
               rescue Exception => exception # standard:disable Lint/RescueException
                 errors << exception
-                abort_flag << true
+                drain_queue(queue)
                 break
               end
             end
@@ -219,6 +221,20 @@ module DAG
         raise errors.first unless errors.empty?
 
         results
+      end
+
+      # Empties `queue` non-blockingly. Used to signal peer workers to
+      # stop pulling new records after a failure: any peer that calls
+      # `queue.pop(true)` after a drain sees `ThreadError` and exits.
+      # Records popped from the drain are deliberately discarded — they
+      # remain in `:dispatching` state in storage; their leases will
+      # expire and a future `tick` can re-claim them.
+      def drain_queue(queue)
+        loop do
+          queue.pop(true)
+        end
+      rescue ThreadError
+        # queue empty
       end
 
       def dispatch_record(record)

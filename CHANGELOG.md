@@ -21,12 +21,14 @@ opt-in is a single additive kwarg; the default is identical to V1.2.
   `claimed.map(&:id)` in original order. Unexpected exceptions raised
   inside a worker thread propagate out of `#tick` *only after every
   worker has joined*: each worker rescues every exception, parks it
-  in a shared error list, sets a shared abort flag that stops peer
-  workers from pulling new records (peers still finish the record
-  they were already processing), and exits its loop normally. After
-  `workers.each(&:join)` returns, `#tick` raises the first captured
-  exception. This guarantees that no worker is still mutating storage
-  when `#tick` raises, preserving the V1.2 serial-map exception
+  in a shared error list, *drains the work queue* so peer workers see
+  `ThreadError` on their next `pop` and exit (peers still finish
+  whatever record they were already processing), and exits its loop
+  normally. After `workers.each(&:join)` returns, `#tick` raises the
+  first captured exception. Synchronization rides on `Queue`'s
+  built-in thread-safety rather than on cross-thread visibility of
+  custom flags. This guarantees no worker is still mutating storage
+  when `#tick` raises and preserves the V1.2 serial-map exception
   semantics where the caller observes a stable post-tick state.
 - `parallelism > 1` requires the storage adapter to declare
   thread-safety by implementing `#thread_safe_for_dispatch?` returning
