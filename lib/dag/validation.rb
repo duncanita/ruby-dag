@@ -178,5 +178,17 @@ module DAG
 
       raise ArgumentError, "#{label} must respond to #{method_name}"
     end
+
+    # Raise an `ArgumentError` listing every dependency in `deps` whose value
+    # is `nil`. Used by ctors that require all keyword args to be supplied.
+    # @param deps [Hash{Symbol => Object}] keyword name => provided value
+    # @param label [String] subject label for the raised message
+    # @return [Hash] the original deps hash when all values are present
+    def required_dependencies!(deps, label)
+      missing = deps.select { |_, v| v.nil? }.keys
+      return deps if missing.empty?
+
+      raise ArgumentError, "#{label} requires: #{missing.join(", ")}"
+    end
   end
 end

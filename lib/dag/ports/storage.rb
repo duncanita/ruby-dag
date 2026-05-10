@@ -15,6 +15,19 @@ module DAG
     #
     # @api public
     module Storage
+      # True when `adapter` defines `method_name` outside of this base port
+      # module. The Runner and the effect dispatcher use this to fall back to
+      # primitive storage methods when an adapter has not specialized the
+      # extension method.
+      # @param adapter [Object]
+      # @param method_name [Symbol]
+      # @return [Boolean]
+      def self.method_overridden?(adapter, method_name)
+        return false unless adapter.respond_to?(method_name)
+
+        adapter.method(method_name).owner != self
+      end
+
       # Persist a fresh workflow in `:pending` with the supplied initial
       # definition (revision 1) and runtime profile.
       #

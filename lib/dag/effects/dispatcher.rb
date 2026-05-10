@@ -32,16 +32,7 @@ module DAG
           DAG::Validation.optional_hash!(error, "error")
           DAG.json_safe!(error, "$root.error")
 
-          super(result: result, error: immutable_json_copy(error))
-        end
-
-        private
-
-        def immutable_json_copy(value)
-          return nil if value.nil?
-          return value if value.frozen?
-
-          DAG.frozen_copy(value)
+          super(result: result, error: DAG::Effects.frozen_copy_or_nil(error))
         end
       end
       private_constant :HandlerOutcome
@@ -93,7 +84,7 @@ module DAG
             succeeded_record: succeeded_record,
             failed_record: failed_record,
             released: DAG.frozen_copy(released),
-            error: immutable_json_copy(error)
+            error: DAG::Effects.frozen_copy_or_nil(error)
           )
         end
 
@@ -101,13 +92,6 @@ module DAG
 
         def validate_optional_record!(value, label)
           DAG::Validation.optional_instance!(value, DAG::Effects::Record, label)
-        end
-
-        def immutable_json_copy(value)
-          return nil if value.nil?
-          return value if value.frozen?
-
-          DAG.frozen_copy(value)
         end
       end
       private_constant :DispatchOutcome
@@ -334,7 +318,7 @@ module DAG
       end
 
       def complete_effect_succeeded(record, result, now_ms)
-        if storage_overrides?(:complete_effect_succeeded)
+        if DAG::Ports::Storage.method_overridden?(@storage, :complete_effect_succeeded)
           return @storage.complete_effect_succeeded(
             effect_id: record.id,
             owner_id: @owner_id,
@@ -355,7 +339,7 @@ module DAG
       end
 
       def complete_effect_failed(record, result, now_ms)
-        if storage_overrides?(:complete_effect_failed)
+        if DAG::Ports::Storage.method_overridden?(@storage, :complete_effect_failed)
           return @storage.complete_effect_failed(
             effect_id: record.id,
             owner_id: @owner_id,
@@ -381,12 +365,6 @@ module DAG
         return [] unless updated.terminal?
 
         @storage.release_nodes_satisfied_by_effect(effect_id: updated.id, now_ms: now_ms)
-      end
-
-      def storage_overrides?(method_name)
-        return false unless @storage.respond_to?(method_name)
-
-        @storage.method(method_name).owner != DAG::Ports::Storage
       end
 
       def stale_lease_error(record, error)

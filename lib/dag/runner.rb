@@ -59,9 +59,10 @@ module DAG
     # @param serializer [Object] adapter implementing `Ports::Serializer`
     # @raise [ArgumentError] when any keyword is missing or `nil`
     def initialize(storage:, event_bus:, registry:, clock:, id_generator:, fingerprint:, serializer:)
-      missing = {storage:, event_bus:, registry:, clock:, id_generator:, fingerprint:, serializer:}
-        .select { |_, v| v.nil? }.keys
-      raise ArgumentError, "Runner requires: #{missing.join(", ")}" unless missing.empty?
+      DAG::Validation.required_dependencies!(
+        {storage:, event_bus:, registry:, clock:, id_generator:, fingerprint:, serializer:},
+        "Runner"
+      )
 
       @storage = storage
       @event_bus = event_bus
@@ -320,7 +321,7 @@ module DAG
     private_constant :EMPTY_EFFECTS
 
     def prepare_effects(run, node_id:, attempt_id:, result:, created_at_ms:)
-      return EMPTY_EFFECTS unless result.respond_to?(:proposed_effects)
+      return EMPTY_EFFECTS if result.is_a?(DAG::Failure)
       return EMPTY_EFFECTS if result.proposed_effects.empty?
 
       blocking = result.is_a?(DAG::Waiting)
@@ -354,11 +355,7 @@ module DAG
         node_id: node_id
       )
 
-      records
-        .sort_by(&:ref)
-        .each_with_object({}) do |record, snapshot|
-          snapshot[record.ref] = record.to_snapshot
-        end
+      records.sort_by(&:ref).to_h { |record| [record.ref, record.to_snapshot] }
     end
 
     def effective_context_from_results(base_context, predecessors, committed_results)
@@ -386,7 +383,7 @@ module DAG
     end
 
     def committed_results_for_predecessors(run, predecessors)
-      if storage_overrides?(:list_committed_results_for_predecessors)
+      if DAG::Ports::Storage.method_overridden?(@storage, :list_committed_results_for_predecessors)
         return @storage.list_committed_results_for_predecessors(
           workflow_id: run.workflow_id,
           revision: run.revision,
@@ -399,12 +396,6 @@ module DAG
         committed = canonical_committed_attempt(attempts)
         results[pred] = committed[:result] if committed
       end
-    end
-
-    def storage_overrides?(method_name)
-      return false unless @storage.respond_to?(method_name)
-
-      @storage.method(method_name).owner != DAG::Ports::Storage
     end
 
     # Pick the canonical committed attempt independent of `list_attempts`

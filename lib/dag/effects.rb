@@ -50,6 +50,24 @@ module DAG
       "#{type}:#{key}".freeze
     end
 
+    # JSON-safe defensive copy that preserves an already-frozen value as-is
+    # and passes `nil` through.
+    # @api private
+    def frozen_copy_or_nil(value)
+      return nil if value.nil?
+      return value if value.frozen?
+
+      DAG.frozen_copy(value)
+    end
+
+    # Map a retriable boolean to its terminal effect status.
+    # @param retriable [Boolean]
+    # @return [Symbol] :failed_retriable or :failed_terminal
+    # @api private
+    def failure_status(retriable)
+      retriable ? :failed_retriable : :failed_terminal
+    end
+
     # Fetch a value from a Hash-like snapshot accepting symbol or string keys.
     # @api private
     def fetch_snapshot_value(snapshot, key, default = nil)
