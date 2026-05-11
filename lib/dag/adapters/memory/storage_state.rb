@@ -285,7 +285,7 @@ module DAG
           DAG::Validation.string!(owner_id, "owner_id")
           DAG::Validation.positive_integer!(lease_ms, "lease_ms")
           DAG::Validation.integer!(now_ms, "now_ms")
-          DAG::Validation.string!(only_workflow_id, "only_workflow_id") unless only_workflow_id.nil?
+          DAG::Validation.optional_string!(only_workflow_id, "only_workflow_id")
 
           claimed = []
           state[:effect_order].each do |effect_id|

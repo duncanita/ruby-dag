@@ -45,6 +45,16 @@ module DAG
 
     # @param value [Object]
     # @param label [String]
+    # @param message [String, nil]
+    # @return [String, nil]
+    def optional_string!(value, label, message: nil)
+      return value if value.nil? || value.is_a?(String)
+
+      raise ArgumentError, message || "#{label} must be String or nil"
+    end
+
+    # @param value [Object]
+    # @param label [String]
     # @return [String]
     def nonempty_string!(value, label)
       string!(value, label)

@@ -39,7 +39,7 @@ class R0V14ReleaseGateTest < Minitest::Test
     assert_includes storage, "def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)"
     assert_includes storage, "only_workflow_id: only_workflow_id"
     assert_includes storage_state, "def claim_ready_effects(state, limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)"
-    assert_includes storage_state, "DAG::Validation.string!(only_workflow_id, \"only_workflow_id\")"
+    assert_includes storage_state, "DAG::Validation.optional_string!(only_workflow_id, \"only_workflow_id\")"
     assert_includes storage_state, "next if only_workflow_id && record.workflow_id != only_workflow_id"
   end
 
