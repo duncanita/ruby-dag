@@ -292,7 +292,7 @@ module DAG
             break if claimed.size >= limit
 
             record = state[:effects].fetch(effect_id)
-            next if only_workflow_id && record.workflow_id != only_workflow_id
+            next if only_workflow_id && !effect_linked_to_workflow?(state, effect_id, only_workflow_id)
             next unless claimable_effect?(record, now_ms)
 
             updated = record.with(
@@ -305,6 +305,13 @@ module DAG
             claimed << updated
           end
           claimed
+        end
+
+        # @api private
+        def effect_linked_to_workflow?(state, effect_id, workflow_id)
+          state[:effect_attempt_links].fetch(effect_id, []).any? do |link|
+            link[:workflow_id] == workflow_id
+          end
         end
 
         # Implements `Ports::Storage#mark_effect_succeeded`.

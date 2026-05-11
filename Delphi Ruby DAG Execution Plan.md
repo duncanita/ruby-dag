@@ -524,8 +524,11 @@ Regole storage:
 - stesso (type, key) + payload_fingerprint diverso = IdempotencyConflictError.
 - claim_ready_effects assegna lease in modo atomico.
 - claim_ready_effects(only_workflow_id:) (V1.4, opzionale) restringe il
-  claim a un singolo workflow; default nil = comportamento globale V1.3.
-  Un workflow id sconosciuto ritorna lista vuota, non solleva.
+  claim agli effetti che hanno almeno un attempt-effect link al workflow
+  dato. Coerente con l'idempotency cross-workflow: un record condiviso
+  via (type, key) tra più workflow è visibile a ogni dispatcher scoped
+  che ha un attempt collegato. Default nil = comportamento globale V1.3.
+  Un workflow senza link ritorna lista vuota, non solleva.
 - mark_* richiede lease_owner corretto.
 - succeeded/failed_terminal sono terminali.
 ```

@@ -166,7 +166,7 @@ module DAG::Testing::StorageContract
       assert_equal "worker-b", reclaimed.first.lease_owner
     end
 
-    def test_contract_claim_ready_effects_only_workflow_id_scopes_to_one_workflow
+    def test_contract_claim_ready_effects_only_workflow_id_scopes_to_attempt_linked_workflow
       storage = build_contract_storage
       wf_a = contract_create_workflow(storage, id: "wf-a")
       wf_b = contract_create_workflow(storage, id: "wf-b")
@@ -192,6 +192,48 @@ module DAG::Testing::StorageContract
       )
       assert_equal [effect_b.id], claimed_b.map(&:id)
       assert_equal "worker-b", claimed_b.first.lease_owner
+    end
+
+    def test_contract_claim_ready_effects_only_workflow_id_sees_shared_record_via_attempt_link
+      storage = build_contract_storage
+      wf_a = contract_create_workflow(storage, id: "wf-a")
+      wf_b = contract_create_workflow(storage, id: "wf-b")
+      shared_effect_a = contract_commit_waiting_effect(storage, wf_a, :a, effect_key: "shared")
+      attempt_b = contract_begin_attempt(storage, wf_b, :a)
+      storage.commit_attempt(
+        attempt_id: attempt_b,
+        result: DAG::Waiting[reason: :effect_pending],
+        node_state: :waiting,
+        event: contract_event(type: :node_waiting, workflow_id: wf_b, node_id: :a, attempt_id: attempt_b),
+        effects: [contract_prepared_effect(workflow_id: wf_b, attempt_id: attempt_b, effect_key: "shared")]
+      )
+      shared_effect_b = storage.list_effects_for_attempt(attempt_id: attempt_b).first
+      assert_equal shared_effect_a.id, shared_effect_b.id
+      assert_equal wf_a, shared_effect_a.workflow_id
+      assert_equal wf_b, shared_effect_b.workflow_id
+
+      claimed_b = storage.claim_ready_effects(
+        limit: 10,
+        owner_id: "worker-b",
+        lease_ms: 500,
+        now_ms: 1_000,
+        only_workflow_id: wf_b
+      )
+      assert_equal [shared_effect_a.id], claimed_b.map(&:id)
+    end
+
+    def test_contract_claim_ready_effects_only_workflow_id_validates_type
+      storage = build_contract_storage
+
+      assert_raises(ArgumentError) do
+        storage.claim_ready_effects(
+          limit: 10,
+          owner_id: "worker-a",
+          lease_ms: 500,
+          now_ms: 1_000,
+          only_workflow_id: 42
+        )
+      end
     end
 
     def test_contract_claim_ready_effects_default_only_workflow_id_is_global

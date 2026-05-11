@@ -37,19 +37,18 @@ class R0V14ReleaseGateTest < Minitest::Test
     storage_state = File.read(File.join(ROOT, "lib/dag/adapters/memory/storage_state.rb"))
 
     assert_includes storage, "def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)"
-    assert_includes storage, "only_workflow_id: only_workflow_id"
     assert_includes storage_state, "def claim_ready_effects(state, limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)"
-    assert_includes storage_state, "DAG::Validation.optional_string!(only_workflow_id, \"only_workflow_id\")"
-    assert_includes storage_state, "next if only_workflow_id && record.workflow_id != only_workflow_id"
   end
 
   def test_contract_suite_pins_only_workflow_id_semantics
     suite = File.read(File.join(ROOT, "lib/dag/testing/storage_contract/effects.rb"))
 
-    assert_includes suite, "test_contract_claim_ready_effects_only_workflow_id_scopes_to_one_workflow"
+    assert_includes suite, "test_contract_claim_ready_effects_only_workflow_id_scopes_to_attempt_linked_workflow"
+    assert_includes suite, "test_contract_claim_ready_effects_only_workflow_id_sees_shared_record_via_attempt_link"
     assert_includes suite, "test_contract_claim_ready_effects_default_only_workflow_id_is_global"
     assert_includes suite, "test_contract_claim_ready_effects_explicit_nil_only_workflow_id_is_global"
     assert_includes suite, "test_contract_claim_ready_effects_unknown_workflow_id_returns_empty"
+    assert_includes suite, "test_contract_claim_ready_effects_only_workflow_id_validates_type"
   end
 
   def test_contract_documents_only_workflow_id_predicate
@@ -57,6 +56,6 @@ class R0V14ReleaseGateTest < Minitest::Test
 
     assert_includes contract, "claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)"
     assert_includes contract, "V1.4 adds `only_workflow_id: nil`"
-    assert_includes contract, "An unknown workflow id is not an error"
+    assert_includes contract, "at least one attempt-effect link belonging to the given workflow"
   end
 end

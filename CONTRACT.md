@@ -505,14 +505,19 @@ storage.release_nodes_satisfied_by_effect(effect_id:, now_ms:)
 lease cannot be claimed by another owner.
 
 V1.4 adds `only_workflow_id: nil` as an optional kwarg. When non-nil, the
-claim is restricted to effects whose `workflow_id` matches; foreign-workflow
-records are skipped before the eligibility predicate, so they are not moved
-to `:dispatching` and remain claimable by a subsequent unscoped (or
-differently-scoped) claim. An unknown workflow id is not an error: the
-method returns an empty array. When `nil` (default) or omitted, behaviour
-is identical to V1.3 — a global claim across all workflows. The CAS guards
-on `:reserved` / `:dispatching` / lease ownership inside the claim loop
-are unchanged.
+claim is restricted to effects that have at least one attempt-effect link
+belonging to the given workflow. This matches the kernel's idempotency
+model: a single effect record can be shared across workflows when two
+attempts reserve the same `(type, key)` with the same fingerprint, so the
+filter resolves "effects this workflow is currently waiting on", not
+"effects this workflow created first". Records that no attempt of the
+given workflow links to are skipped before the eligibility predicate, so
+they are not moved to `:dispatching` and remain claimable by a subsequent
+unscoped (or differently-scoped) claim. A workflow with no linked effects
+returns an empty array (not an error). When `nil` (default) or omitted,
+behaviour is identical to V1.3 — a global claim across all workflows. The
+CAS guards on `:reserved` / `:dispatching` / lease ownership inside the
+claim loop are unchanged.
 
 `mark_effect_succeeded` and `mark_effect_failed` require the current lease
 owner and a non-expired lease; otherwise they raise

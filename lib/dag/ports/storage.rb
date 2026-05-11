@@ -190,9 +190,13 @@ module DAG
       # @param lease_ms [Integer] lease duration in milliseconds
       # @param now_ms [Integer] current wall-clock milliseconds
       # @param only_workflow_id [String, nil] when non-nil, restrict the claim to
-      #   effects whose `workflow_id` matches. Default `nil` claims globally across
-      #   all workflows (V1.3 behaviour). An unknown workflow id yields an empty
-      #   array (no raise). V1.4.
+      #   effects that have at least one attempt-effect link belonging to the given
+      #   workflow. This matches the kernel's idempotency model: a single effect
+      #   record can be shared across workflows via attempt links, so the filter
+      #   resolves "effects this workflow is waiting on", not "effects this
+      #   workflow created first". Default `nil` claims globally across all
+      #   workflows (V1.3 behaviour). A workflow with no linked effects yields an
+      #   empty array (no raise). V1.4.
       # @return [Array<DAG::Effects::Record>] claimed records
       def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)
         raise PortNotImplementedError
