@@ -7,7 +7,7 @@ module DAG::Testing::StorageContract
     def test_contract_commit_attempt_persists_effects_atomically
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      attempt_id = begin_contract_attempt(storage, workflow_id, :a)
+      attempt_id = contract_begin_attempt(storage, workflow_id, :a)
       effect = contract_prepared_effect(workflow_id: workflow_id, attempt_id: attempt_id)
 
       stamped = storage.commit_attempt(
@@ -35,7 +35,7 @@ module DAG::Testing::StorageContract
     def test_contract_commit_attempt_effects_default_to_empty
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      attempt_id = begin_contract_attempt(storage, workflow_id, :a)
+      attempt_id = contract_begin_attempt(storage, workflow_id, :a)
 
       storage.commit_attempt(
         attempt_id: attempt_id,
@@ -51,7 +51,7 @@ module DAG::Testing::StorageContract
     def test_contract_effect_reservation_is_idempotent_for_same_ref_and_fingerprint
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      first_attempt_id = begin_contract_attempt(storage, workflow_id, :a)
+      first_attempt_id = contract_begin_attempt(storage, workflow_id, :a)
       first_effect = contract_prepared_effect(workflow_id: workflow_id, attempt_id: first_attempt_id)
       storage.commit_attempt(
         attempt_id: first_attempt_id,
@@ -67,7 +67,7 @@ module DAG::Testing::StorageContract
         effect_id: first_record.id,
         now_ms: 1_700_000_000_010
       )
-      second_attempt_id = begin_contract_attempt(storage, workflow_id, :a, attempt_number: 2)
+      second_attempt_id = contract_begin_attempt(storage, workflow_id, :a, attempt_number: 2)
       second_effect = contract_prepared_effect(workflow_id: workflow_id, attempt_id: second_attempt_id)
 
       storage.commit_attempt(
@@ -87,7 +87,7 @@ module DAG::Testing::StorageContract
     def test_contract_effect_fingerprint_conflict_rolls_back_attempt_commit
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      first_attempt_id = begin_contract_attempt(storage, workflow_id, :a)
+      first_attempt_id = contract_begin_attempt(storage, workflow_id, :a)
       storage.commit_attempt(
         attempt_id: first_attempt_id,
         result: DAG::Waiting[reason: :effect_pending],
@@ -99,7 +99,7 @@ module DAG::Testing::StorageContract
       first_record = storage.list_effects_for_attempt(attempt_id: first_attempt_id).first
       mark_effect_success(storage, first_record.id)
       storage.release_nodes_satisfied_by_effect(effect_id: first_record.id, now_ms: 1_700_000_000_010)
-      second_attempt_id = begin_contract_attempt(storage, workflow_id, :a, attempt_number: 2)
+      second_attempt_id = contract_begin_attempt(storage, workflow_id, :a, attempt_number: 2)
       conflicting = contract_prepared_effect(
         workflow_id: workflow_id,
         attempt_id: second_attempt_id,
@@ -129,7 +129,7 @@ module DAG::Testing::StorageContract
     def test_contract_failed_retriable_effect_is_claimed_only_when_due
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      effect = commit_waiting_effect(storage, workflow_id, :a)
+      effect = contract_commit_waiting_effect(storage, workflow_id, :a)
       storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
       storage.mark_effect_failed(
         effect_id: effect.id,
@@ -150,7 +150,7 @@ module DAG::Testing::StorageContract
     def test_contract_claim_ready_effects_assigns_unique_leases
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      first_effect_id = commit_waiting_effect(storage, workflow_id, :a).id
+      first_effect_id = contract_commit_waiting_effect(storage, workflow_id, :a).id
 
       claimed = storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
       assert_equal [first_effect_id], claimed.map(&:id)
@@ -166,10 +166,123 @@ module DAG::Testing::StorageContract
       assert_equal "worker-b", reclaimed.first.lease_owner
     end
 
+    def test_contract_claim_ready_effects_only_workflow_id_scopes_to_attempt_linked_workflow
+      storage = build_contract_storage
+      wf_a = contract_create_workflow(storage, id: "wf-a")
+      wf_b = contract_create_workflow(storage, id: "wf-b")
+      effect_a = contract_commit_waiting_effect(storage, wf_a, :a, effect_key: "effect-a")
+      effect_b = contract_commit_waiting_effect(storage, wf_b, :a, effect_key: "effect-b")
+
+      claimed_a = storage.claim_ready_effects(
+        limit: 10,
+        owner_id: "worker-a",
+        lease_ms: 500,
+        now_ms: 1_000,
+        only_workflow_id: wf_a
+      )
+      assert_equal [effect_a.id], claimed_a.map(&:id)
+      assert_equal "worker-a", claimed_a.first.lease_owner
+
+      claimed_b = storage.claim_ready_effects(
+        limit: 10,
+        owner_id: "worker-b",
+        lease_ms: 500,
+        now_ms: 1_001,
+        only_workflow_id: wf_b
+      )
+      assert_equal [effect_b.id], claimed_b.map(&:id)
+      assert_equal "worker-b", claimed_b.first.lease_owner
+    end
+
+    def test_contract_claim_ready_effects_only_workflow_id_sees_shared_record_via_attempt_link
+      storage = build_contract_storage
+      wf_a = contract_create_workflow(storage, id: "wf-a")
+      wf_b = contract_create_workflow(storage, id: "wf-b")
+      shared_effect_a = contract_commit_waiting_effect(storage, wf_a, :a, effect_key: "shared")
+      attempt_b = contract_begin_attempt(storage, wf_b, :a)
+      storage.commit_attempt(
+        attempt_id: attempt_b,
+        result: DAG::Waiting[reason: :effect_pending],
+        node_state: :waiting,
+        event: contract_event(type: :node_waiting, workflow_id: wf_b, node_id: :a, attempt_id: attempt_b),
+        effects: [contract_prepared_effect(workflow_id: wf_b, attempt_id: attempt_b, effect_key: "shared")]
+      )
+      shared_effect_b = storage.list_effects_for_attempt(attempt_id: attempt_b).first
+      assert_equal shared_effect_a.id, shared_effect_b.id
+      assert_equal wf_a, shared_effect_a.workflow_id
+      assert_equal wf_b, shared_effect_b.workflow_id
+
+      claimed_b = storage.claim_ready_effects(
+        limit: 10,
+        owner_id: "worker-b",
+        lease_ms: 500,
+        now_ms: 1_000,
+        only_workflow_id: wf_b
+      )
+      assert_equal [shared_effect_a.id], claimed_b.map(&:id)
+    end
+
+    def test_contract_claim_ready_effects_only_workflow_id_validates_type
+      storage = build_contract_storage
+
+      assert_raises(ArgumentError) do
+        storage.claim_ready_effects(
+          limit: 10,
+          owner_id: "worker-a",
+          lease_ms: 500,
+          now_ms: 1_000,
+          only_workflow_id: 42
+        )
+      end
+    end
+
+    def test_contract_claim_ready_effects_default_only_workflow_id_is_global
+      storage = build_contract_storage
+      wf_a = contract_create_workflow(storage, id: "wf-a")
+      wf_b = contract_create_workflow(storage, id: "wf-b")
+      effect_a = contract_commit_waiting_effect(storage, wf_a, :a, effect_key: "effect-a")
+      effect_b = contract_commit_waiting_effect(storage, wf_b, :a, effect_key: "effect-b")
+
+      claimed = storage.claim_ready_effects(limit: 10, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
+      assert_equal [effect_a.id, effect_b.id].sort, claimed.map(&:id).sort
+    end
+
+    def test_contract_claim_ready_effects_explicit_nil_only_workflow_id_is_global
+      storage = build_contract_storage
+      wf_a = contract_create_workflow(storage, id: "wf-a")
+      wf_b = contract_create_workflow(storage, id: "wf-b")
+      effect_a = contract_commit_waiting_effect(storage, wf_a, :a, effect_key: "effect-a")
+      effect_b = contract_commit_waiting_effect(storage, wf_b, :a, effect_key: "effect-b")
+
+      claimed = storage.claim_ready_effects(
+        limit: 10,
+        owner_id: "worker-a",
+        lease_ms: 500,
+        now_ms: 1_000,
+        only_workflow_id: nil
+      )
+      assert_equal [effect_a.id, effect_b.id].sort, claimed.map(&:id).sort
+    end
+
+    def test_contract_claim_ready_effects_unknown_workflow_id_returns_empty
+      storage = build_contract_storage
+      wf_a = contract_create_workflow(storage, id: "wf-a")
+      contract_commit_waiting_effect(storage, wf_a, :a, effect_key: "effect-a")
+
+      claimed = storage.claim_ready_effects(
+        limit: 10,
+        owner_id: "worker-a",
+        lease_ms: 500,
+        now_ms: 1_000,
+        only_workflow_id: "wf-unknown"
+      )
+      assert_empty claimed
+    end
+
     def test_contract_mark_effect_succeeded_requires_current_lease
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      effect = commit_waiting_effect(storage, workflow_id, :a)
+      effect = contract_commit_waiting_effect(storage, workflow_id, :a)
       storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
 
       assert_raises(DAG::Effects::StaleLeaseError) do
@@ -199,7 +312,7 @@ module DAG::Testing::StorageContract
     def test_contract_renew_effect_lease_extends_active_lease
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      effect = commit_waiting_effect(storage, workflow_id, :a)
+      effect = contract_commit_waiting_effect(storage, workflow_id, :a)
       storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
 
       renewed = storage.renew_effect_lease(
@@ -221,7 +334,7 @@ module DAG::Testing::StorageContract
     def test_contract_renew_effect_lease_is_idempotent_when_until_ms_unchanged
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      effect = commit_waiting_effect(storage, workflow_id, :a)
+      effect = contract_commit_waiting_effect(storage, workflow_id, :a)
       claimed = storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000).first
 
       renewed = storage.renew_effect_lease(
@@ -240,7 +353,7 @@ module DAG::Testing::StorageContract
     def test_contract_renew_effect_lease_rejects_wrong_owner
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      effect = commit_waiting_effect(storage, workflow_id, :a)
+      effect = contract_commit_waiting_effect(storage, workflow_id, :a)
       storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
 
       assert_raises(DAG::Effects::StaleLeaseError) do
@@ -256,7 +369,7 @@ module DAG::Testing::StorageContract
     def test_contract_renew_effect_lease_rejects_expired_lease
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      effect = commit_waiting_effect(storage, workflow_id, :a)
+      effect = contract_commit_waiting_effect(storage, workflow_id, :a)
       storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
 
       assert_raises(DAG::Effects::StaleLeaseError) do
@@ -272,7 +385,7 @@ module DAG::Testing::StorageContract
     def test_contract_renew_effect_lease_rejects_unclaimed_effect
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      effect = commit_waiting_effect(storage, workflow_id, :a)
+      effect = contract_commit_waiting_effect(storage, workflow_id, :a)
 
       assert_raises(DAG::Effects::StaleLeaseError) do
         storage.renew_effect_lease(
@@ -301,7 +414,7 @@ module DAG::Testing::StorageContract
     def test_contract_renew_effect_lease_rejects_until_ms_not_in_future
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      effect = commit_waiting_effect(storage, workflow_id, :a)
+      effect = contract_commit_waiting_effect(storage, workflow_id, :a)
       storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
 
       assert_raises(ArgumentError) do
@@ -317,7 +430,7 @@ module DAG::Testing::StorageContract
     def test_contract_renew_effect_lease_rejects_shrink
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      effect = commit_waiting_effect(storage, workflow_id, :a)
+      effect = contract_commit_waiting_effect(storage, workflow_id, :a)
       storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
 
       assert_raises(ArgumentError) do
@@ -333,7 +446,7 @@ module DAG::Testing::StorageContract
     def test_contract_complete_effect_succeeded_releases_waiting_node_atomically
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      effect = commit_waiting_effect(storage, workflow_id, :a)
+      effect = contract_commit_waiting_effect(storage, workflow_id, :a)
       storage.claim_ready_effects(limit: 1, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
 
       completion = storage.complete_effect_succeeded(
@@ -352,8 +465,8 @@ module DAG::Testing::StorageContract
     def test_contract_mark_effect_failed_requires_current_lease_and_sets_terminality
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      retriable = commit_waiting_effect(storage, workflow_id, :a, effect_key: "retry")
-      terminal = commit_waiting_effect(storage, workflow_id, :b, effect_key: "terminal")
+      retriable = contract_commit_waiting_effect(storage, workflow_id, :a, effect_key: "retry")
+      terminal = contract_commit_waiting_effect(storage, workflow_id, :b, effect_key: "terminal")
 
       storage.claim_ready_effects(limit: 2, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
 
@@ -396,8 +509,8 @@ module DAG::Testing::StorageContract
     def test_contract_complete_effect_failed_releases_only_terminal_failures
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      retriable = commit_waiting_effect(storage, workflow_id, :a, effect_key: "retry")
-      terminal = commit_waiting_effect(storage, workflow_id, :b, effect_key: "terminal")
+      retriable = contract_commit_waiting_effect(storage, workflow_id, :a, effect_key: "retry")
+      terminal = contract_commit_waiting_effect(storage, workflow_id, :b, effect_key: "terminal")
       storage.claim_ready_effects(limit: 2, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
 
       retry_completion = storage.complete_effect_failed(
@@ -428,7 +541,7 @@ module DAG::Testing::StorageContract
     def test_contract_release_waiting_node_only_when_all_blocking_effects_terminal
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      attempt_id = begin_contract_attempt(storage, workflow_id, :a)
+      attempt_id = contract_begin_attempt(storage, workflow_id, :a)
       first = contract_prepared_effect(workflow_id: workflow_id, attempt_id: attempt_id, effect_key: "first")
       second = contract_prepared_effect(workflow_id: workflow_id, attempt_id: attempt_id, effect_key: "second")
       storage.commit_attempt(
@@ -455,7 +568,7 @@ module DAG::Testing::StorageContract
     def test_contract_release_ignores_detached_effects_for_waiting_gate
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)
-      attempt_id = begin_contract_attempt(storage, workflow_id, :a)
+      attempt_id = contract_begin_attempt(storage, workflow_id, :a)
       blocking = contract_prepared_effect(workflow_id: workflow_id, attempt_id: attempt_id, effect_key: "blocking")
       detached = contract_prepared_effect(
         workflow_id: workflow_id,
@@ -480,54 +593,6 @@ module DAG::Testing::StorageContract
     end
 
     private
-
-    def begin_contract_attempt(storage, workflow_id, node_id, attempt_number: 1)
-      storage.begin_attempt(
-        workflow_id: workflow_id,
-        revision: 1,
-        node_id: node_id,
-        expected_node_state: :pending,
-        attempt_number: attempt_number
-      )
-    end
-
-    def contract_prepared_effect(
-      workflow_id:,
-      attempt_id:,
-      node_id: :a,
-      effect_type: "contract",
-      effect_key: "effect",
-      payload: {value: 1},
-      payload_fingerprint: "fp-1",
-      blocking: true,
-      created_at_ms: 1_700_000_000_000
-    )
-      DAG::Effects::PreparedIntent[
-        workflow_id: workflow_id,
-        revision: 1,
-        node_id: node_id,
-        attempt_id: attempt_id,
-        type: effect_type,
-        key: effect_key,
-        payload: payload,
-        payload_fingerprint: payload_fingerprint,
-        blocking: blocking,
-        created_at_ms: created_at_ms
-      ]
-    end
-
-    def commit_waiting_effect(storage, workflow_id, node_id, effect_key: "effect")
-      attempt_id = begin_contract_attempt(storage, workflow_id, node_id)
-      effect = contract_prepared_effect(workflow_id: workflow_id, attempt_id: attempt_id, node_id: node_id, effect_key: effect_key)
-      storage.commit_attempt(
-        attempt_id: attempt_id,
-        result: DAG::Waiting[reason: :effect_pending],
-        node_state: :waiting,
-        event: contract_event(type: :node_waiting, workflow_id: workflow_id, node_id: node_id, attempt_id: attempt_id),
-        effects: [effect]
-      )
-      storage.list_effects_for_attempt(attempt_id: attempt_id).first
-    end
 
     def mark_effect_success(storage, effect_id)
       storage.claim_ready_effects(limit: 1, owner_id: "worker-#{effect_id}", lease_ms: 500, now_ms: 1_000)

@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+## 1.4.0 — 2026-05-13
+
+V1.4 lets a dispatcher restrict `claim_ready_effects` to a single
+workflow per tick so a runtime that runs multiple workflows
+concurrently against a shared storage backend can dispatch
+per-workflow without locking foreign records under its own lease.
+The opt-in is a single additive kwarg; the default is identical to
+V1.3 (global claim across all workflows).
+
+### Added
+
+- `Ports::Storage#claim_ready_effects(only_workflow_id: nil)` —
+  when set to a non-nil String, the claim is restricted to effects
+  that have at least one attempt-effect link belonging to the
+  given workflow. This matches the kernel's idempotency model: a
+  single effect record can be shared across workflows when two
+  attempts reserve the same `(type, key)` with the same
+  fingerprint, so the filter resolves "effects this workflow is
+  waiting on" rather than "effects this workflow created first".
+  Default `nil` preserves the V1.3 global-claim behaviour
+  byte-identical. A workflow with no linked effects yields an
+  empty array (matching the existing "nothing matches" path).
+  The CAS guards on `:reserved` / `:dispatching` / lease ownership
+  inside the claim loop are unchanged.
+- `DAG::Adapters::Memory::Storage#claim_ready_effects` and
+  `DAG::Adapters::Memory::StorageState.claim_ready_effects` forward
+  and apply the predicate before the existing `claimable_effect?`
+  check, so records that no attempt of the scoped workflow links
+  to remain `:reserved` (or in their prior state) and are still
+  claimable by a subsequent unscoped (or differently-scoped) claim.
+  The predicate uses the existing `effect_attempt_links` reverse
+  index so the cost is O(links per effect), not a full scan.
+- `DAG::Testing::StorageContract::Effects` adds five contract
+  tests pinning the predicate semantics: scoping to one workflow,
+  default global, explicit `nil` global, unknown workflow id
+  returning empty, and a shared-record case where two workflows
+  reserve the same `(type, key)` with the same fingerprint and
+  both scoped claims see the shared record. Every adapter that
+  opts into the contract suite inherits this coverage.
+
+### Changed
+
+- Adapters that re-implement `claim_ready_effects` outside the gem
+  must add the `only_workflow_id:` kwarg before bumping their
+  ruby-dag pin to `~> 1.4`. The four new contract tests surface the
+  missing kwarg as `ArgumentError: unknown keyword: :only_workflow_id`.
+
 ## 1.3.0 — 2026-05-08
 
 V1.3 introduces bounded intra-tick parallel dispatch so consumers can

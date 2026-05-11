@@ -489,7 +489,7 @@ The storage effect API is:
 ```ruby
 storage.list_effects_for_node(workflow_id:, revision:, node_id:)
 storage.list_effects_for_attempt(attempt_id:)
-storage.claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:)
+storage.claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)
 storage.mark_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
 storage.mark_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
 storage.renew_effect_lease(effect_id:, owner_id:, until_ms:, now_ms:)
@@ -503,6 +503,21 @@ storage.release_nodes_satisfied_by_effect(effect_id:, now_ms:)
 `:dispatching` whose lease has expired. Claiming sets `status: :dispatching`,
 `lease_owner`, `lease_until_ms`, and `updated_at_ms` atomically. A non-expired
 lease cannot be claimed by another owner.
+
+V1.4 adds `only_workflow_id: nil` as an optional kwarg. When non-nil, the
+claim is restricted to effects that have at least one attempt-effect link
+belonging to the given workflow. This matches the kernel's idempotency
+model: a single effect record can be shared across workflows when two
+attempts reserve the same `(type, key)` with the same fingerprint, so the
+filter resolves "effects this workflow is currently waiting on", not
+"effects this workflow created first". Records that no attempt of the
+given workflow links to are skipped before the eligibility predicate, so
+they are not moved to `:dispatching` and remain claimable by a subsequent
+unscoped (or differently-scoped) claim. A workflow with no linked effects
+returns an empty array (not an error). When `nil` (default) or omitted,
+behaviour is identical to V1.3 — a global claim across all workflows. The
+CAS guards on `:reserved` / `:dispatching` / lease ownership inside the
+claim loop are unchanged.
 
 `mark_effect_succeeded` and `mark_effect_failed` require the current lease
 owner and a non-expired lease; otherwise they raise

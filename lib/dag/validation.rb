@@ -45,6 +45,16 @@ module DAG
 
     # @param value [Object]
     # @param label [String]
+    # @param message [String, nil]
+    # @return [String, nil]
+    def optional_string!(value, label, message: nil)
+      return value if value.nil? || value.is_a?(String)
+
+      raise ArgumentError, message || "#{label} must be String or nil"
+    end
+
+    # @param value [Object]
+    # @param label [String]
     # @return [String]
     def nonempty_string!(value, label)
       string!(value, label)
@@ -177,6 +187,18 @@ module DAG
       return value if value.respond_to?(method_name)
 
       raise ArgumentError, "#{label} must respond to #{method_name}"
+    end
+
+    # Raise an `ArgumentError` listing every dependency in `deps` whose value
+    # is `nil`. Used by ctors that require all keyword args to be supplied.
+    # @param deps [Hash{Symbol => Object}] keyword name => provided value
+    # @param label [String] subject label for the raised message
+    # @return [Hash] the original deps hash when all values are present
+    def required_dependencies!(deps, label)
+      missing = deps.select { |_, v| v.nil? }.keys
+      return deps if missing.empty?
+
+      raise ArgumentError, "#{label} requires: #{missing.join(", ")}"
     end
   end
 end

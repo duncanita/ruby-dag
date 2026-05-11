@@ -10,8 +10,7 @@ module DAG
     MUTABLE_STATES = %i[paused waiting].freeze
 
     def initialize(storage:, event_bus:, clock:)
-      missing = {storage:, event_bus:, clock:}.select { |_, v| v.nil? }.keys
-      raise ArgumentError, "MutationService requires: #{missing.join(", ")}" unless missing.empty?
+      DAG::Validation.required_dependencies!({storage:, event_bus:, clock:}, "MutationService")
 
       @storage = storage
       @event_bus = event_bus

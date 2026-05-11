@@ -46,6 +46,8 @@ Tracked phases:
 | Release v1.2                   | —    | Done |
 | V1.3 dispatcher parallelism    | —    | Done |
 | Release v1.3                   | —    | Done |
+| V1.4 per-workflow effect claim | #186 | In Progress |
+| Release v1.4                   | —    | In Progress |
 | S0 (SQLite adapter, in Delphi)   | TBD  | Next |
 | Release v1.0                     | #74  | Done (#126, #156) |
 

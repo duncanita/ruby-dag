@@ -107,8 +107,15 @@ module DAG
         end
 
         # (see Ports::Storage#claim_ready_effects)
-        def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:)
-          frozen StorageState.claim_ready_effects(@state, limit: limit, owner_id: owner_id, lease_ms: lease_ms, now_ms: now_ms)
+        def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)
+          frozen StorageState.claim_ready_effects(
+            @state,
+            limit: limit,
+            owner_id: owner_id,
+            lease_ms: lease_ms,
+            now_ms: now_ms,
+            only_workflow_id: only_workflow_id
+          )
         end
 
         # (see Ports::Storage#mark_effect_succeeded)

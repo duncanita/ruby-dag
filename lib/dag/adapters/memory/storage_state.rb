@@ -29,6 +29,7 @@ module DAG
             effect_seq: 0, # global effect id sequence
             attempt_effect_links: {}, # {attempt_id => [effect_link, ...]}
             node_effect_links: {}, # {[workflow_id, revision, node_id] => [effect_link, ...]}
+            effect_attempt_links: {}, # {effect_id => [effect_link, ...]} reverse index
             events: {},      # {workflow_id => [event, ...]}
             seq: {}          # {workflow_id => Integer} event seq
           }
@@ -58,6 +59,7 @@ module DAG
           state[:effect_seq] ||= state[:effects].size
           state[:attempt_effect_links] ||= {}
           state[:node_effect_links] ||= {}
+          state[:effect_attempt_links] ||= {}
         end
 
         # Internal: initialize committed-result projections for snapshots
@@ -277,18 +279,20 @@ module DAG
 
         # Implements `Ports::Storage#claim_ready_effects`.
         # @api private
-        def claim_ready_effects(state, limit:, owner_id:, lease_ms:, now_ms:)
+        def claim_ready_effects(state, limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)
           ensure_effect_state!(state)
           DAG::Validation.nonnegative_integer!(limit, "limit")
           DAG::Validation.string!(owner_id, "owner_id")
           DAG::Validation.positive_integer!(lease_ms, "lease_ms")
           DAG::Validation.integer!(now_ms, "now_ms")
+          DAG::Validation.optional_string!(only_workflow_id, "only_workflow_id")
 
           claimed = []
           state[:effect_order].each do |effect_id|
             break if claimed.size >= limit
 
             record = state[:effects].fetch(effect_id)
+            next if only_workflow_id && !effect_linked_to_workflow?(state, effect_id, only_workflow_id)
             next unless claimable_effect?(record, now_ms)
 
             updated = record.with(
@@ -301,6 +305,13 @@ module DAG
             claimed << updated
           end
           claimed
+        end
+
+        # @api private
+        def effect_linked_to_workflow?(state, effect_id, workflow_id)
+          state[:effect_attempt_links].fetch(effect_id, []).any? do |link|
+            link[:workflow_id] == workflow_id
+          end
         end
 
         # Implements `Ports::Storage#mark_effect_succeeded`.
@@ -336,7 +347,7 @@ module DAG
           validate_effect_lease!(record, owner_id: owner_id, now_ms: now_ms)
 
           updated = record.with(
-            status: retriable ? :failed_retriable : :failed_terminal,
+            status: DAG::Effects.failure_status(retriable),
             result: nil,
             error: error,
             external_ref: nil,
@@ -411,24 +422,22 @@ module DAG
           fetch_effect!(state, effect_id)
 
           released = []
-          state[:attempt_effect_links].each_value do |links|
-            links.each do |link|
-              next unless link[:effect_id] == effect_id && link[:blocking]
+          state[:effect_attempt_links].fetch(effect_id, []).each do |link|
+            next unless link[:blocking]
 
-              revision_key = [link[:workflow_id], link[:revision]]
-              states_for_rev = state[:node_states].fetch(revision_key, nil)
-              next unless states_for_rev && states_for_rev[link[:node_id]] == :waiting
-              next unless blocking_effects_terminal?(state, link[:attempt_id])
+            revision_key = [link[:workflow_id], link[:revision]]
+            states_for_rev = state[:node_states].fetch(revision_key, nil)
+            next unless states_for_rev && states_for_rev[link[:node_id]] == :waiting
+            next unless blocking_effects_terminal?(state, link[:attempt_id])
 
-              states_for_rev[link[:node_id]] = :pending
-              released << {
-                workflow_id: link[:workflow_id],
-                revision: link[:revision],
-                node_id: link[:node_id],
-                attempt_id: link[:attempt_id],
-                released_at_ms: now_ms
-              }
-            end
+            states_for_rev[link[:node_id]] = :pending
+            released << {
+              workflow_id: link[:workflow_id],
+              revision: link[:revision],
+              node_id: link[:node_id],
+              attempt_id: link[:attempt_id],
+              released_at_ms: now_ms
+            }
           end
           released
         end
@@ -458,9 +467,12 @@ module DAG
         # Implements `Ports::Storage#list_attempts`.
         # @api private
         def list_attempts(state, workflow_id:, revision: nil, node_id: nil)
-          state[:attempts_index].fetch(workflow_id, []).map { |aid| state[:attempts][aid] }.select do |attempt|
-            (revision.nil? || attempt[:revision] == revision) &&
-              (node_id.nil? || attempt[:node_id] == node_id)
+          state[:attempts_index].fetch(workflow_id, []).filter_map do |aid|
+            attempt = state[:attempts][aid]
+            next unless revision.nil? || attempt[:revision] == revision
+            next unless node_id.nil? || attempt[:node_id] == node_id
+
+            attempt
           end
         end
 
@@ -574,6 +586,7 @@ module DAG
           pending_by_ref = {}
           new_records = []
           links = []
+          seen_link_pairs = Set.new
 
           effects.each_with_index do |effect, index|
             validate_prepared_effect!(effect, attempt, index)
@@ -597,7 +610,7 @@ module DAG
             end
 
             link = effect_link(effect_id: effect_id, effect: effect)
-            links << link unless links.any? { |existing| same_effect_link?(existing, link) }
+            links << link if seen_link_pairs.add?([link[:attempt_id], link[:effect_id]])
           end
 
           {new_records: new_records, links: links}
@@ -619,8 +632,8 @@ module DAG
 
             attempt_links << link
             node_key = [link[:workflow_id], link[:revision], link[:node_id]]
-            state[:node_effect_links][node_key] ||= []
-            state[:node_effect_links][node_key] << link
+            (state[:node_effect_links][node_key] ||= []) << link
+            (state[:effect_attempt_links][link[:effect_id]] ||= []) << link
           end
         end
 

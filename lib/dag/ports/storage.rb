@@ -15,6 +15,19 @@ module DAG
     #
     # @api public
     module Storage
+      # True when `adapter` defines `method_name` outside of this base port
+      # module. The Runner and the effect dispatcher use this to fall back to
+      # primitive storage methods when an adapter has not specialized the
+      # extension method.
+      # @param adapter [Object]
+      # @param method_name [Symbol]
+      # @return [Boolean]
+      def self.method_overridden?(adapter, method_name)
+        return false unless adapter.respond_to?(method_name)
+
+        adapter.method(method_name).owner != self
+      end
+
       # Persist a fresh workflow in `:pending` with the supplied initial
       # definition (revision 1) and runtime profile.
       #
@@ -176,8 +189,16 @@ module DAG
       # @param owner_id [String] dispatcher owner id
       # @param lease_ms [Integer] lease duration in milliseconds
       # @param now_ms [Integer] current wall-clock milliseconds
+      # @param only_workflow_id [String, nil] when non-nil, restrict the claim to
+      #   effects that have at least one attempt-effect link belonging to the given
+      #   workflow. This matches the kernel's idempotency model: a single effect
+      #   record can be shared across workflows via attempt links, so the filter
+      #   resolves "effects this workflow is waiting on", not "effects this
+      #   workflow created first". Default `nil` claims globally across all
+      #   workflows (V1.3 behaviour). A workflow with no linked effects yields an
+      #   empty array (no raise). V1.4.
       # @return [Array<DAG::Effects::Record>] claimed records
-      def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:)
+      def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)
         raise PortNotImplementedError
       end
 
