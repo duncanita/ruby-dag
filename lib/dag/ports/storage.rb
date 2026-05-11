@@ -189,8 +189,12 @@ module DAG
       # @param owner_id [String] dispatcher owner id
       # @param lease_ms [Integer] lease duration in milliseconds
       # @param now_ms [Integer] current wall-clock milliseconds
+      # @param only_workflow_id [String, nil] when non-nil, restrict the claim to
+      #   effects whose `workflow_id` matches. Default `nil` claims globally across
+      #   all workflows (V1.3 behaviour). An unknown workflow id yields an empty
+      #   array (no raise). V1.4.
       # @return [Array<DAG::Effects::Record>] claimed records
-      def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:)
+      def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)
         raise PortNotImplementedError
       end
 

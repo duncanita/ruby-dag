@@ -166,6 +166,77 @@ module DAG::Testing::StorageContract
       assert_equal "worker-b", reclaimed.first.lease_owner
     end
 
+    def test_contract_claim_ready_effects_only_workflow_id_scopes_to_one_workflow
+      storage = build_contract_storage
+      wf_a = contract_create_workflow(storage, id: "wf-a")
+      wf_b = contract_create_workflow(storage, id: "wf-b")
+      effect_a = contract_commit_waiting_effect(storage, wf_a, :a, effect_key: "effect-a")
+      effect_b = contract_commit_waiting_effect(storage, wf_b, :a, effect_key: "effect-b")
+
+      claimed_a = storage.claim_ready_effects(
+        limit: 10,
+        owner_id: "worker-a",
+        lease_ms: 500,
+        now_ms: 1_000,
+        only_workflow_id: wf_a
+      )
+      assert_equal [effect_a.id], claimed_a.map(&:id)
+      assert_equal "worker-a", claimed_a.first.lease_owner
+
+      claimed_b = storage.claim_ready_effects(
+        limit: 10,
+        owner_id: "worker-b",
+        lease_ms: 500,
+        now_ms: 1_001,
+        only_workflow_id: wf_b
+      )
+      assert_equal [effect_b.id], claimed_b.map(&:id)
+      assert_equal "worker-b", claimed_b.first.lease_owner
+    end
+
+    def test_contract_claim_ready_effects_default_only_workflow_id_is_global
+      storage = build_contract_storage
+      wf_a = contract_create_workflow(storage, id: "wf-a")
+      wf_b = contract_create_workflow(storage, id: "wf-b")
+      effect_a = contract_commit_waiting_effect(storage, wf_a, :a, effect_key: "effect-a")
+      effect_b = contract_commit_waiting_effect(storage, wf_b, :a, effect_key: "effect-b")
+
+      claimed = storage.claim_ready_effects(limit: 10, owner_id: "worker-a", lease_ms: 500, now_ms: 1_000)
+      assert_equal [effect_a.id, effect_b.id].sort, claimed.map(&:id).sort
+    end
+
+    def test_contract_claim_ready_effects_explicit_nil_only_workflow_id_is_global
+      storage = build_contract_storage
+      wf_a = contract_create_workflow(storage, id: "wf-a")
+      wf_b = contract_create_workflow(storage, id: "wf-b")
+      effect_a = contract_commit_waiting_effect(storage, wf_a, :a, effect_key: "effect-a")
+      effect_b = contract_commit_waiting_effect(storage, wf_b, :a, effect_key: "effect-b")
+
+      claimed = storage.claim_ready_effects(
+        limit: 10,
+        owner_id: "worker-a",
+        lease_ms: 500,
+        now_ms: 1_000,
+        only_workflow_id: nil
+      )
+      assert_equal [effect_a.id, effect_b.id].sort, claimed.map(&:id).sort
+    end
+
+    def test_contract_claim_ready_effects_unknown_workflow_id_returns_empty
+      storage = build_contract_storage
+      wf_a = contract_create_workflow(storage, id: "wf-a")
+      contract_commit_waiting_effect(storage, wf_a, :a, effect_key: "effect-a")
+
+      claimed = storage.claim_ready_effects(
+        limit: 10,
+        owner_id: "worker-a",
+        lease_ms: 500,
+        now_ms: 1_000,
+        only_workflow_id: "wf-unknown"
+      )
+      assert_empty claimed
+    end
+
     def test_contract_mark_effect_succeeded_requires_current_lease
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)

@@ -279,18 +279,20 @@ module DAG
 
         # Implements `Ports::Storage#claim_ready_effects`.
         # @api private
-        def claim_ready_effects(state, limit:, owner_id:, lease_ms:, now_ms:)
+        def claim_ready_effects(state, limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)
           ensure_effect_state!(state)
           DAG::Validation.nonnegative_integer!(limit, "limit")
           DAG::Validation.string!(owner_id, "owner_id")
           DAG::Validation.positive_integer!(lease_ms, "lease_ms")
           DAG::Validation.integer!(now_ms, "now_ms")
+          DAG::Validation.string!(only_workflow_id, "only_workflow_id") unless only_workflow_id.nil?
 
           claimed = []
           state[:effect_order].each do |effect_id|
             break if claimed.size >= limit
 
             record = state[:effects].fetch(effect_id)
+            next if only_workflow_id && record.workflow_id != only_workflow_id
             next unless claimable_effect?(record, now_ms)
 
             updated = record.with(
