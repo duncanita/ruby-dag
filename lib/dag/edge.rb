@@ -6,6 +6,7 @@ module DAG
   # @api public
   Edge = Data.define(:from, :to, :metadata) do
     def initialize(from:, to:, metadata: {})
+      DAG.json_safe!(metadata, "$root.metadata")
       super(from: from.to_sym, to: to.to_sym, metadata: DAG.frozen_copy(metadata))
     end
 

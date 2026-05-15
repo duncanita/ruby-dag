@@ -49,6 +49,31 @@ class R3MutationActiveRunGuardTest < Minitest::Test
     assert_empty event_bus.events
   end
 
+  def test_apply_persists_revision_when_event_bus_publish_fails
+    storage = DAG::Adapters::Memory::Storage.new
+    workflow_id = create_workflow(storage, simple_definition)
+    storage.transition_workflow_state(id: workflow_id, from: :pending, to: :paused)
+    service = DAG::MutationService.new(
+      storage: storage,
+      event_bus: RaisingEventBus.new,
+      clock: DAG::Adapters::Stdlib::Clock.new
+    )
+
+    result = service.apply(
+      workflow_id: workflow_id,
+      mutation: DAG::ProposedMutation[kind: :invalidate, target_node_id: :a],
+      expected_revision: 1
+    )
+
+    assert_equal 2, result.revision
+    assert_equal 2, storage.load_current_definition(id: workflow_id).revision
+    assert_equal :mutation_applied, storage.read_events(workflow_id: workflow_id).last.type
+  end
+
+  class RaisingEventBus
+    def publish(_event) = raise "bus down"
+  end
+
   class StateRacingStorage
     def initialize(storage, workflow_id:, from:, to:)
       @storage = storage

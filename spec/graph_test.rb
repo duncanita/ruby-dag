@@ -922,6 +922,15 @@ class GraphTest < Minitest::Test
     assert_raises(FrozenError) { graph.edge_metadata(:a, :b)[:tags] << "nope" }
   end
 
+  def test_add_edge_rejects_non_json_safe_metadata
+    graph = build_graph([:a, :b], [])
+
+    assert_raises(ArgumentError) do
+      graph.add_edge(:a, :b, deadline: Time.now)
+    end
+    refute graph.edge?(:a, :b)
+  end
+
   def test_edge_metadata_in_subgraph
     graph = build_graph([:a, :b, :c], [])
     graph.add_edge(:a, :b, weight: 2)
@@ -1137,6 +1146,12 @@ class GraphTest < Minitest::Test
   def test_edge_inspect_with_metadata
     edge = DAG::Edge.new(from: :a, to: :b, metadata: {weight: 3})
     assert_match(/Edge\(a -> b, \{.*weight.*3.*\}\)/, edge.inspect)
+  end
+
+  def test_edge_rejects_non_json_safe_metadata
+    assert_raises(ArgumentError) do
+      DAG::Edge.new(from: :a, to: :b, metadata: {bad: Object.new})
+    end
   end
 
   # --- to_h with metadata ---

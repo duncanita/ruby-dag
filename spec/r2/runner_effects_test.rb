@@ -149,6 +149,38 @@ class RunnerEffectsTest < Minitest::Test
     assert_equal [{}], observed_effects
   end
 
+  def test_effect_idempotency_conflict_becomes_terminal_failure
+    storage = DAG::Adapters::Memory::Storage.new
+    first = effect_intent(key: "same", payload: {value: 1})
+    second = effect_intent(key: "same", payload: {value: 2})
+    registry = DAG::StepTypeRegistry.new
+    klass = Class.new(DAG::Step::Base) do
+      define_method(:call) do |_input|
+        DAG::Success[value: :ok, proposed_effects: [first, second]]
+      end
+    end
+    registry.register(name: :conflicting_effects, klass: klass, fingerprint_payload: {v: 1})
+    registry.freeze!
+    runner = build_runner(storage: storage, registry: registry)
+    definition = DAG::Workflow::Definition.new.add_node(:a, type: :conflicting_effects)
+    workflow_id = create_workflow(storage, definition)
+
+    result = runner.call(workflow_id)
+
+    assert_equal :failed, result.state
+    assert_equal :failed, storage.load_workflow(id: workflow_id)[:state]
+    assert_equal :failed, node_state(storage, workflow_id, :a)
+    attempts = storage.list_attempts(workflow_id: workflow_id, revision: 1, node_id: :a)
+    assert_equal 1, attempts.size
+    assert_equal :failed, attempts.first[:state]
+    assert_equal :effect_idempotency_conflict, attempts.first[:result].error[:code]
+    assert_empty storage.list_effects_for_attempt(attempt_id: attempts.first[:attempt_id])
+    assert_equal(
+      [:workflow_started, :node_started, :node_failed, :workflow_failed],
+      storage.read_events(workflow_id: workflow_id).map(&:type)
+    )
+  end
+
   private
 
   def effect_intent(key:, payload: {value: 1})
