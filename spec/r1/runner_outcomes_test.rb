@@ -169,4 +169,23 @@ class RunnerOutcomesTest < Minitest::Test
     failure_event = event_bus.events.reverse_each.find { |e| e.type == :workflow_failed }
     assert_equal :no_eligible_but_incomplete, failure_event.payload[:diagnostic]
   end
+
+  def test_event_bus_publish_failure_does_not_fail_durable_run
+    storage = DAG::Adapters::Memory::Storage.new
+    runner = build_runner(storage: storage, event_bus: RaisingEventBus.new)
+    workflow_id = create_workflow(storage, simple_definition)
+
+    result = runner.call(workflow_id)
+
+    assert_equal :completed, result.state
+    assert_equal :completed, storage.load_workflow(id: workflow_id)[:state]
+    assert_equal(
+      [:workflow_started, :node_started, :node_committed, :node_started, :node_committed, :workflow_completed],
+      storage.read_events(workflow_id: workflow_id).map(&:type)
+    )
+  end
+
+  class RaisingEventBus
+    def publish(_event) = raise "bus down"
+  end
 end

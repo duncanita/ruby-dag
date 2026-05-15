@@ -234,7 +234,8 @@ module DAG
     def handle_outcome(run, node_id, attempt_id, attempt_number, result)
       case result
       when DAG::Success
-        commit_and_emit(run, node_id, attempt_id, attempt_number, result, :committed, :node_committed, {})
+        commit_status = commit_and_emit(run, node_id, attempt_id, attempt_number, result, :committed, :node_committed, {})
+        return commit_status if commit_status == :failed_terminal
         return :continue if result.proposed_mutations.empty?
 
         atomic_transition_with_event(
@@ -247,8 +248,10 @@ module DAG
         :paused
 
       when DAG::Waiting
-        commit_and_emit(run, node_id, attempt_id, attempt_number, result, :waiting, :node_waiting,
+        commit_status = commit_and_emit(run, node_id, attempt_id, attempt_number, result, :waiting, :node_waiting,
           {reason: result.reason, not_before_ms: result.not_before_ms})
+        return commit_status if commit_status == :failed_terminal
+
         :continue
 
       when DAG::Failure
@@ -296,7 +299,40 @@ module DAG
         event: event,
         effects: prepared_effects
       )
-      @event_bus.publish(stamped)
+      publish_event(stamped)
+      :committed
+    rescue DAG::Effects::IdempotencyConflictError => conflict
+      commit_idempotency_conflict(run, node_id, attempt_id, attempt_number, conflict)
+      :failed_terminal
+    end
+
+    def commit_idempotency_conflict(run, node_id, attempt_id, attempt_number, conflict)
+      error = {
+        code: :effect_idempotency_conflict,
+        class: conflict.class.name,
+        message: conflict.message
+      }
+      failure = DAG::Failure[error: error, retriable: false]
+      event = build_event(run,
+        type: :node_failed,
+        node_id: node_id,
+        attempt_id: attempt_id,
+        payload: {attempt_number: attempt_number, retriable: false, error: error})
+      stamped = @storage.commit_attempt(
+        attempt_id: attempt_id,
+        result: failure,
+        node_state: :failed,
+        event: event,
+        effects: []
+      )
+      publish_event(stamped)
+      atomic_transition_with_event(
+        run,
+        from: :running,
+        to: :failed,
+        event_type: :workflow_failed,
+        payload: {failed_node: node_id, error: error}
+      )
     end
 
     def build_step_input(run, node_id, attempt_id, attempt_number)
@@ -477,7 +513,7 @@ module DAG
       event = build_event(run, type: event_type, payload: payload)
       result = @storage.transition_workflow_state(id: run.workflow_id, from: from, to: to, event: event)
       stamped = result.is_a?(Hash) ? result[:event] : nil
-      @event_bus.publish(stamped) if stamped
+      publish_event(stamped) if stamped
     end
 
     def build_run_result(run, state)
@@ -504,7 +540,13 @@ module DAG
 
     def append_event(run, **kwargs)
       stamped = @storage.append_event(workflow_id: run.workflow_id, event: build_event(run, **kwargs))
-      @event_bus.publish(stamped)
+      publish_event(stamped)
+    end
+
+    def publish_event(event)
+      @event_bus.publish(event)
+    rescue
+      nil
     end
   end
 end

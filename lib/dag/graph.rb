@@ -71,6 +71,7 @@ module DAG
       from_sym = from.to_sym
       to_sym = to.to_sym
 
+      DAG.json_safe!(metadata, "$root.metadata")
       validate_edge_nodes!(from_sym, to_sym)
       # A self-edge is a 1-cycle. Reported as CycleError so callers that
       # rescue cycle errors to recover from bad input catch this case too.

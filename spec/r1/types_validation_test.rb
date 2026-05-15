@@ -32,6 +32,20 @@ class TypesValidationTest < Minitest::Test
     end
   end
 
+  def test_proposed_mutation_rejects_invalid_target_node_id
+    assert_raises(ArgumentError) do
+      DAG::ProposedMutation[kind: :invalidate, target_node_id: Object.new]
+    end
+  end
+
+  def test_proposed_mutation_normalizes_mutable_string_target
+    target = +"a"
+    mutation = DAG::ProposedMutation[kind: :invalidate, target_node_id: target]
+    target.replace("b")
+
+    assert_equal :a, mutation.target_node_id
+  end
+
   def test_runtime_profile_rejects_invalid_durability
     assert_raises(ArgumentError) do
       DAG::RuntimeProfile[durability: :unknown, max_attempts_per_node: 1, max_workflow_retries: 0, event_bus_kind: :null]

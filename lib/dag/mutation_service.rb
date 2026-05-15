@@ -38,7 +38,7 @@ module DAG
         event: mutation_event(workflow_id, mutation, expected_revision, new_revision, plan)
       )
       event = result[:event]
-      @event_bus.publish(event) if event
+      publish_event(event) if event
 
       DAG::ApplyResult.new(
         workflow_id: workflow_id,
@@ -93,6 +93,12 @@ module DAG
           invalidated_node_ids: plan.invalidated_node_ids
         }
       ]
+    end
+
+    def publish_event(event)
+      @event_bus.publish(event)
+    rescue
+      nil
     end
   end
 end

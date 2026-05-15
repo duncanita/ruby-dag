@@ -31,6 +31,7 @@ module DAG
     end
 
     def initialize(kind:, target_node_id:, replacement_graph: nil, rationale: nil, confidence: 1.0, metadata: {})
+      DAG::Validation.node_id!(target_node_id)
       DAG::Validation.member!(
         kind,
         DAG::ProposedMutation::KINDS,
@@ -55,7 +56,7 @@ module DAG
 
       super(
         kind: kind,
-        target_node_id: target_node_id,
+        target_node_id: target_node_id.to_sym,
         replacement_graph: replacement_graph,
         rationale: DAG.frozen_copy(rationale),
         confidence: confidence,

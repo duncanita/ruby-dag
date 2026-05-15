@@ -114,7 +114,7 @@ module DAG
             raise StaleStateError, "workflow #{id} state is #{row[:state].inspect}, expected #{from.inspect}"
           end
           row[:state] = to
-          stamped = event ? append_event_internal(state, id, event) : nil
+          stamped = event ? append_event_internal(state, id, event, revision: row[:current_revision]) : nil
           {id: id, state: to, event: stamped}
         end
 
@@ -134,7 +134,7 @@ module DAG
           state[:definitions][[id, new_revision]] = stored_definition
 
           previous_states = state[:node_states][[id, parent_revision]] || {}
-          invalidated = invalidated_node_ids.map(&:to_sym)
+          invalidated = invalidated_node_ids.map(&:to_sym).to_set
           result_projections = {}
           new_states = stored_definition.nodes.each_with_object({}) do |node_id, acc|
             acc[node_id] = if invalidated.include?(node_id)
@@ -153,7 +153,7 @@ module DAG
           state[:node_states][[id, new_revision]] = new_states
           result_projections.each { |key, result| state[:committed_result_projections][key] = result }
           row[:current_revision] = new_revision
-          stamped = event ? append_event_internal(state, id, event) : nil
+          stamped = event ? append_event_internal(state, id, event, revision: [parent_revision, new_revision]) : nil
           {id: id, revision: new_revision, event: stamped}
         end
 
@@ -245,6 +245,13 @@ module DAG
           end
           terminal_state = attempt_terminal_state_for(result)
           validate_node_state_for_result!(result, node_state)
+          validate_event_coordinates!(
+            event,
+            workflow_id: attempt[:workflow_id],
+            revision: attempt[:revision],
+            node_id: attempt[:node_id],
+            attempt_id: attempt[:attempt_id]
+          )
 
           rev_states = state[:node_states][[attempt[:workflow_id], attempt[:revision]]]
           current_node_state = rev_states[attempt[:node_id]]
@@ -259,7 +266,14 @@ module DAG
           rev_states[attempt[:node_id]] = node_state
           apply_effect_reservations(state, reservations)
 
-          append_event_internal(state, attempt[:workflow_id], event)
+          append_event_internal(
+            state,
+            attempt[:workflow_id],
+            event,
+            revision: attempt[:revision],
+            node_id: attempt[:node_id],
+            attempt_id: attempt[:attempt_id]
+          )
         end
 
         # Implements `Ports::Storage#list_effects_for_node`.
@@ -520,12 +534,21 @@ module DAG
 
         # Internal: stamp seq + push to event log.
         # @api private
-        def append_event_internal(state, workflow_id, event)
-          state[:seq][workflow_id] ||= 0
-          state[:seq][workflow_id] += 1
-          stamped = event.with(seq: state[:seq][workflow_id])
-          state[:events][workflow_id] ||= []
-          state[:events][workflow_id] << stamped
+        def append_event_internal(state, workflow_id, event, revision: nil, node_id: nil, attempt_id: nil)
+          row = fetch_workflow!(state, workflow_id)
+          stored_workflow_id = row.fetch(:id)
+          validate_event_coordinates!(
+            event,
+            workflow_id: stored_workflow_id,
+            revision: revision,
+            node_id: node_id,
+            attempt_id: attempt_id
+          )
+          state[:seq][stored_workflow_id] ||= 0
+          state[:seq][stored_workflow_id] += 1
+          stamped = event.with(seq: state[:seq][stored_workflow_id])
+          state[:events][stored_workflow_id] ||= []
+          state[:events][stored_workflow_id] << stamped
           stamped
         end
 
@@ -569,7 +592,7 @@ module DAG
           failed_node_ids.each { |node_id| states_for_rev[node_id] = :pending }
           row[:workflow_retry_count] += 1
           row[:state] = to
-          stamped = event ? append_event_internal(state, id, event) : nil
+          stamped = event ? append_event_internal(state, id, event, revision: revision) : nil
 
           {id: id, state: to, reset: failed_node_ids, workflow_retry_count: row[:workflow_retry_count], event: stamped}
         end
@@ -685,6 +708,21 @@ module DAG
         # @api private
         def same_effect_link?(left, right)
           left[:attempt_id] == right[:attempt_id] && left[:effect_id] == right[:effect_id]
+        end
+
+        def validate_event_coordinates!(event, workflow_id:, revision:, node_id:, attempt_id:)
+          DAG::Validation.instance!(event, DAG::Event, "event")
+          raise ArgumentError, "event.workflow_id does not match workflow_id" unless event.workflow_id == workflow_id
+          unless revision.nil? || Array(revision).include?(event.revision)
+            raise ArgumentError, "event.revision does not match revision"
+          end
+          DAG::Validation.node_id!(event.node_id) unless event.node_id.nil?
+          unless node_id.nil? || event.node_id.nil? || event.node_id.to_sym == node_id.to_sym
+            raise ArgumentError, "event.node_id does not match node_id"
+          end
+          return if attempt_id.nil? || event.attempt_id.nil? || event.attempt_id == attempt_id
+
+          raise ArgumentError, "event.attempt_id does not match attempt_id"
         end
 
         # Internal: return one projected Record per linked effect. When a node

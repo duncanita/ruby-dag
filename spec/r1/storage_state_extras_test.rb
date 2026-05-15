@@ -263,15 +263,51 @@ class StorageStateExtrasTest < Minitest::Test
 
   def test_read_events_filters_after_seq_and_limit
     workflow_id = create_workflow(@storage, @definition)
-    e1 = @storage.append_event(workflow_id: workflow_id, event: build_event(:node_started))
-    @storage.append_event(workflow_id: workflow_id, event: build_event(:node_committed))
-    @storage.append_event(workflow_id: workflow_id, event: build_event(:workflow_completed))
+    e1 = @storage.append_event(workflow_id: workflow_id, event: build_event(:node_started, workflow_id: workflow_id))
+    @storage.append_event(workflow_id: workflow_id, event: build_event(:node_committed, workflow_id: workflow_id))
+    @storage.append_event(workflow_id: workflow_id, event: build_event(:workflow_completed, workflow_id: workflow_id))
 
     after = @storage.read_events(workflow_id: workflow_id, after_seq: e1.seq)
     assert_equal [:node_committed, :workflow_completed], after.map(&:type)
 
     limited = @storage.read_events(workflow_id: workflow_id, limit: 1)
     assert_equal 1, limited.size
+  end
+
+  def test_append_event_rejects_mismatched_workflow_id
+    workflow_id = create_workflow(@storage, @definition)
+    error = assert_raises(ArgumentError) do
+      @storage.append_event(
+        workflow_id: workflow_id,
+        event: build_event(:workflow_started, workflow_id: "other")
+      )
+    end
+
+    assert_match(/event\.workflow_id/, error.message)
+    assert_empty @storage.read_events(workflow_id: workflow_id)
+  end
+
+  def test_commit_attempt_rejects_mismatched_event_coordinates
+    workflow_id = create_workflow(@storage, @definition)
+    attempt_id = @storage.begin_attempt(
+      workflow_id: workflow_id,
+      revision: 1,
+      node_id: :a,
+      expected_node_state: :pending,
+      attempt_number: 1
+    )
+
+    error = assert_raises(ArgumentError) do
+      @storage.commit_attempt(
+        attempt_id: attempt_id,
+        result: DAG::Success[value: 1, context_patch: {}],
+        node_state: :committed,
+        event: build_event(:node_committed, workflow_id: workflow_id, node_id: :b, attempt_id: attempt_id)
+      )
+    end
+
+    assert_match(/event\.node_id/, error.message)
+    assert_equal :running, @storage.list_attempts(workflow_id: workflow_id, node_id: :a).first[:state]
   end
 
   private
