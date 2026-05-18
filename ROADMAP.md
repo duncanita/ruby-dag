@@ -48,6 +48,8 @@ Tracked phases:
 | Release v1.3                   | —    | Done |
 | V1.4 per-workflow effect claim | #186 | Done (#187) |
 | Release v1.4                   | —    | Done |
+| V1.5 mutation testing gate     | —    | Done |
+| Release v1.5                   | —    | Done |
 | S0 (SQLite adapter, in Delphi)   | TBD  | Next |
 | Release v1.0                     | #74  | Done (#126, #156) |
 

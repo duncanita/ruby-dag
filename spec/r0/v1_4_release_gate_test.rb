@@ -5,8 +5,8 @@ require_relative "../test_helper"
 class R0V14ReleaseGateTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__)
 
-  def test_version_is_bumped_to_contract_release
-    assert_equal "1.4.0", DAG::VERSION
+  def test_version_has_not_regressed_before_contract_release
+    assert_operator Gem::Version.new(DAG::VERSION), :>=, Gem::Version.new("1.4.0")
   end
 
   def test_changelog_contains_v1_4_release_notes
