@@ -3,6 +3,10 @@
 require_relative "test_helper"
 
 class ResultTest < Minitest::Test
+  cover DAG::Failure
+  cover DAG::Result
+  cover DAG::Success
+
   # --- Success behavior ---
 
   def test_success_is_successful
@@ -165,6 +169,19 @@ class ResultTest < Minitest::Test
     assert_equal :try_raised, result.error[:code]
     assert_includes result.error[:message], "bad"
     assert_equal "ArgumentError", result.error[:error_class]
+  end
+
+  def test_exception_failure_accepts_message_override_and_extras
+    exception = ArgumentError.new("raw")
+    result = DAG::Result.exception_failure(:custom, exception, message: "friendly", node_id: :a)
+
+    assert result.failure?
+    assert_equal({
+      code: :custom,
+      message: "friendly",
+      error_class: "ArgumentError",
+      node_id: :a
+    }, result.error)
   end
 
   def test_try_does_not_catch_outside_default

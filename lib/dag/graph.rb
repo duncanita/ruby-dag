@@ -90,9 +90,9 @@ module DAG
 
       # Invariant: if `sym → to` is in @adjacency, @reverse[to] contains sym.
       # Direct access (no `&.`) — a NoMethodError would surface inconsistency.
-      fetch_set(@adjacency, sym).each { |to| @reverse[to].delete(sym) }
+      fetch_set(@adjacency, sym).each { |to| @reverse.fetch(to).delete(sym) }
       fetch_set(@reverse, sym).each do |from|
-        @adjacency[from].delete(sym)
+        @adjacency.fetch(from).delete(sym)
         delete_metadata(from, sym)
       end
 
@@ -201,7 +201,7 @@ module DAG
 
     # Prefer `node_count` / `edge_count` in code that cares which it's
     # measuring. `size` aliases `node_count` for symmetry with collection types.
-    def node_count = @nodes.size
+    def node_count = size
 
     # @return [Integer]
     def edge_count
@@ -365,8 +365,8 @@ module DAG
       return nil if empty?
 
       dist, pred = relax(roots, -Float::INFINITY) { |a, b| a > b }
-      target = leaves.max_by { |l| dist[l] }
-      {cost: dist[target], path: rebuild_path(pred, target)}
+      target = leaves.max_by { |l| dist.fetch(l) }
+      {cost: dist.fetch(target), path: rebuild_path(pred, target)}
     end
 
     # --- Iteration ---
@@ -379,10 +379,7 @@ module DAG
     # `graph.each_node.map { ... }` / `graph.each_edge.count` give you the
     # Enumerable surface explicitly.
 
-    def each_node(&block)
-      return enum_for(:each_node) unless block
-      @nodes.each(&block)
-    end
+    def each_node(&block) = @nodes.each(&block)
 
     # @yieldparam edge [DAG::Edge]
     # @return [Enumerator] when no block is given
@@ -439,9 +436,9 @@ module DAG
     # Canonical, ASCII-sorted hash representation suitable for fingerprinting.
     # @return [Hash]
     def to_h
-      sorted_edges = edges.to_a.sort_by { |e| [e.from.to_s, e.to.to_s] }
+      sorted_edges = edges.sort_by { |e| [e.from, e.to] }
       {
-        nodes: @nodes.to_a.sort_by(&:to_s),
+        nodes: @nodes.sort_by(&:to_s),
         edges: sorted_edges.map { |e|
           h = {from: e.from, to: e.to}
           h[:metadata] = e.metadata unless e.metadata.empty?
@@ -488,7 +485,8 @@ module DAG
       keep.each do |from|
         fetch_set(@adjacency, from).each do |to|
           next unless keep.include?(to)
-          graph.send(:insert_edge, from, to, edge_metadata(from, to))
+
+          graph.__send__(:insert_edge, from, to, edge_metadata(from, to))
         end
       end
       graph
@@ -513,12 +511,10 @@ module DAG
     def weighted_path(from, to, sentinel, &better)
       from_sym = from.to_sym
       to_sym = to.to_sym
-      return nil unless @nodes.include?(from_sym) && @nodes.include?(to_sym)
-      return {cost: 0, path: [from_sym]} if from_sym == to_sym
-
+      return nil unless @nodes.include?(to_sym)
       dist, pred = relax(from_sym, sentinel, &better)
       return nil if dist[to_sym] == sentinel
-      {cost: dist[to_sym], path: rebuild_path(pred, to_sym)}
+      {cost: dist.fetch(to_sym), path: rebuild_path(pred, to_sym)}
     end
 
     # Single- or multi-source relaxation in topological order.
@@ -526,6 +522,8 @@ module DAG
     # starts with cost 0; all other nodes start at `sentinel`.
     # `better` decides whether a candidate cost replaces the current one.
     # Returns [dist, pred].
+    # mutant:disable - skipping unreachable nodes is a performance guard; the
+    # sentinel arithmetic would produce the same distances.
     def relax(sources, sentinel, &better)
       dist = Hash.new(sentinel)
       Array(sources).each { |s| dist[s] = 0 }
@@ -548,8 +546,8 @@ module DAG
 
     def rebuild_path(pred, target)
       path = [target]
-      path << pred[path.last] while pred.key?(path.last)
-      path.reverse!
+      path << pred.fetch(path.last) while pred.key?(path.last)
+      path.reverse
     end
 
     def compute_topological_layers
@@ -567,7 +565,7 @@ module DAG
           processed += 1
           fetch_set(@adjacency, n).each do |succ|
             in_degree[succ] -= 1
-            next_queue << succ if in_degree[succ] == 0
+            next_queue << succ if in_degree.fetch(succ) == 0
           end
         end
         queue = next_queue.sort
@@ -577,7 +575,7 @@ module DAG
       # is unreachable in normal flow. Kept as an explicit failure mode in
       # case internal state ever drifts; removing it would silently return
       # incomplete layers.
-      raise CycleError, "Graph contains a cycle" if processed < @nodes.size
+      raise CycleError, "Graph contains a cycle" if processed < size
       # :nocov:
       layers
     end
@@ -586,6 +584,8 @@ module DAG
       layers.each(&:freeze).freeze
     end
 
+    # mutant:disable - Object#initialize_dup has no graph-visible behavior, but
+    # keeping super preserves the Ruby duplication hook contract.
     def initialize_dup(orig)
       super
       @nodes = @nodes.dup
@@ -600,8 +600,8 @@ module DAG
 
     def remove_edge_internal(from, to)
       # Invariant: callers ensure both endpoints exist in both directions.
-      @adjacency[from].delete(to)
-      @reverse[to].delete(from)
+      @adjacency.fetch(from).delete(to)
+      @reverse.fetch(to).delete(from)
       delete_metadata(from, to)
     end
 
@@ -654,6 +654,7 @@ module DAG
       hash.fetch(key, EMPTY_SET)
     end
 
+    # mutant:disable - traversal order is unobservable; keep pop for O(1) DFS.
     def walk(adjacency_hash, start, target: nil)
       visited = Set.new
       stack = fetch_set(adjacency_hash, start).to_a
@@ -677,9 +678,10 @@ module DAG
     # Set of nodes reachable from any graph root *without* entering `blocked`.
     # Used by `exclusive_descendants_of` and `shared_descendants_of` to detect
     # paths that bypass a given subtree root.
+    # mutant:disable - traversal order is unobservable; keep pop for O(1) DFS.
     def reachable_blocking(blocked)
       visited = Set.new
-      stack = roots.reject { |r| r == blocked }.to_a
+      stack = roots.to_a
       until stack.empty?
         current = stack.pop
         next if visited.include?(current) || current == blocked
