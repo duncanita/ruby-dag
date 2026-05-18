@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "rake/testtask"
+require "shellwords"
 require "standard/rake"
 require "rubocop/rake_task"
 
@@ -49,6 +50,24 @@ desc "Run tests with coverage report"
 task :coverage do
   ENV["COVERAGE"] = "1"
   Rake::Task[:test].invoke
+end
+
+namespace :mutant do
+  desc "Verify Mutant can discover and run the configured Minitest suite"
+  task :test do
+    sh "bundle exec mutant test"
+  end
+
+  desc "Run focused mutation testing for configured subjects"
+  task :run do
+    sh "bundle exec mutant run --fail-fast"
+  end
+
+  desc "Run focused mutation testing for subjects changed since MUTANT_SINCE (default: main)"
+  task :changed do
+    since = ENV.fetch("MUTANT_SINCE", "main")
+    sh "bundle exec mutant run --fail-fast --since #{Shellwords.escape(since)}"
+  end
 end
 
 task default: [:test, :standard, :rubocop, :yard]

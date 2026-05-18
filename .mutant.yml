@@ -1,0 +1,28 @@
+---
+usage: opensource
+includes:
+  - lib
+requires:
+  - dag
+integration:
+  name: minitest
+jobs: 4
+fail_fast: true
+matcher:
+  subjects:
+    - DAG::Edge*
+    - DAG::Graph*
+    - DAG::Result*
+    - DAG::Success*
+    - DAG::Failure*
+    - DAG::ExecutionContext*
+    - DAG::ProposedMutation*
+    - DAG::ReplacementGraph*
+    - DAG::RuntimeProfile*
+    - DAG::Event*
+    - DAG::Waiting*
+    - DAG::Effects::Intent*
+    - DAG::Effects::PreparedIntent*
+    - DAG::Effects::Record*
+    - DAG::Effects::HandlerResult*
+    - DAG::Effects::Await*
