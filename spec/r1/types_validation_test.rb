@@ -3,6 +3,12 @@
 require_relative "../test_helper"
 
 class TypesValidationTest < Minitest::Test
+  cover DAG::Event
+  cover DAG::ProposedMutation
+  cover DAG::ReplacementGraph
+  cover DAG::RuntimeProfile
+  cover DAG::Waiting
+
   def test_replacement_graph_rejects_empty_entry_or_exit
     g = DAG::Graph.new.add_node(:a).freeze
     assert_raises(ArgumentError) { DAG::ReplacementGraph[graph: g, entry_node_ids: [], exit_node_ids: [:a]] }

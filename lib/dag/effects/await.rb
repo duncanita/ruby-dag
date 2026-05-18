@@ -27,7 +27,6 @@ module DAG
           when :failed_terminal
             DAG::Failure[
               error: DAG::Effects.fetch_required_snapshot_value(record, :error),
-              retriable: false,
               metadata: {effect_ref: intent.ref}
             ]
           when :failed_retriable
@@ -40,8 +39,8 @@ module DAG
         private
 
         def effect_snapshot(input, intent)
-          metadata = input.respond_to?(:metadata) ? input.metadata : {}
-          effects = DAG::Effects.fetch_snapshot_value(metadata, :effects, {})
+          metadata = input.metadata if input.respond_to?(:metadata)
+          effects = DAG::Effects.fetch_snapshot_value(metadata, :effects)
           DAG::Effects.fetch_snapshot_value(effects, intent.ref)
         end
 
