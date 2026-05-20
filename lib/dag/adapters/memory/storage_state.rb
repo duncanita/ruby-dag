@@ -113,6 +113,15 @@ module DAG
           unless row[:state] == from
             raise StaleStateError, "workflow #{id} state is #{row[:state].inspect}, expected #{from.inspect}"
           end
+          if event
+            validate_event_coordinates!(
+              event,
+              workflow_id: row.fetch(:id),
+              revision: row[:current_revision],
+              node_id: nil,
+              attempt_id: nil
+            )
+          end
           row[:state] = to
           stamped = event ? append_event_internal(state, id, event, revision: row[:current_revision]) : nil
           {id: id, state: to, event: stamped}
@@ -131,6 +140,15 @@ module DAG
 
           new_revision = parent_revision + 1
           stored_definition = (definition.revision == new_revision) ? definition : definition.with_revision(new_revision)
+          if event
+            validate_event_coordinates!(
+              event,
+              workflow_id: id,
+              revision: [parent_revision, new_revision],
+              node_id: nil,
+              attempt_id: nil
+            )
+          end
           state[:definitions][[id, new_revision]] = stored_definition
 
           previous_states = state[:node_states][[id, parent_revision]] || {}
@@ -582,6 +600,15 @@ module DAG
           revision = row[:current_revision]
           states_for_rev = fetch_node_states!(state, id, revision)
           failed_node_ids = states_for_rev.select { |_, s| s == :failed }.keys
+          if event
+            validate_event_coordinates!(
+              event,
+              workflow_id: row.fetch(:id),
+              revision: revision,
+              node_id: nil,
+              attempt_id: nil
+            )
+          end
 
           failed_set = failed_node_ids.to_set
           state[:attempts_index].fetch(id, []).each do |aid|

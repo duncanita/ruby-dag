@@ -94,6 +94,27 @@ class StorageStateExtrasTest < Minitest::Test
     assert_equal 2, current.revision, "stored definition's :revision must match its key"
   end
 
+  def test_append_revision_rejects_mismatched_event_before_mutating_revision
+    workflow_id = create_workflow(@storage, @definition)
+    new_definition = @definition.add_node(:c, type: :passthrough).add_edge(:b, :c)
+
+    error = assert_raises(ArgumentError) do
+      @storage.append_revision(
+        id: workflow_id,
+        parent_revision: 1,
+        definition: new_definition,
+        invalidated_node_ids: [:a],
+        event: build_event(:mutation_applied, workflow_id: workflow_id, revision: 99)
+      )
+    end
+
+    assert_match(/event\.revision/, error.message)
+    assert_equal 1, @storage.load_current_definition(id: workflow_id).revision
+    assert_raises(DAG::StaleRevisionError) { @storage.load_revision(id: workflow_id, revision: 2) }
+    assert_equal({a: :pending, b: :pending}, @storage.load_node_states(workflow_id: workflow_id, revision: 1))
+    assert_empty @storage.read_events(workflow_id: workflow_id)
+  end
+
   def test_create_workflow_isolates_initial_context_from_caller_mutation
     initial = {hello: "world"}
     workflow_id = SecureRandom.uuid
@@ -261,6 +282,47 @@ class StorageStateExtrasTest < Minitest::Test
     assert_equal 1, @storage.load_workflow(id: workflow_id)[:workflow_retry_count]
   end
 
+  def test_prepare_workflow_retry_rejects_mismatched_event_before_mutating_retry_state
+    workflow_id = create_workflow(@storage, @definition,
+      runtime_profile: DAG::RuntimeProfile[
+        durability: :ephemeral,
+        max_attempts_per_node: 1,
+        max_workflow_retries: 1,
+        event_bus_kind: :null
+      ])
+    attempt_id = @storage.begin_attempt(
+      workflow_id: workflow_id,
+      revision: 1,
+      node_id: :a,
+      expected_node_state: :pending,
+      attempt_number: 1
+    )
+    @storage.commit_attempt(
+      attempt_id: attempt_id,
+      result: DAG::Failure[error: {code: :boom}, retriable: true],
+      node_state: :failed,
+      event: build_event(:node_failed, workflow_id: workflow_id, node_id: :a, attempt_id: attempt_id)
+    )
+    @storage.transition_workflow_state(id: workflow_id, from: :pending, to: :failed)
+    event_count = @storage.read_events(workflow_id: workflow_id).size
+
+    error = assert_raises(ArgumentError) do
+      @storage.prepare_workflow_retry(
+        id: workflow_id,
+        from: :failed,
+        to: :pending,
+        event: build_event(:workflow_started, workflow_id: "other")
+      )
+    end
+
+    assert_match(/event\.workflow_id/, error.message)
+    assert_equal :failed, @storage.load_workflow(id: workflow_id)[:state]
+    assert_equal 0, @storage.load_workflow(id: workflow_id)[:workflow_retry_count]
+    assert_equal :failed, node_state(@storage, workflow_id, :a)
+    assert_equal :failed, @storage.list_attempts(workflow_id: workflow_id, node_id: :a).first[:state]
+    assert_equal event_count, @storage.read_events(workflow_id: workflow_id).size
+  end
+
   def test_read_events_filters_after_seq_and_limit
     workflow_id = create_workflow(@storage, @definition)
     e1 = @storage.append_event(workflow_id: workflow_id, event: build_event(:node_started, workflow_id: workflow_id))
@@ -284,6 +346,23 @@ class StorageStateExtrasTest < Minitest::Test
     end
 
     assert_match(/event\.workflow_id/, error.message)
+    assert_empty @storage.read_events(workflow_id: workflow_id)
+  end
+
+  def test_transition_workflow_state_rejects_mismatched_event_before_mutating_state
+    workflow_id = create_workflow(@storage, @definition)
+
+    error = assert_raises(ArgumentError) do
+      @storage.transition_workflow_state(
+        id: workflow_id,
+        from: :pending,
+        to: :running,
+        event: build_event(:workflow_started, workflow_id: "other")
+      )
+    end
+
+    assert_match(/event\.workflow_id/, error.message)
+    assert_equal :pending, @storage.load_workflow(id: workflow_id)[:state]
     assert_empty @storage.read_events(workflow_id: workflow_id)
   end
 
