@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+## 1.5.0 — 2026-05-18
+
+V1.5 is a mutation-testing release. It adds a focused Mutant gate for the
+pure value/kernel surface and folds in the equivalent-code simplifications
+and missing assertions surfaced while driving the configured subjects to
+100% mutation coverage.
+
+### Added
+
+- `mutant-minitest` is available as a development dependency with a
+  repository-local `.mutant.yml` configured for the Minitest integration,
+  `lib` load path, `dag` require, fail-fast execution, and an explicit
+  matcher over the core immutable graph/result/context/value-object
+  subjects plus `DAG::Effects::Await`.
+- `rake mutant:test` verifies Mutant can discover and execute the Minitest
+  suite, `rake mutant:run` runs the focused mutation gate, and
+  `rake mutant:changed` scopes Mutant to subjects changed since
+  `MUTANT_SINCE` (default `main`).
+- `test/all_test.rb` bridges Mutant's default `test/**/*_test.rb`
+  discovery to this repo's `spec/**/*_test.rb` layout, while
+  `mutant/minitest/coverage` hooks and `cover` declarations connect tests
+  to the configured subjects.
+- Additional assertions pin graph normalization, frozen-state behavior,
+  metadata cleanup, DOT/hash ordering, path edge cases, execution-context
+  boundaries, effect-await status mapping, and public error messages.
+
+### Changed
+
+- Simplified equivalent code paths exposed by mutation testing without
+  changing the public contract: graph traversal and path helpers now avoid
+  redundant lookups/reversals, `ExecutionContext#inspect` relies on the
+  public key list, `Graph::Validator` drops an unnecessary empty-graph guard,
+  and `DAG::Effects::Await` lets existing defaults handle absent snapshots
+  and terminal failure retryability.
+- `.gitignore` excludes Mutant session artifacts under `/.mutant/`.
+
 ## 1.4.0 — 2026-05-13
 
 V1.4 lets a dispatcher restrict `claim_ready_effects` to a single

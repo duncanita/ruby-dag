@@ -1,6 +1,7 @@
 /.bundle/
 /vendor/bundle
 /coverage/
+/.mutant/
 /.ruby-lsp/
 /.rubocop_cache/
 /doc/

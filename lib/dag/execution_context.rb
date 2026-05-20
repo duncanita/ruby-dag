@@ -15,7 +15,7 @@ module DAG
 
     # @param hash [Hash] JSON-safe payload
     def initialize(hash)
-      DAG.json_safe!(hash, "$root")
+      DAG.json_safe!(hash)
       @data = DAG.frozen_copy(hash)
       freeze
     end
@@ -71,7 +71,7 @@ module DAG
     def hash = @data.hash
 
     # @return [String]
-    def inspect = "#<DAG::ExecutionContext keys=#{@data.keys}>"
+    def inspect = "#<DAG::ExecutionContext keys=#{keys}>"
     alias_method :to_s, :inspect
   end
 end

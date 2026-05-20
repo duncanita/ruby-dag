@@ -3,6 +3,12 @@
 require_relative "../test_helper"
 
 class EffectsValueObjectsTest < Minitest::Test
+  cover DAG::Effects::Await
+  cover DAG::Effects::HandlerResult
+  cover DAG::Effects::Intent
+  cover DAG::Effects::PreparedIntent
+  cover DAG::Effects::Record
+
   SnapshotInput = Data.define(:metadata)
 
   def test_effect_errors_inherit_from_dag_error
@@ -242,6 +248,33 @@ class EffectsValueObjectsTest < Minitest::Test
     assert_equal 10, result.not_before_ms
     assert_equal [intent], result.proposed_effects
     assert_equal({effects: [intent.ref]}, result.resume_token)
+    assert_equal({effect_ref: intent.ref}, result.metadata)
+  end
+
+  def test_await_uses_top_level_waiting_for_pending_effect
+    shadow_waiting = Class.new do
+      def self.[](*)
+        raise "shadow waiting should not be used"
+      end
+    end
+    DAG::Effects::Await.const_set(:Waiting, shadow_waiting)
+
+    intent = effect_intent
+    result = DAG::Effects::Await.call(SnapshotInput.new({}), intent) { raise "should not yield" }
+
+    assert_kind_of DAG::Waiting, result
+  ensure
+    DAG::Effects::Await.send(:remove_const, :Waiting) if DAG::Effects::Await.const_defined?(:Waiting, false)
+  end
+
+  def test_await_treats_input_without_metadata_as_missing_snapshot
+    intent = effect_intent
+    result = DAG::Effects::Await.call(Object.new, intent, not_before_ms: 10) do
+      raise "should not yield"
+    end
+
+    assert_kind_of DAG::Waiting, result
+    assert_equal [intent], result.proposed_effects
   end
 
   def test_await_yields_when_snapshot_succeeded
@@ -268,6 +301,25 @@ class EffectsValueObjectsTest < Minitest::Test
     assert_equal({effect_ref: intent.ref}, result.metadata)
   end
 
+  def test_await_uses_top_level_failure_for_terminal_failure
+    shadow_failure = Class.new do
+      def self.[](*)
+        raise "shadow failure should not be used"
+      end
+    end
+    DAG::Effects::Await.const_set(:Failure, shadow_failure)
+    DAG::Effects::Await.const_set(:Effects, Module.new)
+
+    intent = effect_intent
+    input = SnapshotInput.new({effects: {intent.ref => {status: :failed_terminal, error: {code: :denied}}}})
+    result = DAG::Effects::Await.call(input, intent) { raise "should not yield" }
+
+    assert_kind_of DAG::Failure, result
+  ensure
+    DAG::Effects::Await.send(:remove_const, :Failure) if DAG::Effects::Await.const_defined?(:Failure, false)
+    DAG::Effects::Await.send(:remove_const, :Effects) if DAG::Effects::Await.const_defined?(:Effects, false)
+  end
+
   def test_await_returns_waiting_for_retriable_failure
     intent = effect_intent
     record = effect_record(status: :failed_retriable, error: {code: :busy}, not_before_ms: 99)
@@ -280,25 +332,92 @@ class EffectsValueObjectsTest < Minitest::Test
     assert_equal [intent], result.proposed_effects
   end
 
+  def test_await_uses_fallback_not_before_for_retriable_failure_without_snapshot_delay
+    DAG::Effects::Await.const_set(:Effects, Module.new)
+    intent = effect_intent
+    record = effect_record(status: :failed_retriable, error: {code: :busy})
+    result = DAG::Effects::Await.call(SnapshotInput.new({effects: {intent.ref => record}}), intent, not_before_ms: 10) do
+      raise "should not yield"
+    end
+
+    assert_kind_of DAG::Waiting, result
+    assert_equal 10, result.not_before_ms
+  ensure
+    DAG::Effects::Await.send(:remove_const, :Effects) if DAG::Effects::Await.const_defined?(:Effects, false)
+  end
+
   def test_await_requires_continuation_to_return_step_result
     intent = effect_intent
     input = SnapshotInput.new({effects: {intent.ref => {status: :succeeded, result: 1}}})
 
-    assert_raises(TypeError) do
+    error = assert_raises(TypeError) do
       DAG::Effects::Await.call(input, intent) { |value| value + 1 }
     end
+
+    assert_equal "Await continuation must return Success, Waiting, or Failure, got Integer", error.message
   end
 
   def test_await_rejects_non_intent_first_argument
-    assert_raises(ArgumentError) do
+    error = assert_raises(ArgumentError) do
       DAG::Effects::Await.call(SnapshotInput.new({}), "not-an-intent") { |_| nil }
     end
+
+    assert_match(/intent/, error.message)
+  end
+
+  def test_await_uses_top_level_validation_constant
+    shadow = Module.new do
+      def self.instance!(*)
+        raise "shadow validation should not be used"
+      end
+    end
+    DAG::Effects.const_set(:Validation, shadow)
+
+    result = DAG::Effects::Await.call(SnapshotInput.new({}), effect_intent) { |_| nil }
+
+    assert_kind_of DAG::Waiting, result
+  ensure
+    DAG::Effects.send(:remove_const, :Validation) if DAG::Effects.const_defined?(:Validation, false)
+  end
+
+  def test_await_uses_effects_intent_from_absolute_namespace
+    shadow_effects = Module.new
+    shadow_effects.const_set(:Intent, Class.new)
+    shadow_protocol = Module.new do
+      def self.valid_result?(*)
+        raise "shadow step protocol should not be used"
+      end
+    end
+    DAG::Effects::Await.const_set(:Intent, Class.new)
+    DAG::Effects::Await.const_set(:Effects, shadow_effects)
+    DAG::Effects::Await.const_set(:StepProtocol, shadow_protocol)
+
+    intent = effect_intent
+    input = SnapshotInput.new({effects: {intent.ref => {status: :succeeded, result: {ok: true}}}})
+    result = DAG::Effects::Await.call(input, intent) { |value| DAG::Success[value: value.fetch(:ok)] }
+
+    assert_kind_of DAG::Success, result
+    assert_equal true, result.value
+  ensure
+    DAG::Effects::Await.send(:remove_const, :Intent) if DAG::Effects::Await.const_defined?(:Intent, false)
+    DAG::Effects::Await.send(:remove_const, :Effects) if DAG::Effects::Await.const_defined?(:Effects, false)
+    DAG::Effects::Await.send(:remove_const, :StepProtocol) if DAG::Effects::Await.const_defined?(:StepProtocol, false)
   end
 
   def test_await_rejects_non_integer_not_before_ms
     assert_raises(ArgumentError) do
       DAG::Effects::Await.call(SnapshotInput.new({}), effect_intent, not_before_ms: 1.5) { |_| nil }
     end
+  end
+
+  def test_await_rejects_non_integer_not_before_ms_before_reading_snapshot_status
+    intent = effect_intent
+    input = SnapshotInput.new({effects: {intent.ref => {status: :succeeded, result: 1}}})
+    error = assert_raises(ArgumentError) do
+      DAG::Effects::Await.call(input, intent, not_before_ms: 1.5) { DAG::Success[value: "ok"] }
+    end
+
+    assert_match(/not_before_ms/, error.message)
   end
 
   private

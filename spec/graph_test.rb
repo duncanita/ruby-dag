@@ -3,6 +3,9 @@
 require_relative "test_helper"
 
 class GraphTest < Minitest::Test
+  cover DAG::Edge
+  cover DAG::Graph
+
   # --- Building graphs ---
 
   def test_add_nodes
@@ -12,28 +15,48 @@ class GraphTest < Minitest::Test
     assert graph.node?(:b)
   end
 
+  def test_add_node_normalizes_string_name
+    graph = DAG::Graph.new.add_node("a")
+
+    assert graph.node?(:a)
+    assert_raises(DAG::DuplicateNodeError) { graph.add_node(:a) }
+  end
+
   def test_add_edge
     graph = build_graph([:a, :b], [[:a, :b]])
     assert graph.edge?(:a, :b)
+    assert graph.edge?("a", "b")
     refute graph.edge?(:b, :a)
   end
 
+  def test_add_edge_normalizes_string_endpoints
+    graph = build_graph([:a, :b], [])
+    graph.add_edge("a", "b")
+
+    assert graph.edge?(:a, :b)
+  end
+
   def test_rejects_duplicate_node
-    assert_raises(DAG::DuplicateNodeError) do
+    error = assert_raises(DAG::DuplicateNodeError) do
       DAG::Graph.new.add_node(:a).add_node(:a)
     end
+    assert_equal "Duplicate node: a", error.message
   end
 
   def test_rejects_edge_to_unknown_node
-    assert_raises(DAG::UnknownNodeError) do
+    error = assert_raises(DAG::UnknownNodeError) do
       DAG::Graph.new.add_node(:a).add_edge(:a, :missing)
     end
+
+    assert_equal "Unknown node: missing", error.message
   end
 
   def test_rejects_edge_from_unknown_node
-    assert_raises(DAG::UnknownNodeError) do
+    error = assert_raises(DAG::UnknownNodeError) do
       DAG::Graph.new.add_node(:a).add_edge(:missing, :a)
     end
+
+    assert_equal "Unknown node: missing", error.message
   end
 
   def test_rejects_self_referencing_edge_as_cycle
@@ -43,12 +66,23 @@ class GraphTest < Minitest::Test
       DAG::Graph.new.add_node(:a).add_edge(:a, :a)
     end
     assert_match(/self-loop/, error.message)
+    assert_includes error.message, "Edge a → a"
   end
 
   def test_duplicate_edge_is_idempotent
     graph = build_graph([:a, :b], [[:a, :b]])
-    graph.add_edge(:a, :b)
+    returned = graph.add_edge(:a, :b)
+
+    assert_same graph, returned
     assert_equal 1, graph.edges.size
+  end
+
+  def test_duplicate_edge_preserves_existing_metadata
+    graph = build_graph([:a, :b], [])
+    graph.add_edge(:a, :b, weight: 5)
+    graph.add_edge(:a, :b, weight: 9)
+
+    assert_equal({weight: 5}, graph.edge_metadata(:a, :b))
   end
 
   # --- Cycle detection on add_edge ---
@@ -116,8 +150,25 @@ class GraphTest < Minitest::Test
     assert_equal (1..5).map { |i| :"leaf_#{i}" }.sort, order[1]
   end
 
+  def test_topological_layers_sort_each_frontier
+    graph = DAG::Graph.new.add_node(:root).add_node(:b).add_node(:a)
+    graph.add_edge(:root, :b)
+    graph.add_edge(:root, :a)
+
+    assert_equal [[:root], [:a, :b]], graph.topological_layers
+  end
+
   def test_empty_graph_sort
     assert_equal [], DAG::Graph.new.topological_layers
+  end
+
+  def test_topological_layers_detects_corrupted_cycle_state
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    graph.send(:insert_edge, :a, :b, {})
+    graph.send(:insert_edge, :b, :b, {})
+
+    error = assert_raises(DAG::CycleError) { graph.topological_layers }
+    assert_equal "Graph contains a cycle", error.message
   end
 
   # --- Graph queries ---
@@ -128,10 +179,30 @@ class GraphTest < Minitest::Test
     assert_kind_of Set, graph.roots
   end
 
+  def test_each_root
+    graph = build_graph([:a, :b, :c], [[:a, :c], [:b, :c]])
+    collected = []
+
+    graph.each_root { |root| collected << root }
+
+    assert_equal [:a, :b], collected.sort
+    assert_equal [:a, :b], graph.each_root.to_a.sort
+  end
+
   def test_leaves
     graph = build_graph([:a, :b, :c], [[:a, :b], [:a, :c]])
     assert_equal [:b, :c].to_set, graph.leaves
     assert_kind_of Set, graph.leaves
+  end
+
+  def test_each_leaf
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:a, :c]])
+    collected = []
+
+    graph.each_leaf { |leaf| collected << leaf }
+
+    assert_equal [:b, :c], collected.sort
+    assert_equal [:b, :c], graph.each_leaf.to_a.sort
   end
 
   def test_successors
@@ -139,14 +210,41 @@ class GraphTest < Minitest::Test
     assert_equal [:b, :c].to_set, graph.successors(:a)
   end
 
+  def test_successors_on_mutable_graph_returns_copy
+    graph = build_graph([:a, :b, :c], [[:a, :b]])
+
+    graph.successors(:a) << :c
+
+    refute graph.edge?(:a, :c)
+  end
+
   def test_predecessors
     graph = build_graph([:a, :b, :c], [[:a, :c], [:b, :c]])
     assert_equal [:a, :b].to_set, graph.predecessors(:c)
   end
 
+  def test_predecessors_on_mutable_graph_returns_copy
+    graph = build_graph([:a, :b, :c], [[:a, :c]])
+
+    graph.predecessors(:c) << :b
+
+    assert_equal Set[:a], graph.predecessors(:c)
+  end
+
   def test_ancestors
     graph = build_graph([:a, :b, :c, :d], [[:a, :b], [:b, :c], [:b, :d]])
     assert_equal [:a, :b].to_set, graph.ancestors(:c)
+  end
+
+  def test_query_methods_normalize_string_node_names
+    graph = build_graph([:a, :b, :c, :d], [[:a, :b], [:b, :c], [:a, :d]])
+
+    assert_equal [:b, :d].to_set, graph.successors("a")
+    assert_equal [:b].to_set, graph.predecessors("c")
+    assert_equal [:a, :b].to_set, graph.ancestors("c")
+    assert_equal [:b, :c, :d].to_set, graph.descendants("a")
+    assert_equal [:a, :b, :c, :d].to_set, graph.descendants_of("a")
+    assert graph.path?("a", "c")
   end
 
   def test_descendants
@@ -184,9 +282,26 @@ class GraphTest < Minitest::Test
     assert_equal 0, sub.edges.size
   end
 
+  def test_subgraph_keeps_later_internal_edge_after_external_edge
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:a, :c]])
+    sub = graph.subgraph([:a, :c])
+
+    assert sub.edge?(:a, :c)
+  end
+
+  def test_subgraph_normalizes_string_node_names
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:a, :c]])
+    sub = graph.subgraph(["a", "c"])
+
+    assert_equal Set[:a, :c], sub.nodes
+    assert sub.edge?(:a, :c)
+  end
+
   def test_subgraph_rejects_unknown_nodes
     graph = build_graph([:a], [])
-    assert_raises(ArgumentError) { graph.subgraph([:a, :missing]) }
+    error = assert_raises(ArgumentError) { graph.subgraph([:a, :missing]) }
+
+    assert_equal "Unknown nodes: [:missing]", error.message
   end
 
   def test_subgraph_preserves_edge_metadata
@@ -279,17 +394,33 @@ class GraphTest < Minitest::Test
     refute graph.path?(:a, :ghost)
   end
 
+  def test_path_rejects_missing_target_even_when_internal_edge_exists
+    graph = DAG::Graph.new.add_node(:a)
+    graph.send(:insert_edge, :a, :ghost, {})
+
+    refute graph.path?(:a, :ghost)
+  end
+
+  def test_path_rejects_missing_source_even_when_internal_edge_exists
+    graph = DAG::Graph.new.add_node(:a)
+    graph.send(:insert_edge, :ghost, :a, {})
+
+    refute graph.path?(:ghost, :a)
+  end
+
   # --- indegree / outdegree ---
 
   def test_indegree
     graph = build_graph([:a, :b, :c], [[:a, :c], [:b, :c]])
     assert_equal 0, graph.indegree(:a)
     assert_equal 2, graph.indegree(:c)
+    assert_equal 2, graph.indegree("c")
   end
 
   def test_outdegree
     graph = build_graph([:a, :b, :c], [[:a, :b], [:a, :c]])
     assert_equal 2, graph.outdegree(:a)
+    assert_equal 2, graph.outdegree("a")
     assert_equal 0, graph.outdegree(:b)
   end
 
@@ -307,6 +438,14 @@ class GraphTest < Minitest::Test
     assert_instance_of Enumerator, graph.each_node
   end
 
+  def test_each_node_enumerator_reads_nodes_when_enumerated
+    graph = DAG::Graph.new.add_node(:a)
+    enumerator = graph.each_node
+    graph.add_node(:b)
+
+    assert_equal [:a, :b], enumerator.to_a
+  end
+
   def test_each_edge
     graph = build_graph([:a, :b, :c], [[:a, :b], [:a, :c]])
     collected = []
@@ -320,11 +459,20 @@ class GraphTest < Minitest::Test
     assert_instance_of Enumerator, graph.each_edge
   end
 
+  def test_each_edge_enumerator_reads_edges_when_enumerated
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    enumerator = graph.each_edge
+    graph.add_edge(:a, :b)
+
+    assert_equal [DAG::Edge.new(from: :a, to: :b, metadata: {})], enumerator.to_a
+  end
+
   def test_each_predecessor
     graph = build_graph([:a, :b, :c, :d], [[:a, :c], [:b, :c], [:c, :d]])
     collected = []
     graph.each_predecessor(:c) { |p| collected << p }
     assert_equal [:a, :b], collected.sort
+    assert_equal [:a, :b], graph.each_predecessor("c").to_a.sort
   end
 
   def test_each_predecessor_with_no_predecessors
@@ -340,11 +488,20 @@ class GraphTest < Minitest::Test
     assert_equal [:a], graph.each_predecessor(:b).to_a
   end
 
+  def test_each_predecessor_enumerator_reads_predecessors_when_enumerated
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    enumerator = graph.each_predecessor(:b)
+    graph.add_edge(:a, :b)
+
+    assert_equal [:a], enumerator.to_a
+  end
+
   def test_each_successor
     graph = build_graph([:a, :b, :c, :d], [[:a, :c], [:a, :d], [:b, :c]])
     collected = []
     graph.each_successor(:a) { |s| collected << s }
     assert_equal [:c, :d], collected.sort
+    assert_equal [:c, :d], graph.each_successor("a").to_a.sort
   end
 
   def test_each_successor_with_no_successors
@@ -360,18 +517,41 @@ class GraphTest < Minitest::Test
     assert_equal [:b], graph.each_successor(:a).to_a
   end
 
+  def test_each_successor_enumerator_reads_successors_when_enumerated
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    enumerator = graph.each_successor(:a)
+    graph.add_edge(:a, :b)
+
+    assert_equal [:b], enumerator.to_a
+  end
+
   # --- Immutability after freeze ---
 
   def test_frozen_graph_rejects_add_node
     graph = build_graph([:a], [])
     graph.freeze
-    assert_raises(FrozenError) { graph.add_node(:b) }
+    error = assert_raises(FrozenError) { graph.add_node(:b) }
+    assert_equal "can't modify frozen DAG::Graph", error.message
+  end
+
+  def test_frozen_graph_add_node_checks_frozen_before_duplicate_validation
+    graph = build_graph([:a], [])
+    graph.freeze
+
+    assert_raises(FrozenError) { graph.add_node(:a) }
   end
 
   def test_frozen_graph_rejects_add_edge
     graph = build_graph([:a, :b], [])
     graph.freeze
     assert_raises(FrozenError) { graph.add_edge(:a, :b) }
+  end
+
+  def test_frozen_graph_add_edge_checks_frozen_before_validation
+    graph = build_graph([:a], [])
+    graph.freeze
+
+    assert_raises(FrozenError) { graph.add_edge(:a, :missing) }
   end
 
   def test_frozen_graph_queries_still_work
@@ -381,14 +561,37 @@ class GraphTest < Minitest::Test
     assert_equal 3, graph.size
     assert graph.node?(:a)
     assert graph.edge?(:a, :b)
+    assert_equal Set[:b], graph.successors(:a)
+    assert_equal Set[:a], graph.predecessors(:b)
     assert_equal [[:a], [:b], [:c]], graph.topological_layers
     assert_equal [:a, :b, :c], graph.topological_sort
     assert graph.path?(:a, :c)
   end
 
+  def test_freeze_is_idempotent
+    graph = build_graph([:a, :b], [[:a, :b]])
+
+    assert_same graph, graph.freeze
+    assert_same graph, graph.freeze
+  end
+
+  def test_freeze_freezes_internal_rows
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    graph.add_edge(:a, :b, weight: 1)
+    graph.freeze
+
+    assert graph.instance_variable_get(:@adjacency).frozen?
+    assert graph.successors(:a).frozen?
+    assert graph.instance_variable_get(:@reverse).frozen?
+    assert graph.predecessors(:b).frozen?
+    assert graph.instance_variable_get(:@edge_metadata).frozen?
+    assert graph.instance_variable_get(:@edge_metadata).fetch(:a).frozen?
+  end
+
   def test_frozen_graph_nodes_not_externally_mutable
     graph = build_graph([:a], [])
     graph.freeze
+    assert_same graph.nodes, graph.nodes
     assert_raises(FrozenError) { graph.nodes << :hack }
   end
 
@@ -402,6 +605,15 @@ class GraphTest < Minitest::Test
     assert graph.node?(:a)
     assert graph.node?(:b)
     refute graph.node?(:hack)
+  end
+
+  def test_unfrozen_graph_nodes_reader_does_not_freeze_internal_nodes
+    graph = build_graph([:a], [])
+
+    graph.nodes
+    graph.add_node(:b)
+
+    assert graph.node?(:b)
   end
 
   # --- dup (unfrozen copy) ---
@@ -472,6 +684,15 @@ class GraphTest < Minitest::Test
     refute graph.edge?(:b, :c)
   end
 
+  def test_with_edge_preserves_metadata
+    graph = build_graph([:a, :b], [])
+    new_graph = graph.with_edge(:a, :b, weight: 4)
+
+    assert new_graph.frozen?
+    assert_equal({weight: 4}, new_graph.edge_metadata(:a, :b))
+    assert_empty graph.edge_metadata(:a, :b)
+  end
+
   def test_with_node_on_mutable_graph
     graph = build_graph([:a], [])
     new_graph = graph.with_node(:b)
@@ -497,6 +718,17 @@ class GraphTest < Minitest::Test
     assert_equal [{from: :a, to: :b}], h[:edges]
   end
 
+  def test_to_h_sorts_edges_by_target_when_source_matches
+    graph = DAG::Graph.new.add_node(:root).add_node(:b).add_node(:a)
+    graph.add_edge(:root, :b)
+    graph.add_edge(:root, :a)
+
+    assert_equal [
+      {from: :root, to: :a},
+      {from: :root, to: :b}
+    ], graph.to_h.fetch(:edges)
+  end
+
   def test_to_h_empty_graph
     h = DAG::Graph.new.to_h
     assert_equal({nodes: [], edges: []}, h)
@@ -519,9 +751,24 @@ class GraphTest < Minitest::Test
     assert_equal g1, g2
   end
 
+  def test_equality_accepts_graph_subclasses
+    graph_class = Class.new(DAG::Graph)
+    g1 = build_graph([:a, :b], [[:a, :b]]).freeze
+    g2 = graph_class.new.add_node(:a).add_node(:b).add_edge(:a, :b).freeze
+
+    assert_equal g1, g2
+  end
+
   def test_equality_different_structure
     g1 = build_graph([:a, :b], [[:a, :b]]).freeze
     g2 = build_graph([:a, :b, :c], [[:a, :b]]).freeze
+    refute_equal g1, g2
+  end
+
+  def test_equality_different_edges_with_same_nodes
+    g1 = build_graph([:a, :b, :c], [[:a, :b]]).freeze
+    g2 = build_graph([:a, :b, :c], [[:a, :c]]).freeze
+
     refute_equal g1, g2
   end
 
@@ -552,6 +799,20 @@ class GraphTest < Minitest::Test
     g1 = build_graph([:a, :b], [[:a, :b]]).freeze
     g2 = build_graph([:a, :b], [[:a, :b]]).freeze
     assert_equal g1.hash, g2.hash
+  end
+
+  def test_hash_differs_for_different_node_sets_with_same_edges
+    g1 = build_graph([:a], []).freeze
+    g2 = build_graph([:b], []).freeze
+
+    refute_equal g1.hash, g2.hash
+  end
+
+  def test_hash_differs_for_same_nodes_with_different_edges
+    g1 = build_graph([:a, :b, :c], [[:a, :b]]).freeze
+    g2 = build_graph([:a, :b, :c], [[:a, :c]]).freeze
+
+    refute_equal g1.hash, g2.hash
   end
 
   def test_equality_independent_of_edge_insertion_order
@@ -592,42 +853,93 @@ class GraphTest < Minitest::Test
 
   def test_remove_node_removes_node_and_incident_edges
     graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
-    graph.remove_node(:b)
+    returned = graph.remove_node(:b)
 
+    assert_same graph, returned
     refute graph.node?(:b)
     assert_equal 2, graph.size
     assert_equal 0, graph.edges.size
+    assert_empty graph.successors(:a)
+    assert_empty graph.predecessors(:c)
+    refute graph.instance_variable_get(:@adjacency).key?(:b)
+    refute graph.instance_variable_get(:@reverse).key?(:b)
+    refute graph.instance_variable_get(:@edge_metadata).key?(:b)
+  end
+
+  def test_remove_node_normalizes_string_name
+    graph = build_graph([:a, :b], [[:a, :b]])
+
+    graph.remove_node("a")
+
+    refute graph.node?(:a)
+  end
+
+  def test_remove_node_removes_incoming_edge_metadata
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    graph.add_edge(:a, :b, weight: 1)
+
+    graph.remove_node(:b)
+
+    assert_empty graph.edge_metadata(:a, :b)
+    assert_empty graph.instance_variable_get(:@edge_metadata)
+  end
+
+  def test_remove_node_removes_outgoing_edge_metadata_row
+    graph = DAG::Graph.new.add_node(:a).add_node(:b)
+    graph.add_edge(:a, :b, weight: 1)
+
+    graph.remove_node(:a)
+
+    assert_empty graph.instance_variable_get(:@edge_metadata)
   end
 
   def test_remove_node_unknown_raises
     graph = build_graph([:a], [])
-    assert_raises(DAG::UnknownNodeError) { graph.remove_node(:missing) }
+    error = assert_raises(DAG::UnknownNodeError) { graph.remove_node(:missing) }
+
+    assert_equal "Unknown node: missing", error.message
   end
 
   def test_remove_edge_keeps_both_nodes
     graph = build_graph([:a, :b], [[:a, :b]])
-    graph.remove_edge(:a, :b)
+    returned = graph.remove_edge(:a, :b)
 
+    assert_same graph, returned
     assert graph.node?(:a)
     assert graph.node?(:b)
+    refute graph.edge?(:a, :b)
+    assert_empty graph.predecessors(:b)
+  end
+
+  def test_remove_edge_normalizes_string_endpoints
+    graph = build_graph([:a, :b], [[:a, :b]])
+
+    graph.remove_edge("a", "b")
+
     refute graph.edge?(:a, :b)
   end
 
   def test_remove_edge_unknown_raises
     graph = build_graph([:a, :b], [])
-    assert_raises(DAG::UnknownNodeError) { graph.remove_edge(:a, :b) }
+    error = assert_raises(DAG::UnknownNodeError) { graph.remove_edge(:a, :b) }
+
+    assert_equal "Unknown edge: a → b", error.message
   end
 
   def test_frozen_graph_rejects_remove_node
     graph = build_graph([:a], [])
     graph.freeze
-    assert_raises(FrozenError) { graph.remove_node(:a) }
+    error = assert_raises(FrozenError) { graph.remove_node(:a) }
+
+    assert_equal "can't modify frozen DAG::Graph", error.message
   end
 
   def test_frozen_graph_rejects_remove_edge
     graph = build_graph([:a, :b], [[:a, :b]])
     graph.freeze
-    assert_raises(FrozenError) { graph.remove_edge(:a, :b) }
+    error = assert_raises(FrozenError) { graph.remove_edge(:a, :b) }
+
+    assert_equal "can't modify frozen DAG::Graph", error.message
   end
 
   def test_topological_sort_after_removal
@@ -699,14 +1011,26 @@ class GraphTest < Minitest::Test
 
   def test_replace_node_renames_and_rewires_chain
     graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
-    graph.replace_node(:b, :x)
+    returned = graph.replace_node(:b, :x)
 
+    assert_same graph, returned
     assert graph.node?(:x)
     refute graph.node?(:b)
     assert graph.edge?(:a, :x)
     assert graph.edge?(:x, :c)
     assert_equal 3, graph.size
     assert_equal 2, graph.edges.size
+  end
+
+  def test_replace_node_normalizes_string_names
+    graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
+
+    graph.replace_node("b", "x")
+
+    assert graph.node?(:x)
+    refute graph.node?(:b)
+    assert graph.edge?(:a, :x)
+    assert graph.edge?(:x, :c)
   end
 
   def test_replace_node_renames_root
@@ -749,8 +1073,9 @@ class GraphTest < Minitest::Test
 
   def test_replace_node_same_name_is_noop
     graph = build_graph([:a, :b], [[:a, :b]])
-    graph.replace_node(:a, :a)
+    returned = graph.replace_node(:a, :a)
 
+    assert_same graph, returned
     assert graph.node?(:a)
     assert graph.edge?(:a, :b)
     assert_equal 2, graph.size
@@ -768,18 +1093,37 @@ class GraphTest < Minitest::Test
 
   def test_replace_node_unknown_raises
     graph = build_graph([:a], [])
-    assert_raises(DAG::UnknownNodeError) { graph.replace_node(:missing, :x) }
+    error = assert_raises(DAG::UnknownNodeError) { graph.replace_node(:missing, :x) }
+
+    assert_equal "Unknown node: missing", error.message
+  end
+
+  def test_replace_node_unknown_old_name_takes_priority_over_duplicate_new_name
+    graph = build_graph([:a], [])
+
+    error = assert_raises(DAG::UnknownNodeError) { graph.replace_node(:missing, :a) }
+    assert_equal "Unknown node: missing", error.message
   end
 
   def test_replace_node_duplicate_raises
     graph = build_graph([:a, :b], [])
-    assert_raises(DAG::DuplicateNodeError) { graph.replace_node(:a, :b) }
+    error = assert_raises(DAG::DuplicateNodeError) { graph.replace_node(:a, :b) }
+
+    assert_equal "Duplicate node: b", error.message
   end
 
   def test_frozen_graph_rejects_replace_node
     graph = build_graph([:a, :b], [[:a, :b]])
     graph.freeze
     assert_raises(FrozenError) { graph.replace_node(:a, :x) }
+  end
+
+  def test_frozen_graph_replace_node_checks_frozen_before_noop
+    graph = build_graph([:a], [])
+    graph.freeze
+
+    error = assert_raises(FrozenError) { graph.replace_node(:a, :a) }
+    assert_equal "can't modify frozen DAG::Graph", error.message
   end
 
   def test_with_node_replaced_returns_new_frozen_graph
@@ -858,6 +1202,7 @@ class GraphTest < Minitest::Test
   def test_node_predicate
     graph = build_graph([:a, :b], [])
     assert graph.node?(:a)
+    assert graph.node?("a")
     refute graph.node?(:z)
   end
 
@@ -869,11 +1214,15 @@ class GraphTest < Minitest::Test
   end
 
   def test_incoming_edges_on_sink
-    graph = build_graph([:a, :b, :c], [[:a, :c], [:b, :c]])
+    graph = DAG::Graph.new.add_node(:a).add_node(:b).add_node(:c)
+      .add_edge(:a, :c, weight: 2)
+      .add_edge(:b, :c)
     edges = graph.incoming_edges(:c)
     assert_equal 2, edges.size
     assert edges.all? { |e| e.to == :c }
     assert_equal [:a, :b], edges.map(&:from).sort
+    assert_equal({weight: 2}, edges.detect { |edge| edge.from == :a }.metadata)
+    assert_equal edges, graph.incoming_edges("c")
   end
 
   # --- Edge metadata ---
@@ -882,11 +1231,13 @@ class GraphTest < Minitest::Test
     graph = build_graph([:a, :b], [])
     graph.add_edge(:a, :b, weight: 5)
     assert_equal({weight: 5}, graph.edge_metadata(:a, :b))
+    assert_equal({weight: 5}, graph.edge_metadata("a", "b"))
   end
 
   def test_edge_metadata_default_empty
     graph = build_graph([:a, :b], [[:a, :b]])
     assert_equal({}, graph.edge_metadata(:a, :b))
+    assert_empty graph.instance_variable_get(:@edge_metadata)
   end
 
   def test_edge_weight_convenience
@@ -945,18 +1296,32 @@ class GraphTest < Minitest::Test
     graph = build_graph([:a, :b], [[:a, :b]])
     graph.freeze
     assert_same graph.topological_layers, graph.topological_layers
+    assert graph.topological_layers.frozen?
+    assert graph.topological_layers.all?(&:frozen?)
+    assert graph.topological_sort.frozen?
   end
 
   def test_frozen_graph_caches_roots
     graph = build_graph([:a, :b], [[:a, :b]])
     graph.freeze
     assert_same graph.roots, graph.roots
+    assert_equal Set[:a], graph.roots
+    assert graph.roots.frozen?
   end
 
   def test_frozen_graph_caches_leaves
     graph = build_graph([:a, :b], [[:a, :b]])
     graph.freeze
     assert_same graph.leaves, graph.leaves
+    assert_equal Set[:b], graph.leaves
+    assert graph.leaves.frozen?
+  end
+
+  def test_frozen_graph_caches_edges
+    graph = build_graph([:a, :b], [[:a, :b]])
+    graph.freeze
+    assert_same graph.edges, graph.edges
+    assert graph.edges.frozen?
   end
 
   def test_mutable_graph_does_not_cache
@@ -969,6 +1334,7 @@ class GraphTest < Minitest::Test
     graph.add_edge(:a, :b, weight: 5)
     graph.remove_edge(:a, :b)
     assert_equal({}, graph.edge_metadata(:a, :b))
+    refute graph.instance_variable_get(:@edge_metadata).key?(:a)
   end
 
   # --- Shortest / longest path ---
@@ -977,6 +1343,15 @@ class GraphTest < Minitest::Test
     graph = build_graph([:a, :b, :c], [[:a, :b], [:b, :c]])
     result = graph.shortest_path(:a, :c)
     assert_equal({cost: 2, path: [:a, :b, :c]}, result)
+  end
+
+  def test_weighted_paths_normalize_string_endpoints
+    graph = DAG::Graph.new.add_node(:a).add_node(:b).add_node(:c)
+    graph.add_edge(:a, :b, weight: 2)
+    graph.add_edge(:b, :c, weight: 3)
+
+    assert_equal({cost: 5, path: [:a, :b, :c]}, graph.shortest_path("a", "c"))
+    assert_equal({cost: 5, path: [:a, :b, :c]}, graph.longest_path("a", "c"))
   end
 
   def test_shortest_path_diamond_with_weights
@@ -993,6 +1368,29 @@ class GraphTest < Minitest::Test
   def test_shortest_path_unreachable
     graph = build_graph([:a, :b], [])
     assert_nil graph.shortest_path(:a, :b)
+  end
+
+  def test_weighted_paths_reject_unknown_same_endpoint
+    graph = build_graph([:a], [])
+
+    assert_nil graph.shortest_path(:missing, :missing)
+    assert_nil graph.longest_path(:missing, :missing)
+  end
+
+  def test_weighted_paths_reject_missing_target_even_when_internal_edge_exists
+    graph = DAG::Graph.new.add_node(:a)
+    graph.send(:insert_edge, :a, :ghost, {weight: 2})
+
+    assert_nil graph.shortest_path(:a, :ghost)
+    assert_nil graph.longest_path(:a, :ghost)
+  end
+
+  def test_weighted_paths_reject_missing_source_even_when_internal_edge_exists
+    graph = DAG::Graph.new.add_node(:a)
+    graph.send(:insert_edge, :ghost, :a, {weight: 2})
+
+    assert_nil graph.shortest_path(:ghost, :a)
+    assert_nil graph.longest_path(:ghost, :a)
   end
 
   def test_shortest_path_same_node
@@ -1017,6 +1415,16 @@ class GraphTest < Minitest::Test
     assert_equal [:a, :c, :d], result[:path]
   end
 
+  def test_longest_path_keeps_better_cost_from_earlier_predecessor
+    graph = DAG::Graph.new.add_node(:a).add_node(:b).add_node(:c).add_node(:d)
+      .add_edge(:a, :b, weight: 10)
+      .add_edge(:a, :c, weight: 1)
+      .add_edge(:b, :d, weight: 1)
+      .add_edge(:c, :d, weight: 1)
+
+    assert_equal({cost: 11, path: [:a, :b, :d]}, graph.longest_path(:a, :d))
+  end
+
   def test_longest_path_unreachable
     graph = build_graph([:a, :b], [])
     assert_nil graph.longest_path(:a, :b)
@@ -1039,6 +1447,22 @@ class GraphTest < Minitest::Test
     result = graph.critical_path
     assert_equal 11, result[:cost]
     assert_equal [:a, :c, :d], result[:path]
+  end
+
+  def test_critical_path_keeps_better_cost_from_earlier_predecessor
+    graph = DAG::Graph.new.add_node(:a).add_node(:b).add_node(:c)
+      .add_edge(:a, :c, weight: 10)
+      .add_edge(:b, :c, weight: 1)
+
+    assert_equal({cost: 10, path: [:a, :c]}, graph.critical_path)
+  end
+
+  def test_critical_path_selects_best_leaf_not_first_leaf
+    graph = DAG::Graph.new.add_node(:root).add_node(:short).add_node(:long)
+      .add_edge(:root, :short, weight: 1)
+      .add_edge(:root, :long, weight: 10)
+
+    assert_equal({cost: 10, path: [:root, :long]}, graph.critical_path)
   end
 
   def test_critical_path_single_node
@@ -1091,6 +1515,44 @@ class GraphTest < Minitest::Test
     graph = build_graph([:a, :b], [])
     graph.add_edge(:a, :b, weight: 3)
     assert_match(/a -> b \[label="weight=3"\]/, graph.to_dot)
+  end
+
+  def test_to_dot_joins_multiple_edge_metadata_with_comma_space
+    graph = build_graph([:a, :b], [])
+    graph.add_edge(:a, :b, weight: 3, label: "fast")
+
+    assert_includes graph.to_dot, %(  a -> b [label="weight=3, label=fast"];)
+  end
+
+  def test_to_dot_quotes_metadata_edge_source_names
+    graph = DAG::Graph.new.add_node(:"my-node").add_node(:b)
+    graph.add_edge(:"my-node", :b, weight: 3)
+
+    assert_includes graph.to_dot, %(  "my-node" -> b [label="weight=3"];)
+  end
+
+  def test_to_dot_quotes_metadata_edge_target_names
+    graph = DAG::Graph.new.add_node(:a).add_node(:"my-node")
+    graph.add_edge(:a, :"my-node", weight: 3)
+
+    assert_includes graph.to_dot, %(  a -> "my-node" [label="weight=3"];)
+  end
+
+  def test_to_dot_sorts_edges_from_same_node
+    graph = DAG::Graph.new.add_node(:root).add_node(:b).add_node(:a)
+    graph.add_edge(:root, :b)
+    graph.add_edge(:root, :a)
+
+    expected = <<~DOT.chomp
+      digraph dag {
+        root;
+        a;
+        b;
+        root -> a;
+        root -> b;
+      }
+    DOT
+    assert_equal expected, graph.to_dot
   end
 
   def test_to_dot_quotes_node_names_with_special_chars
@@ -1190,7 +1652,9 @@ class GraphTest < Minitest::Test
 
   def test_descendants_of_unknown_raises
     graph = build_graph([:a], [])
-    assert_raises(DAG::UnknownNodeError) { graph.descendants_of(:nope) }
+    error = assert_raises(DAG::UnknownNodeError) { graph.descendants_of(:nope) }
+
+    assert_equal "Unknown node: nope", error.message
   end
 
   def test_exclusive_descendants_diamond
@@ -1200,13 +1664,30 @@ class GraphTest < Minitest::Test
     assert_equal Set[:a, :b], graph.exclusive_descendants_of(:a)
     assert_equal Set[:c], graph.exclusive_descendants_of(:c)
     assert_equal Set[:d], graph.shared_descendants_of(:a)
+    assert_equal Set[:d], graph.shared_descendants_of("a")
     assert_equal Set[:d], graph.shared_descendants_of(:c)
   end
 
   def test_exclusive_descendants_self_only
     graph = build_graph([:a, :b], [[:a, :b]])
     assert_equal Set[:a, :b], graph.exclusive_descendants_of(:a)
+    assert_equal Set[:a, :b], graph.exclusive_descendants_of("a")
+    assert_equal Set[:b], graph.exclusive_descendants_of(:a, include_self: false)
     assert_equal Set[], graph.shared_descendants_of(:a)
+  end
+
+  def test_exclusive_descendants_unknown_raises
+    graph = build_graph([:a], [])
+    error = assert_raises(DAG::UnknownNodeError) { graph.exclusive_descendants_of(:nope) }
+
+    assert_equal "Unknown node: nope", error.message
+  end
+
+  def test_shared_descendants_unknown_raises
+    graph = build_graph([:a], [])
+    error = assert_raises(DAG::UnknownNodeError) { graph.shared_descendants_of(:nope) }
+
+    assert_equal "Unknown node: nope", error.message
   end
 
   def test_topological_order_is_alias_with_ascii_tiebreak
@@ -1224,8 +1705,7 @@ class GraphTest < Minitest::Test
     graph = DAG::Graph.new.add_node(:a).add_node(:b)
     graph.add_edge(:a, :b)
     error = assert_raises(DAG::CycleError) { graph.add_edge(:b, :a) }
-    assert_match(/b/, error.message)
-    assert_match(/a/, error.message)
+    assert_includes error.message, "Edge b → a"
   end
 
   # --- delete_metadata partial-row case ---

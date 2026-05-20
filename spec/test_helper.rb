@@ -16,6 +16,7 @@ end
 
 require "fileutils"
 require "minitest/autorun"
+require "mutant/minitest/coverage"
 require "securerandom"
 require "tempfile"
 require "tmpdir"
