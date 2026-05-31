@@ -81,7 +81,7 @@ module DAG
       # A single-node graph is trivially valid: the lone node is both root and
       # leaf, and an empty graph has nothing to check.
       def check_isolated_nodes(errors)
-        return if @graph.size <= 1
+        return if @graph.size == 1
 
         @graph.each_node do |node|
           next unless @graph.indegree(node).zero? && @graph.outdegree(node).zero?

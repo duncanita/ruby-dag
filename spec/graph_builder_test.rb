@@ -3,6 +3,8 @@
 require_relative "test_helper"
 
 class GraphBuilderTest < Minitest::Test
+  cover DAG::Graph::Builder
+
   # --- Basic building ---
 
   def test_builds_graph_with_nodes_and_edges
@@ -16,6 +18,16 @@ class GraphBuilderTest < Minitest::Test
     assert graph.node?(:a)
     assert graph.node?(:b)
     assert graph.edge?(:a, :b)
+  end
+
+  def test_add_edge_preserves_metadata
+    graph = DAG::Graph::Builder.new
+      .add_node(:a)
+      .add_node(:b)
+      .add_edge(:a, :b, weight: 7)
+      .build
+
+    assert_equal({weight: 7}, graph.edge_metadata(:a, :b))
   end
 
   def test_build_returns_frozen_graph

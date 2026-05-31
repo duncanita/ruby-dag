@@ -3,6 +3,9 @@
 require_relative "test_helper"
 
 class GraphValidatorTest < Minitest::Test
+  cover DAG::Graph::Report
+  cover DAG::Graph::Validator
+
   # --- Valid graphs ---
 
   def test_valid_graph_passes
@@ -24,6 +27,14 @@ class GraphValidatorTest < Minitest::Test
     result = DAG::Graph::Validator.validate(graph)
     refute result.valid?
     assert result.errors.any? { |e| e.include?("isolated") && e.include?("c") }
+  end
+
+  def test_instance_validator_uses_default_rules
+    graph = build_graph([:a, :b, :c], [[:a, :b]])
+    result = DAG::Graph::Validator.new(graph).run
+
+    refute result.valid?
+    assert_equal ["Node c is isolated (no edges)"], result.errors
   end
 
   def test_isolated_nodes_can_be_opted_out
@@ -87,6 +98,12 @@ class GraphValidatorTest < Minitest::Test
     assert_same graph, DAG::Graph::Validator.validate!(graph)
   end
 
+  def test_validate_bang_honors_defaults_override
+    graph = build_graph([:a, :b, :c], [[:a, :b]])
+
+    assert_same graph, DAG::Graph::Validator.validate!(graph, defaults: [])
+  end
+
   def test_validate_bang_raises_on_invalid
     graph = build_graph([:a, :b, :c], [[:a, :b]])
     error = assert_raises(DAG::ValidationError) do
@@ -94,6 +111,7 @@ class GraphValidatorTest < Minitest::Test
     end
     assert error.message.include?("isolated")
     assert_kind_of Array, error.errors
+    assert_equal ["Node c is isolated (no edges)"], error.errors
   end
 
   def test_validate_bang_raises_on_custom_rule_failure

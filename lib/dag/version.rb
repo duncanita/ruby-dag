@@ -2,5 +2,5 @@
 
 module DAG
   # Library version. Bumped per release; see `CHANGELOG.md`.
-  VERSION = "1.4.0"
+  VERSION = "1.5.0"
 end
