@@ -96,17 +96,17 @@ module DAG
           )
         end
 
-        # (see Ports::Storage#list_effects_for_node)
+        # (see Ports::EffectLedger#list_effects_for_node)
         def list_effects_for_node(workflow_id:, revision:, node_id:)
           frozen StorageState.list_effects_for_node(@state, workflow_id: workflow_id, revision: revision, node_id: node_id)
         end
 
-        # (see Ports::Storage#list_effects_for_attempt)
+        # (see Ports::EffectLedger#list_effects_for_attempt)
         def list_effects_for_attempt(attempt_id:)
           frozen StorageState.list_effects_for_attempt(@state, attempt_id: attempt_id)
         end
 
-        # (see Ports::Storage#claim_ready_effects)
+        # (see Ports::EffectLedger#claim_ready_effects)
         def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)
           frozen StorageState.claim_ready_effects(
             @state,
@@ -118,7 +118,7 @@ module DAG
           )
         end
 
-        # (see Ports::Storage#mark_effect_succeeded)
+        # (see Ports::EffectLedger#mark_effect_succeeded)
         def mark_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
           frozen StorageState.mark_effect_succeeded(
             @state,
@@ -130,7 +130,7 @@ module DAG
           )
         end
 
-        # (see Ports::Storage#mark_effect_failed)
+        # (see Ports::EffectLedger#mark_effect_failed)
         def mark_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
           frozen StorageState.mark_effect_failed(
             @state,
@@ -143,7 +143,7 @@ module DAG
           )
         end
 
-        # (see Ports::Storage#renew_effect_lease)
+        # (see Ports::EffectLedger#renew_effect_lease)
         def renew_effect_lease(effect_id:, owner_id:, until_ms:, now_ms:)
           frozen StorageState.renew_effect_lease(
             @state,
@@ -154,7 +154,7 @@ module DAG
           )
         end
 
-        # (see Ports::Storage#complete_effect_succeeded)
+        # (see Ports::EffectLedger#complete_effect_succeeded)
         def complete_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
           frozen StorageState.complete_effect_succeeded(
             @state,
@@ -166,7 +166,7 @@ module DAG
           )
         end
 
-        # (see Ports::Storage#complete_effect_failed)
+        # (see Ports::EffectLedger#complete_effect_failed)
         def complete_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
           frozen StorageState.complete_effect_failed(
             @state,
@@ -179,7 +179,7 @@ module DAG
           )
         end
 
-        # (see Ports::Storage#release_nodes_satisfied_by_effect)
+        # (see Ports::EffectLedger#release_nodes_satisfied_by_effect)
         def release_nodes_satisfied_by_effect(effect_id:, now_ms:)
           frozen StorageState.release_nodes_satisfied_by_effect(@state, effect_id: effect_id, now_ms: now_ms)
         end

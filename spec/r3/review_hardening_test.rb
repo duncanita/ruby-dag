@@ -113,7 +113,7 @@ class R3ReviewHardeningTest < Minitest::Test
     error = assert_raises(ArgumentError) do
       DAG::Effects::Dispatcher.new(
         storage: storage,
-        handlers: {"dup" => handler, dup: handler},
+        handlers: {"dup" => handler, :dup => handler},
         clock: FixedClock[now_ms: 1],
         owner_id: "worker",
         lease_ms: 10

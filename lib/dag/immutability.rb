@@ -18,6 +18,10 @@ module DAG
     deep_freeze(deep_dup(value))
   end
 
+  # Recursively freeze `value` in place (Hashes, Arrays, and their nested
+  # keys/values). Cycle-safe via `seen`. Returns the same object, frozen.
+  # @param value [Object]
+  # @return [Object] `value`, deep-frozen
   def deep_freeze(value, seen = {})
     return value if immutable_scalar?(value)
     return seen[value.object_id] if seen.key?(value.object_id)
@@ -37,6 +41,10 @@ module DAG
     value.freeze
   end
 
+  # Recursively duplicate `value` (Hashes, Arrays, unfrozen Strings).
+  # Immutable scalars and frozen Strings are returned as-is. Cycle-safe.
+  # @param value [Object]
+  # @return [Object] a structurally fresh copy
   def deep_dup(value, seen = {})
     return value if immutable_scalar?(value)
     return value if value.is_a?(String) && value.frozen?
@@ -64,6 +72,12 @@ module DAG
     end
   end
 
+  # Assert `value` is JSON-safe: String/Symbol keys without canonical
+  # collisions, scalar leaves from {JSON_SCALAR_CLASSES}, finite Floats.
+  # @param value [Object]
+  # @param path [String, Array] root label used in error messages
+  # @return [Object] `value`
+  # @raise [ArgumentError] naming the offending path on the first violation
   def json_safe!(value, path = "$root")
     json_safe_walk!(value, path.is_a?(Array) ? path : [path])
     value
