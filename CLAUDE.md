@@ -93,8 +93,28 @@ value objects and adapters.
 ## Port extensions
 
 The original roadmap port (Appendix C) listed 15 methods. The current
-effect-aware Appendix C/I shape includes the documented extensions below.
-Implementing R1's
+effect-aware shape is split in two modules: `Ports::Storage` (workflow
+rows, revisions, node states, attempts, event log) and
+`Ports::EffectLedger` (effect listing, claim, mark, renew, release,
+complete), with `Ports::Storage` including the ledger so existing
+adapters are unchanged. The Dispatcher depends only on the ledger
+subset plus `append_event`. Two methods ship port-level defaults:
+`complete_effect_succeeded`/`complete_effect_failed` (composed
+mark+release; not crash-atomic — durable adapters override atomically)
+and `list_committed_results_for_predecessors` (composed
+`load_node_states`+`list_attempts` via `DAG::AttemptOrder`; raises
+`StaleStateError` on a committed predecessor with no committed attempt,
+because the default cannot see carry-forward projections). There is no
+reflection-based capability detection: extension behavior lives in
+overridable defaults, and `thread_safe_for_dispatch?` is a documented
+port method defaulting to `false`.
+
+Documented extensions beyond the canonical roadmap list:
+`append_revision_if_workflow_state` (workflow-state guard + revision
+CAS in one boundary, used by `MutationService`),
+`claim_ready_effects(only_workflow_id:)` (V1.4 per-workflow dispatch,
+forwarded by `Dispatcher#tick(only_workflow_id:)`), and the ones
+detailed below. Implementing R1's
 `Runner#retry_workflow` per its DoD requires one operation that cannot be
 expressed via the original primitives:
 
@@ -191,14 +211,21 @@ out-of-scope for V1.2 and require their own design pass.
 Effect PR4 adds the abstract dispatcher boundary on top of those storage
 methods:
 
-- **`DAG::Effects::Dispatcher#tick(limit:)`** claims ready records, calls the
-  handler registered for each effect type, marks the effect succeeded or
-  failed, releases waiting nodes when the effect is terminal, and returns an
+- **`DAG::Effects::Dispatcher#tick(limit:, only_workflow_id: nil)`** claims
+  ready records, calls the handler registered for each effect type, completes
+  each effect through the canonical `complete_effect_*` storage methods
+  (which release waiting nodes when the effect is terminal), and returns an
   immutable `DAG::Effects::DispatchReport`.
 - Handlers implement **`#call(DAG::Effects::Record) ->
   DAG::Effects::HandlerResult`**. Handler exceptions and invalid return values
   become retriable failures; unknown effect types default to terminal failure
   unless `unknown_handler_policy: :raise` is selected.
+- When a dispatch worker raises an unexpected exception (storage failure,
+  or unknown type under `:raise`), `tick` raises
+  `DAG::Effects::DispatchAbortedError` after all workers have joined; the
+  error carries the partial `DispatchReport` via `#report` and the original
+  exception via `#cause`. Non-`StandardError` exceptions propagate
+  unwrapped.
 - When the dispatcher catches `DAG::Effects::StaleLeaseError` after a
   handler returns (the handler ran longer than `lease_ms`, so the mark
   cannot be applied), it appends a durable
@@ -274,7 +301,11 @@ lib/dag/edge.rb                           # Edge = Data.define(:from, :to, :meta
 lib/dag/graph.rb                          # Graph class
 lib/dag/graph/builder.rb                  # Builder.build { |b| ... } -> frozen Graph
 lib/dag/graph/validator.rb                # Structural validation -> Validator::Report
-lib/dag/result.rb                         # DAG::Result marker + Result.try / assert_result!
+lib/dag/result.rb                         # DAG::Result marker + Result.try / exception_failure / from_h
+lib/dag/validation.rb                     # shared primitive/instance/enum validation helpers
+lib/dag/attempt_order.rb                  # canonical committed-attempt ordering (better?/key)
+lib/dag/event_publishing.rb               # best-effort EventBus publish (swallow-all)
+lib/dag/snapshot.rb                       # indifferent-key fetch for from_h deserialization
 lib/dag/plan_version.rb                   # PlanVersion[workflow_id:, revision:]
 lib/dag/success.rb                        # Success(value:, context_patch:, proposed_mutations:, proposed_effects:, metadata:)
 lib/dag/failure.rb                        # Failure(error:, retriable:, metadata:)
@@ -293,9 +324,11 @@ lib/dag/effects/record.rb                 # durable effect snapshot
 lib/dag/effects/handler_result.rb         # abstract dispatcher handler result
 lib/dag/effects/dispatch_report.rb        # immutable dispatcher tick report
 lib/dag/effects/dispatcher.rb             # abstract effect dispatcher
+lib/dag/effects/dispatch_aborted_error.rb # tick abort error carrying the partial report
 lib/dag/effects/await.rb                  # monadic Waiting/Failure/Success composition helper
 lib/dag/immutability.rb                   # deep_freeze, deep_dup, json_safe!
-lib/dag/ports/storage.rb                  # Ports::Storage interface
+lib/dag/ports/effect_ledger.rb            # Ports::EffectLedger (effect surface + complete_* defaults)
+lib/dag/ports/storage.rb                  # Ports::Storage interface (includes EffectLedger)
 lib/dag/ports/event_bus.rb                # Ports::EventBus interface
 lib/dag/ports/fingerprint.rb              # Ports::Fingerprint interface
 lib/dag/ports/clock.rb                    # Ports::Clock interface
@@ -308,7 +341,18 @@ lib/dag/step_type_registry.rb             # DAG::StepTypeRegistry
 lib/dag/builtin_steps/noop.rb             # :noop -> Success(nil, {})
 lib/dag/builtin_steps/passthrough.rb      # :passthrough -> Success(context, context)
 lib/dag/workflow/definition.rb            # DAG::Workflow::Definition (immutable, chainable)
+lib/dag/workflow/definition/builder.rb    # bulk builder (mutable until build; use for large graphs)
 lib/dag/runner.rb                         # DAG::Runner kernel + private RunContext carrier
+lib/dag/mutation_service.rb               # durable structural mutations (R3)
+lib/dag/definition_editor.rb              # pure mutation planning -> PlanResult
+lib/dag/plan_result.rb                    # mutation plan value
+lib/dag/apply_result.rb                   # mutation apply receipt
+lib/dag/diagnostics.rb                    # storage-derived diagnostics facade
+lib/dag/node_diagnostic.rb                # immutable per-node diagnostic value
+lib/dag/trace_record.rb                   # normalized event trace value
+lib/dag/runtime_snapshot.rb               # public step-side runtime boundary
+lib/dag/toolkit.rb                        # in-memory kit factory for examples/tests
+lib/dag/testing/storage_contract.rb       # shareable storage adapter contract suite (+ storage_contract/)
 lib/dag/adapters/stdlib/clock.rb          # wall + monotonic ms
 lib/dag/adapters/stdlib/id_generator.rb   # SecureRandom.uuid
 lib/dag/adapters/stdlib/fingerprint.rb    # JSON-canonical SHA256
@@ -317,13 +361,16 @@ lib/dag/adapters/null/event_bus.rb        # drops everything; optional logger
 lib/dag/adapters/memory/event_bus.rb      # bounded ring buffer + subscribers
 lib/dag/adapters/memory/storage.rb        # facade; deep-dup-freezes returns
 lib/dag/adapters/memory/storage_state.rb  # mutable bookkeeping (only spot in lib/dag/** allowed to mutate)
+lib/dag/adapters/memory/crashable_storage.rb # crash-injection test adapter
 ```
 
-Tests live in `spec/r0/` (R0 invariants), `spec/r1/` (R1 DoD), and `spec/r2/`
-(R2 DoD). Roadmap paths written as `test/r*/...` map to this repo's
-`spec/r*/...` layout. Shared helpers under
-`spec/support/{runner_factory,workflow_builders,step_helpers}.rb` are
-auto-included into `Minitest::Test` by `spec/test_helper.rb`.
+Tests live in `spec/r0/` (R0 invariants), `spec/r1/` (R1 DoD), `spec/r2/`
+(R2 DoD), and `spec/r3/` (R3 mutations + hardening). Roadmap paths written
+as `test/r*/...` map to this repo's `spec/r*/...` layout. Shared helpers
+under `spec/support/` are auto-included into `Minitest::Test` by
+`spec/test_helper.rb`. CI runs `bundle exec rake` with `COVERAGE=1`, which
+enforces the SimpleCov gate (100% line / 90% branch) from
+`spec/test_helper.rb`.
 
 ## Error hierarchy
 
@@ -337,11 +384,14 @@ All errors inherit from `DAG::Error < StandardError`:
 - `StaleStateError`, `StaleRevisionError`, `ConcurrentMutationError`
 - `FingerprintMismatchError`
 - `UnknownStepTypeError`, `UnknownWorkflowError`
+- `DuplicateWorkflowError`, `UnknownAttemptError`
 - `WorkflowRetryExhaustedError`
 - `DAG::Effects::IdempotencyConflictError`
 - `DAG::Effects::StaleLeaseError`
 - `DAG::Effects::UnknownEffectError`
 - `DAG::Effects::UnknownHandlerError`
+- `DAG::Effects::DispatchAbortedError` (carries `#report`, the partial
+  `DispatchReport`; original exception on `#cause`)
 
 Adding a duplicate edge is **not** an error — `add_edge` is idempotent.
 
@@ -382,8 +432,10 @@ public surface) without paying ceremony for private scaffolding.
   caught at the Runner boundary as
   `Failure[error: {code: :step_bad_return, ...}, retriable: false]`.
 - `StandardError` raised in `#call` is converted to
-  `Failure[error: {code: :step_raised, class:, message:}, retriable: false]`.
-  `NoMemoryError`, `SystemExit`, and `Interrupt` propagate.
+  `Failure[error: {code: :step_raised, message:, error_class:},
+  retriable: false]` via `DAG::Result.exception_failure`. Rescued
+  exceptions always travel under the `error_class:` key across the
+  kernel. `NoMemoryError`, `SystemExit`, and `Interrupt` propagate.
 - `count_attempts` excludes `:aborted` attempts.
   `Storage#prepare_workflow_retry` marks failed attempts as `:aborted` so
   the per-node attempt budget resets across workflow retries, and owns the
@@ -410,9 +462,10 @@ public surface) without paying ceremony for private scaffolding.
 - Event types are the closed set in `DAG::Event::TYPES`. The Runner
   emits `:workflow_started` once per workflow (idempotent via event log
   inspection), `:node_started` / `:node_committed` / `:node_waiting` /
-  `:node_failed` per attempt, and one terminal
+  `:node_failed` per attempt, one terminal
   `:workflow_completed` / `:workflow_waiting` / `:workflow_paused` /
-  `:workflow_failed`.
+  `:workflow_failed`, and `:workflow_retrying` durably inside
+  `prepare_workflow_retry` on every `Runner#retry_workflow`.
 - `Memory::Storage` events get a monotonic `seq`; `read_events(after_seq:,
   limit:)` filters by it. `EventBus#publish` sees the same stamped event
   the storage appended.

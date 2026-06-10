@@ -2,8 +2,8 @@
 
 module DAG
   # Public, immutable node diagnostic derived from storage-owned node state,
-  # attempts, and abstract effect records. It intentionally excludes any UI,
-  # model, prompt, channel, or runtime-specific object.
+  # attempts, and abstract effect records. It intentionally excludes any
+  # presentation-, channel-, or consumer-runtime-specific object.
   # @api public
   NodeDiagnostic = Data.define(
     :workflow_id,

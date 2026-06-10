@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+Project-review hardening pass: design fixes at the storage-port seams,
+DRY consolidation, performance work, and CI/cop enforcement.
+
+### Added
+
+- `DAG::Ports::EffectLedger`, split out of `Ports::Storage` (which now
+  includes it): the Dispatcher depends only on the ledger surface plus
+  `append_event`. `complete_effect_succeeded` / `complete_effect_failed`
+  are the canonical completion path with composed (non crash-atomic)
+  port defaults; `thread_safe_for_dispatch?` is a documented port method
+  defaulting to `false`.
+- `Dispatcher#tick(only_workflow_id:)` forwards the V1.4 per-workflow
+  claim filter.
+- `DAG::Effects::DispatchAbortedError`: an aborted tick no longer
+  discards the outcomes sibling workers already durably applied — the
+  error carries the partial `DispatchReport` (`#report`) and the
+  original exception (`#cause`).
+- Durable `:workflow_retrying` event appended atomically by
+  `Runner#retry_workflow` via `prepare_workflow_retry(event:)`; new
+  TraceRecord status `:retrying`.
+- Full-fidelity `to_h` / `from_h` round-trip for `Success`, `Failure`,
+  `Waiting`, `Effects::Intent`, `ProposedMutation`, `ReplacementGraph`,
+  and `Graph`, with `DAG::Result.from_h` as the deserialization entry
+  point (Symbol or String keys).
+- `DAG::AttemptOrder` (single definition of the canonical
+  committed-attempt ordering), `DAG::EventPublishing.publish_quietly`,
+  `DAG::Snapshot` indifferent fetch, `Validation.optional_node_id!`.
+- `DAG::DuplicateWorkflowError` and `DAG::UnknownAttemptError` replace
+  bare `ArgumentError` for those storage states.
+- Executable §9.1 grep gate: `spec/r0/kernel_ai_terms_test.rb`.
+
+### Changed
+
+- `Ports::Storage.method_overridden?` removed; extension behavior lives
+  in overridable port defaults instead of `Method#owner` reflection
+  (which broke under decorators/proxies).
+- `list_committed_results_for_predecessors` port default raises
+  `StaleStateError` for a committed predecessor with no committed
+  attempt instead of silently dropping its `context_patch` (the old
+  Runner fallback bug).
+- Rescued-exception payloads use one vocabulary: `error_class:`
+  everywhere (`:handler_raised`, `:effect_idempotency_conflict`);
+  `:handler_bad_return` uses `returned_class:`.
+- `ExecutionContext#merge` validates and copies only the patch
+  (canonical key collisions still rejected) instead of re-walking the
+  whole context per predecessor per attempt (~300x faster on large
+  contexts); `Memory::StorageState` gains per-node attempt and active
+  effect indexes, removing the per-execution full-ledger scans.
+- Retriable `Failure` documented as immediate-retry by design; delayed
+  retries belong to `Waiting` + effects. Single-runner invariant on the
+  crash-resume path documented on the port and in `CONTRACT.md`.
+- CI consolidated to one workflow (Ruby 3.4 / 4.0 / head matrix)
+  running with `COVERAGE=1`, so the SimpleCov gate (100% line / 90%
+  branch) is enforced; cops tightened (`Fiber` banned everywhere,
+  `Kernel.system`/`spawn`/`fork` flagged, stdlib require allowlist
+  trimmed to the frozen §3 list, `mutation_service.rb` added to the
+  in-place-mutation cop scope).
+
 ## 1.5.0 — 2026-05-31
 
 V1.5 is a mutation-testing release. It adds a focused Mutant gate for the
