@@ -96,12 +96,25 @@ module DAG
 
     # Reset `:failed` nodes for the workflow's current revision and run
     # the workflow again; subject to `runtime_profile.max_workflow_retries`.
+    # Appends a durable `:workflow_retrying` event in the same atomic step
+    # as the retry transition, so the event log explains the
+    # `workflow_failed -> node_started` sequence a retry produces.
     # @param workflow_id [String]
     # @return [DAG::RunResult]
     # @raise [DAG::StaleStateError] when the workflow is not `:failed`
     # @raise [DAG::WorkflowRetryExhaustedError] when the budget is spent
     def retry_workflow(workflow_id)
-      @storage.prepare_workflow_retry(id: workflow_id, from: :failed, to: :pending)
+      workflow = @storage.load_workflow(id: workflow_id)
+      event = DAG::Event[
+        type: :workflow_retrying,
+        workflow_id: workflow_id,
+        revision: workflow[:current_revision],
+        at_ms: @clock.now_ms,
+        payload: {}
+      ]
+      result = @storage.prepare_workflow_retry(id: workflow_id, from: :failed, to: :pending, event: event)
+      stamped = result.is_a?(Hash) ? result[:event] : nil
+      publish_event(stamped) if stamped
       call(workflow_id)
     end
 

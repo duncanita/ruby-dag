@@ -4,6 +4,14 @@ module DAG
   # Step result indicating the step failed. `error` is a JSON-safe value
   # describing the failure; `retriable: true` lets the Runner retry the
   # node within the per-node attempt budget.
+  #
+  # Retry timing is deliberately immediate: a retriable Failure makes the
+  # node `:pending` again and the Runner re-executes it in the same
+  # `#call`, so the attempt budget can be consumed back-to-back. There is
+  # no backoff field here by design — a step that wants to retry *later*
+  # must return `Waiting` (optionally with `not_before_ms` and a blocking
+  # effect) so the delay is owned by the scheduler/dispatcher boundary,
+  # not by the kernel's failure semantics.
   # @api public
   Failure = Data.define(:error, :retriable, :metadata) do
     include Result

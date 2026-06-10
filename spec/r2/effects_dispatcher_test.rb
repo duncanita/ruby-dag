@@ -94,12 +94,50 @@ class EffectsDispatcherTest < Minitest::Test
     assert_equal effect.id, report.errors.first[:effect_id]
   end
 
-  def test_unknown_handler_raise_policy_raises
+  def test_unknown_handler_raise_policy_aborts_tick_with_cause
     storage = DAG::Adapters::Memory::Storage.new
     commit_waiting_effect(storage, node_id: :a, effect_type: "missing")
     dispatcher = build_dispatcher(storage, handlers: {}, unknown_handler_policy: :raise)
 
-    assert_raises(DAG::Effects::UnknownHandlerError) { dispatcher.tick(limit: 1) }
+    error = assert_raises(DAG::Effects::DispatchAbortedError) { dispatcher.tick(limit: 1) }
+    assert_instance_of DAG::Effects::UnknownHandlerError, error.cause
+    assert_kind_of DAG::Error, error
+    assert_kind_of DAG::Effects::DispatchReport, error.report
+    assert_equal 1, error.report.claimed.size
+    assert_empty error.report.succeeded
+  end
+
+  def test_aborted_tick_report_keeps_outcomes_completed_before_the_abort
+    storage = DAG::Adapters::Memory::Storage.new
+    ok_effect = commit_waiting_effect(storage, node_id: :a, effect_type: "ok", effect_key: "k-ok")
+    commit_waiting_effect(storage, node_id: :b, effect_type: "missing", effect_key: "k-missing")
+    dispatcher = build_dispatcher(storage,
+      handlers: {"ok" => ->(_record) { DAG::Effects::HandlerResult.succeeded(result: {done: true}) }},
+      unknown_handler_policy: :raise)
+
+    error = assert_raises(DAG::Effects::DispatchAbortedError) { dispatcher.tick(limit: 2) }
+
+    assert_instance_of DAG::Effects::UnknownHandlerError, error.cause
+    assert_equal 2, error.report.claimed.size
+    assert_equal [ok_effect.id], error.report.succeeded.map(&:id)
+    assert_equal 1, error.report.released.size
+    # The aborted record stays :dispatching until its lease expires.
+    statuses = storage.list_effects_for_node(workflow_id: error.report.claimed.last.workflow_id, revision: 1, node_id: :b)
+    assert_equal [:dispatching], statuses.map(&:status)
+  end
+
+  def test_tick_forwards_only_workflow_id_to_claim
+    storage = DAG::Adapters::Memory::Storage.new
+    target = commit_waiting_effect(storage, node_id: :a, effect_type: "scoped", effect_key: "k-a")
+    other = commit_waiting_effect(storage, node_id: :b, effect_type: "scoped", effect_key: "k-b")
+    refute_equal target.workflow_id, other.workflow_id
+    dispatcher = build_dispatcher(storage,
+      handlers: {"scoped" => ->(_record) { DAG::Effects::HandlerResult.succeeded(result: {}) }})
+
+    report = dispatcher.tick(limit: 10, only_workflow_id: target.workflow_id)
+
+    assert_equal [target.id], report.claimed.map(&:id)
+    assert_equal [target.id], report.succeeded.map(&:id)
   end
 
   def test_handler_exception_becomes_retriable_failure

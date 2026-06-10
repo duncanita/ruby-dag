@@ -25,7 +25,7 @@ class R0V13ReleaseGateTest < Minitest::Test
     dispatcher = File.read(File.join(ROOT, "lib/dag/effects/dispatcher.rb"))
 
     assert_includes dispatcher, "parallelism: 1"
-    assert_includes dispatcher, "def parallel_map(items)"
+    assert_includes dispatcher, "def parallel_map(items, &block)"
     assert_includes dispatcher, "def validate_parallelism_storage!"
     assert_includes dispatcher, "thread_safe_for_dispatch?"
   end
