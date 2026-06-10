@@ -92,6 +92,28 @@ class RetryWorkflowTest < Minitest::Test
     assert_equal :pending, node_state(healthy_storage, workflow_id, :flaky)
   end
 
+  def test_retry_workflow_appends_durable_workflow_retrying_event
+    storage = DAG::Adapters::Memory::Storage.new
+    registry, _counter = registry_with_failing_step(failures_before_success: 1)
+    runner = build_runner(storage: storage, registry: registry)
+
+    definition = DAG::Workflow::Definition.new.add_node(:flaky, type: :flaky)
+    workflow_id = create_workflow(storage, definition,
+      runtime_profile: profile(max_attempts_per_node: 1, max_workflow_retries: 1))
+
+    assert_equal :failed, runner.call(workflow_id).state
+    assert_equal :completed, runner.retry_workflow(workflow_id).state
+
+    events = storage.read_events(workflow_id: workflow_id)
+    retrying = events.select { |e| e.type == :workflow_retrying }
+    assert_equal 1, retrying.size
+    failed_seq = events.find { |e| e.type == :workflow_failed }.seq
+    assert_operator retrying.first.seq, :>, failed_seq,
+      "workflow_retrying must follow the workflow_failed it explains"
+    assert_equal :workflow_started, events.first.type,
+      "workflow_started stays once-per-lifetime; retry must not re-emit it"
+  end
+
   def test_retry_does_not_overwrite_aborted_attempt_records
     storage = DAG::Adapters::Memory::Storage.new
     registry, _counter = registry_with_failing_step(failures_before_success: 4)

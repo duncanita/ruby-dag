@@ -76,8 +76,8 @@ module DAG
     )
       DAG::Validation.string!(workflow_id, "workflow_id")
       DAG::Validation.revision!(revision)
-      DAG::Validation.node_id!(node_id) unless node_id.nil?
-      DAG::Validation.string!(attempt_id, "attempt_id") unless attempt_id.nil?
+      DAG::Validation.optional_node_id!(node_id)
+      DAG::Validation.optional_string!(attempt_id, "attempt_id")
       DAG::Validation.integer!(at_ms, "at_ms")
       DAG::Validation.member!(status, DAG::TraceRecord::STATUSES, "status", message: "invalid trace status: #{status.inspect}")
       DAG::Validation.member!(event_type, DAG::Event::TYPES, "event_type", message: "invalid event type: #{event_type.inspect}")
@@ -114,7 +114,7 @@ module DAG
   end
 
   # Closed normalized status vocabulary used by TraceRecord.
-  TraceRecord::STATUSES = %i[started success waiting failed paused completed mutation_applied effect_dispatch_stale_lease].freeze
+  TraceRecord::STATUSES = %i[started success waiting failed paused completed retrying mutation_applied effect_dispatch_stale_lease].freeze
 
   # Mapping from durable event types to normalized trace statuses.
   TraceRecord::EVENT_STATUS = {
@@ -127,6 +127,7 @@ module DAG
     workflow_waiting: :waiting,
     workflow_completed: :completed,
     workflow_failed: :failed,
+    workflow_retrying: :retrying,
     mutation_applied: :mutation_applied,
     effect_dispatch_stale_lease: :effect_dispatch_stale_lease
   }.freeze

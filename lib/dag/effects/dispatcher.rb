@@ -32,7 +32,7 @@ module DAG
           DAG::Validation.optional_hash!(error, "error")
           DAG.json_safe!(error, "$root.error")
 
-          super(result: result, error: DAG::Effects.frozen_copy_or_nil(error))
+          super(result: result, error: DAG.frozen_copy(error))
         end
       end
       private_constant :HandlerOutcome
@@ -84,7 +84,7 @@ module DAG
             succeeded_record: succeeded_record,
             failed_record: failed_record,
             released: DAG.frozen_copy(released),
-            error: DAG::Effects.frozen_copy_or_nil(error)
+            error: DAG.frozen_copy(error)
           )
         end
 
@@ -129,27 +129,45 @@ module DAG
       end
 
       # Claim and dispatch up to `limit` ready effects.
+      #
+      # When a worker raises an unexpected exception (dispatcher-side storage
+      # failure, or `unknown_handler_policy: :raise`), the tick aborts but
+      # the outcomes that completed before the abort are not lost: they are
+      # wrapped in the {DispatchAbortedError#report} of the raised error,
+      # with the original exception as `#cause`.
+      #
       # @param limit [Integer]
+      # @param only_workflow_id [String, nil] when non-nil, claim only
+      #   effects linked to the given workflow (per-workflow dispatch, V1.4)
       # @return [DAG::Effects::DispatchReport]
-      def tick(limit:)
+      # @raise [DAG::Effects::DispatchAbortedError]
+      def tick(limit:, only_workflow_id: nil)
         DAG::Validation.nonnegative_integer!(limit, "limit")
+        DAG::Validation.optional_string!(only_workflow_id, "only_workflow_id")
 
         now_ms = @clock.now_ms
         claimed = @storage.claim_ready_effects(
           limit: limit,
           owner_id: @owner_id,
           lease_ms: @lease_ms,
-          now_ms: now_ms
+          now_ms: now_ms,
+          only_workflow_id: only_workflow_id
         )
-        outcomes = parallel_map(claimed) { |record| dispatch_record(record) }
+        outcomes, abort_error = parallel_map(claimed) { |record| dispatch_record(record) }
 
-        DispatchReport[
+        completed = outcomes.compact
+        report = DispatchReport[
           claimed: claimed,
-          succeeded: outcomes.map(&:succeeded_record).compact,
-          failed: outcomes.map(&:failed_record).compact,
-          released: outcomes.flat_map(&:released),
-          errors: outcomes.map(&:error).compact
+          succeeded: completed.map(&:succeeded_record).compact,
+          failed: completed.map(&:failed_record).compact,
+          released: completed.flat_map(&:released),
+          errors: completed.map(&:error).compact
         ]
+        return report if abort_error.nil?
+        raise abort_error unless abort_error.is_a?(StandardError)
+
+        raise DispatchAbortedError.new("dispatch tick aborted: #{abort_error.message}", report: report),
+          cause: abort_error
       end
 
       private
@@ -157,10 +175,11 @@ module DAG
       # Bounded-concurrency parallel map. At most `@parallelism` worker
       # threads in flight regardless of `items.length`. Result order
       # matches input order (slot-indexed writes; no shared mutation
-      # otherwise). Unexpected exceptions raised inside a worker thread
-      # re-emerge from `#tick` only after every worker has joined, so the
-      # caller is guaranteed that no worker is still mutating storage
-      # when `tick` raises.
+      # otherwise). Returns `[results, first_error_or_nil]`; `#tick` turns a
+      # captured error into a `DispatchAbortedError` carrying the partial
+      # report, only after every worker has joined, so the caller is
+      # guaranteed that no worker is still mutating storage when `tick`
+      # raises.
       #
       # The exception path is *captured*, not *raised*, inside each
       # worker: `Thread#join` re-raises any exception that escaped a
@@ -170,13 +189,12 @@ module DAG
       # `worker_errors` array (no contention: each worker writes a
       # different index), *drains the work queue* (so peer workers see
       # `ThreadError` on their next `pop` and exit instead of pulling
-      # more records), and breaks out of the loop normally. Once every
-      # worker has joined we raise the first captured exception.
+      # more records), and breaks out of the loop normally.
       # Draining uses the queue itself as the abort signal, so
       # synchronization rides on `Queue`'s built-in thread-safety rather
       # than on Ruby's array-mutation visibility across threads.
-      def parallel_map(items)
-        return items.map { |item| yield item } if @parallelism <= 1 || items.length <= 1
+      def parallel_map(items, &block)
+        return serial_map(items, &block) if @parallelism <= 1 || items.length <= 1
 
         pool_size = (@parallelism < items.length) ? @parallelism : items.length
         results = Array.new(items.length)
@@ -203,10 +221,21 @@ module DAG
           end
         end
         workers.each(&:join)
-        first_error = worker_errors.compact.first
-        raise first_error if first_error
+        [results, worker_errors.compact.first]
+      end
 
-        results
+      # Serial counterpart of `parallel_map` with the same
+      # `[results, first_error_or_nil]` contract: on error, the items
+      # processed so far keep their outcomes and the remainder stays
+      # unprocessed (their leases expire and a future tick re-claims them).
+      def serial_map(items)
+        results = Array.new(items.length)
+        items.each_with_index do |item, idx|
+          results[idx] = yield item
+        rescue Exception => exception # standard:disable Lint/RescueException
+          return [results, exception]
+        end
+        [results, nil]
       end
 
       # Empties `queue` non-blockingly. Used to signal peer workers to
@@ -281,7 +310,7 @@ module DAG
       end
 
       def bad_return_outcome(record, result)
-        error = effect_error(record, code: :handler_bad_return).merge(class: result.class.name)
+        error = effect_error(record, code: :handler_bad_return).merge(returned_class: result.class.name)
         HandlerOutcome[
           result: DAG::Effects::HandlerResult.failed(error: error, retriable: true),
           error: error
@@ -290,7 +319,7 @@ module DAG
 
       def raised_handler_outcome(record, caught)
         error = effect_error(record, code: :handler_raised)
-          .merge(class: caught.class.name, message: caught.message)
+          .merge(error_class: caught.class.name, message: caught.message)
         HandlerOutcome[
           result: DAG::Effects::HandlerResult.failed(error: error, retriable: true),
           error: error
@@ -318,39 +347,17 @@ module DAG
       end
 
       def complete_effect_succeeded(record, result, now_ms)
-        if DAG::Ports::Storage.method_overridden?(@storage, :complete_effect_succeeded)
-          return @storage.complete_effect_succeeded(
-            effect_id: record.id,
-            owner_id: @owner_id,
-            result: result.result,
-            external_ref: result.external_ref,
-            now_ms: now_ms
-          )
-        end
-
-        updated = @storage.mark_effect_succeeded(
+        @storage.complete_effect_succeeded(
           effect_id: record.id,
           owner_id: @owner_id,
           result: result.result,
           external_ref: result.external_ref,
           now_ms: now_ms
         )
-        {record: updated, released: release_if_terminal(updated, now_ms)}
       end
 
       def complete_effect_failed(record, result, now_ms)
-        if DAG::Ports::Storage.method_overridden?(@storage, :complete_effect_failed)
-          return @storage.complete_effect_failed(
-            effect_id: record.id,
-            owner_id: @owner_id,
-            error: result.error,
-            retriable: result.retriable?,
-            not_before_ms: result.not_before_ms,
-            now_ms: now_ms
-          )
-        end
-
-        updated = @storage.mark_effect_failed(
+        @storage.complete_effect_failed(
           effect_id: record.id,
           owner_id: @owner_id,
           error: result.error,
@@ -358,13 +365,6 @@ module DAG
           not_before_ms: result.not_before_ms,
           now_ms: now_ms
         )
-        {record: updated, released: release_if_terminal(updated, now_ms)}
-      end
-
-      def release_if_terminal(updated, now_ms)
-        return [] unless updated.terminal?
-
-        @storage.release_nodes_satisfied_by_effect(effect_id: updated.id, now_ms: now_ms)
       end
 
       def stale_lease_error(record, error)
@@ -395,12 +395,15 @@ module DAG
         handlers.to_h { |type, handler| [type.to_s, handler] }.freeze
       end
 
+      # The dispatcher's storage dependency is the `Ports::EffectLedger`
+      # completion surface plus the durable event log. Adapters that only
+      # implement the mark/release primitives get `complete_effect_*` for
+      # free by including `Ports::EffectLedger`.
       def validate_storage!(value)
         %i[
           claim_ready_effects
-          mark_effect_succeeded
-          mark_effect_failed
-          release_nodes_satisfied_by_effect
+          complete_effect_succeeded
+          complete_effect_failed
           append_event
         ].each do |method_name|
           DAG::Validation.dependency!(value, method_name, "storage")

@@ -433,6 +433,26 @@ module DAG
       lines.join("\n")
     end
 
+    # Rebuild a frozen Graph from a {#to_h} projection. Accepts Symbol or
+    # String keys (a serializer round-trip turns Symbols into Strings);
+    # edge metadata keys are restored to Symbols.
+    # @param hash [Hash]
+    # @return [DAG::Graph] frozen
+    def self.from_h(hash)
+      DAG::Validation.hash!(hash, "graph hash")
+      graph = new
+      DAG::Snapshot.fetch(hash, :nodes, []).each { |id| graph.add_node(id) }
+      DAG::Snapshot.fetch(hash, :edges, []).each do |edge|
+        metadata = DAG::Snapshot.fetch(edge, :metadata, {})
+        graph.add_edge(
+          DAG::Snapshot.fetch!(edge, :from),
+          DAG::Snapshot.fetch!(edge, :to),
+          **metadata.transform_keys(&:to_sym)
+        )
+      end
+      graph.freeze
+    end
+
     # Canonical, ASCII-sorted hash representation suitable for fingerprinting.
     # @return [Hash]
     def to_h

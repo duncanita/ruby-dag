@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -13,6 +16,7 @@ jobs:
       matrix:
         ruby:
           - "3.4"
+          - "4.0"
           - head
     steps:
       - uses: actions/checkout@v4
@@ -20,4 +24,8 @@ jobs:
         with:
           ruby-version: ${{ matrix.ruby }}
           bundler-cache: true
+      # COVERAGE=1 turns on the SimpleCov gate in spec/test_helper.rb so the
+      # rake run enforces coverage, not just tests + standardrb.
       - run: bundle exec rake
+        env:
+          COVERAGE: "1"

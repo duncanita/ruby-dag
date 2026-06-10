@@ -96,12 +96,25 @@ module DAG
 
     # Reset `:failed` nodes for the workflow's current revision and run
     # the workflow again; subject to `runtime_profile.max_workflow_retries`.
+    # Appends a durable `:workflow_retrying` event in the same atomic step
+    # as the retry transition, so the event log explains the
+    # `workflow_failed -> node_started` sequence a retry produces.
     # @param workflow_id [String]
     # @return [DAG::RunResult]
     # @raise [DAG::StaleStateError] when the workflow is not `:failed`
     # @raise [DAG::WorkflowRetryExhaustedError] when the budget is spent
     def retry_workflow(workflow_id)
-      @storage.prepare_workflow_retry(id: workflow_id, from: :failed, to: :pending)
+      workflow = @storage.load_workflow(id: workflow_id)
+      event = DAG::Event[
+        type: :workflow_retrying,
+        workflow_id: workflow_id,
+        revision: workflow[:current_revision],
+        at_ms: @clock.now_ms,
+        payload: {}
+      ]
+      result = @storage.prepare_workflow_retry(id: workflow_id, from: :failed, to: :pending, event: event)
+      stamped = result.is_a?(Hash) ? result[:event] : nil
+      publish_event(stamped) if stamped
       call(workflow_id)
     end
 
@@ -307,12 +320,8 @@ module DAG
     end
 
     def commit_idempotency_conflict(run, node_id, attempt_id, attempt_number, conflict)
-      error = {
-        code: :effect_idempotency_conflict,
-        class: conflict.class.name,
-        message: conflict.message
-      }
-      failure = DAG::Failure[error: error, retriable: false]
+      failure = DAG::Result.exception_failure(:effect_idempotency_conflict, conflict)
+      error = failure.error
       event = build_event(run,
         type: :node_failed,
         node_id: node_id,
@@ -419,45 +428,11 @@ module DAG
     end
 
     def committed_results_for_predecessors(run, predecessors)
-      if DAG::Ports::Storage.method_overridden?(@storage, :list_committed_results_for_predecessors)
-        return @storage.list_committed_results_for_predecessors(
-          workflow_id: run.workflow_id,
-          revision: run.revision,
-          predecessors: predecessors
-        )
-      end
-
-      predecessors.each_with_object({}) do |pred, results|
-        attempts = @storage.list_attempts(workflow_id: run.workflow_id, revision: run.revision, node_id: pred)
-        committed = canonical_committed_attempt(attempts)
-        results[pred] = committed[:result] if committed
-      end
-    end
-
-    # Pick the canonical committed attempt independent of `list_attempts`
-    # ordering: highest `attempt_number`, with `attempt_id.to_s` ASCII as
-    # a defensive tie-break. Single-pass; avoids the intermediate Array
-    # and per-element key Array that `select`/`max_by` would allocate on
-    # this hot path.
-    def canonical_committed_attempt(attempts)
-      best = nil
-      best_id = nil
-      attempts.each do |a|
-        next unless a[:state] == :committed
-        n = a.fetch(:attempt_number)
-        if best.nil? || n > best.fetch(:attempt_number)
-          best = a
-          best_id = nil
-        elsif n == best.fetch(:attempt_number)
-          best_id ||= best.fetch(:attempt_id).to_s
-          candidate_id = a.fetch(:attempt_id).to_s
-          if candidate_id > best_id
-            best = a
-            best_id = candidate_id
-          end
-        end
-      end
-      best
+      @storage.list_committed_results_for_predecessors(
+        workflow_id: run.workflow_id,
+        revision: run.revision,
+        predecessors: predecessors
+      )
     end
 
     def safe_call_step(run, node_id, input)
@@ -502,25 +477,27 @@ module DAG
     end
 
     def transition_and_emit_terminal(run, state, event_type, payload)
-      atomic_transition_with_event(run, from: :running, to: state, event_type: event_type, payload: payload)
-      build_run_result(run, state)
+      stamped = atomic_transition_with_event(run, from: :running, to: state, event_type: event_type, payload: payload)
+      build_run_result(run, state, last_event_seq: stamped&.seq)
     end
 
     # Atomic at the storage layer: the row transition and the event append
     # cannot diverge under crash. The event_bus publish happens after the
-    # storage call returns and is best-effort (non-durable).
+    # storage call returns and is best-effort (non-durable). Returns the
+    # stamped event (or nil for adapters that do not return it).
     def atomic_transition_with_event(run, from:, to:, event_type:, payload:)
       event = build_event(run, type: event_type, payload: payload)
       result = @storage.transition_workflow_state(id: run.workflow_id, from: from, to: to, event: event)
       stamped = result.is_a?(Hash) ? result[:event] : nil
       publish_event(stamped) if stamped
+      stamped
     end
 
-    def build_run_result(run, state)
-      events = @storage.read_events(workflow_id: run.workflow_id)
+    def build_run_result(run, state, last_event_seq: nil)
+      last_event_seq ||= @storage.read_events(workflow_id: run.workflow_id).last&.seq
       DAG::RunResult.new(
         state: state,
-        last_event_seq: events.last&.seq,
+        last_event_seq: last_event_seq,
         outcome: {workflow_id: run.workflow_id, revision: run.revision},
         metadata: {}
       )
@@ -544,9 +521,7 @@ module DAG
     end
 
     def publish_event(event)
-      @event_bus.publish(event)
-    rescue
-      nil
+      DAG::EventPublishing.publish_quietly(@event_bus, event)
     end
   end
 end

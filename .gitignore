@@ -6,3 +6,4 @@
 /.rubocop_cache/
 /doc/
 /.yardoc/
+/.sentrux/

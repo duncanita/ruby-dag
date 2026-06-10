@@ -63,6 +63,37 @@ module DAG
         metadata: DAG.frozen_copy(metadata)
       )
     end
+
+    # Full-fidelity JSON-safe projection; round-trips via
+    # {ProposedMutation.from_h}.
+    # @return [Hash]
+    def to_h
+      {
+        kind: kind,
+        target_node_id: target_node_id,
+        replacement_graph: replacement_graph&.to_h,
+        rationale: rationale,
+        confidence: confidence,
+        metadata: metadata
+      }
+    end
+
+    # Rebuild a ProposedMutation from a {#to_h} projection (Symbol or
+    # String keys).
+    # @param hash [Hash]
+    # @return [ProposedMutation]
+    def self.from_h(hash)
+      DAG::Validation.hash!(hash, "proposed_mutation hash")
+      replacement = DAG::Snapshot.fetch(hash, :replacement_graph)
+      new(
+        kind: DAG::Snapshot.fetch!(hash, :kind).to_sym,
+        target_node_id: DAG::Snapshot.fetch!(hash, :target_node_id),
+        replacement_graph: replacement && DAG::ReplacementGraph.from_h(replacement),
+        rationale: DAG::Snapshot.fetch(hash, :rationale),
+        confidence: DAG::Snapshot.fetch(hash, :confidence, 1.0),
+        metadata: DAG::Snapshot.fetch(hash, :metadata, {})
+      )
+    end
   end
 
   # Closed set of mutation kinds.

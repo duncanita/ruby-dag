@@ -4,6 +4,8 @@ module DAG
   module Ports
     # Storage port. `CONTRACT.md` and this module document the current
     # effect-aware shape, including the R1/R2 retry/resume extensions.
+    # The effect-ledger surface lives in {Ports::EffectLedger}, which this
+    # module includes; the Dispatcher depends only on that subset.
     #
     # Adapters persist workflow rows, definition revisions, node states,
     # attempts, and the durable event log. Every method that returns
@@ -13,20 +15,17 @@ module DAG
     # persisting them so caller-owned buffers cannot mutate storage-owned
     # identity fields after the call returns.
     #
+    # Single-runner invariant: `Runner#resume` of a workflow whose row is
+    # already `:running` (crash recovery) performs no storage transition, so
+    # storage provides no mutual exclusion on that path — two hosts resuming
+    # the same workflow would both proceed. Deployments must ensure at most
+    # one runner drives a given workflow at a time; a workflow-level
+    # owner/lease claim is a planned extension and must be designed before
+    # multi-host consumers resume concurrently.
+    #
     # @api public
     module Storage
-      # True when `adapter` defines `method_name` outside of this base port
-      # module. The Runner and the effect dispatcher use this to fall back to
-      # primitive storage methods when an adapter has not specialized the
-      # extension method.
-      # @param adapter [Object]
-      # @param method_name [Symbol]
-      # @return [Boolean]
-      def self.method_overridden?(adapter, method_name)
-        return false unless adapter.respond_to?(method_name)
-
-        adapter.method(method_name).owner != self
-      end
+      include EffectLedger
 
       # Persist a fresh workflow in `:pending` with the supplied initial
       # definition (revision 1) and runtime profile.
@@ -36,6 +35,7 @@ module DAG
       # @param initial_context [Hash] JSON-safe context seed
       # @param runtime_profile [DAG::RuntimeProfile] frozen profile
       # @return [Hash] {id:, current_revision:}
+      # @raise [DAG::DuplicateWorkflowError] when the id already exists
       def create_workflow(id:, initial_definition:, initial_context:, runtime_profile:)
         raise PortNotImplementedError
       end
@@ -161,149 +161,8 @@ module DAG
       # @param event [DAG::Event] durable event to append in the same step
       # @param effects [Array<DAG::Effects::PreparedIntent>] prepared effect intents to reserve/link
       # @return [DAG::Event] stamped event
+      # @raise [DAG::UnknownAttemptError] when `attempt_id` is unknown
       def commit_attempt(attempt_id:, result:, node_state:, event:, effects: [])
-        raise PortNotImplementedError
-      end
-
-      # List durable effect snapshots linked to a workflow node in a revision.
-      #
-      # @param workflow_id [String]
-      # @param revision [Integer]
-      # @param node_id [Symbol]
-      # @return [Array<DAG::Effects::Record>]
-      def list_effects_for_node(workflow_id:, revision:, node_id:)
-        raise PortNotImplementedError
-      end
-
-      # List durable effect snapshots linked to an attempt.
-      #
-      # @param attempt_id [String]
-      # @return [Array<DAG::Effects::Record>]
-      def list_effects_for_attempt(attempt_id:)
-        raise PortNotImplementedError
-      end
-
-      # Atomically claim ready effect records by assigning a lease.
-      #
-      # @param limit [Integer] maximum number of records to claim
-      # @param owner_id [String] dispatcher owner id
-      # @param lease_ms [Integer] lease duration in milliseconds
-      # @param now_ms [Integer] current wall-clock milliseconds
-      # @param only_workflow_id [String, nil] when non-nil, restrict the claim to
-      #   effects that have at least one attempt-effect link belonging to the given
-      #   workflow. This matches the kernel's idempotency model: a single effect
-      #   record can be shared across workflows via attempt links, so the filter
-      #   resolves "effects this workflow is waiting on", not "effects this
-      #   workflow created first". Default `nil` claims globally across all
-      #   workflows (V1.3 behaviour). A workflow with no linked effects yields an
-      #   empty array (no raise). V1.4.
-      # @return [Array<DAG::Effects::Record>] claimed records
-      def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)
-        raise PortNotImplementedError
-      end
-
-      # Mark a claimed effect as succeeded.
-      #
-      # @param effect_id [String]
-      # @param owner_id [String] current lease owner
-      # @param result [Object] JSON-safe result
-      # @param external_ref [Object, nil] JSON-safe external reference
-      # @param now_ms [Integer]
-      # @return [DAG::Effects::Record] updated terminal record
-      # @raise [DAG::Effects::UnknownEffectError] when `effect_id` is unknown
-      # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
-      def mark_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
-        raise PortNotImplementedError
-      end
-
-      # Mark a claimed effect as failed, either retriable or terminal.
-      #
-      # @param effect_id [String]
-      # @param owner_id [String] current lease owner
-      # @param error [Object] JSON-safe error
-      # @param retriable [Boolean]
-      # @param not_before_ms [Integer, nil] retry delay hint for retriable failures
-      # @param now_ms [Integer]
-      # @return [DAG::Effects::Record] updated failed record
-      # @raise [DAG::Effects::UnknownEffectError] when `effect_id` is unknown
-      # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
-      def mark_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
-        raise PortNotImplementedError
-      end
-
-      # Port extension: cooperatively extend the lease of an effect currently
-      # held by `owner_id`. This separates admission control (worker-death
-      # detection via expired lease) from handler execution time, so the
-      # dispatcher's default `lease_ms` can stay tight without forcing
-      # legitimately long-running handlers to lose their claim mid-run.
-      #
-      # The CAS guard is identical to `mark_effect_*`: status `:dispatching`,
-      # `lease_owner == owner_id`, and `lease_until_ms >= now_ms`. Adapters
-      # update `lease_until_ms` and `updated_at_ms` atomically. Renewal is
-      # monotonic: `until_ms` must be strictly greater than `now_ms` and not
-      # less than the current `lease_until_ms`. `until_ms == lease_until_ms`
-      # is a no-op success that returns the unchanged record.
-      #
-      # @param effect_id [String]
-      # @param owner_id [String] current lease owner
-      # @param until_ms [Integer] new lease deadline in wall-clock milliseconds
-      # @param now_ms [Integer]
-      # @return [DAG::Effects::Record] updated record with the extended lease
-      # @raise [DAG::Effects::UnknownEffectError] when `effect_id` is unknown
-      # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
-      # @raise [ArgumentError] when `until_ms` is not greater than `now_ms`,
-      #   or would shrink the existing `lease_until_ms`
-      def renew_effect_lease(effect_id:, owner_id:, until_ms:, now_ms:)
-        raise PortNotImplementedError
-      end
-
-      # Port extension: atomically mark a claimed effect as succeeded and
-      # release any waiting nodes that become satisfied by that terminal
-      # effect state. This closes the crash window between a terminal mark and
-      # a separate release call in durable adapters.
-      #
-      # @param effect_id [String]
-      # @param owner_id [String] current lease owner
-      # @param result [Object] JSON-safe result
-      # @param external_ref [Object, nil] JSON-safe external reference
-      # @param now_ms [Integer]
-      # @return [Hash] {record: DAG::Effects::Record, released: Array<Hash>}
-      #   Each release receipt is shaped as
-      #   {workflow_id:, revision:, node_id:, attempt_id:, released_at_ms:}.
-      # @raise [DAG::Effects::UnknownEffectError] when `effect_id` is unknown
-      # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
-      def complete_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
-        raise PortNotImplementedError
-      end
-
-      # Port extension: atomically mark a claimed effect as failed and release
-      # waiting nodes when the resulting failure is terminal.
-      #
-      # @param effect_id [String]
-      # @param owner_id [String] current lease owner
-      # @param error [Object] JSON-safe error
-      # @param retriable [Boolean]
-      # @param not_before_ms [Integer, nil] retry delay hint for retriable failures
-      # @param now_ms [Integer]
-      # @return [Hash] {record: DAG::Effects::Record, released: Array<Hash>}
-      #   Each release receipt is shaped as
-      #   {workflow_id:, revision:, node_id:, attempt_id:, released_at_ms:}.
-      # @raise [DAG::Effects::UnknownEffectError] when `effect_id` is unknown
-      # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
-      def complete_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
-        raise PortNotImplementedError
-      end
-
-      # Reset waiting nodes linked to `effect_id` once all blocking effects for
-      # the waiting attempt are terminal. The node is reset to :pending; the
-      # waiting attempt remains waiting as durable history.
-      #
-      # @param effect_id [String]
-      # @param now_ms [Integer]
-      # @return [Array<Hash>] release receipts shaped as
-      #   {workflow_id:, revision:, node_id:, attempt_id:, released_at_ms:}
-      # @raise [DAG::Effects::UnknownEffectError] when `effect_id` is unknown
-      def release_nodes_satisfied_by_effect(effect_id:, now_ms:)
         raise PortNotImplementedError
       end
 
@@ -327,20 +186,45 @@ module DAG
         raise PortNotImplementedError
       end
 
-      # Port extension: return the canonical committed result for each
-      # predecessor node in one storage call. The canonical result is either
-      # the committed attempt with the highest `attempt_number` in the
-      # requested revision, using `attempt_id.to_s` ASCII as a defensive
-      # tie-break, or an explicit committed-result projection carried forward
-      # when a preserved node remains `:committed` across a revision append.
-      # Projections are not attempts and must not affect attempt counts.
+      # Return the canonical committed result for each predecessor node in
+      # one storage call. The canonical result is either the committed
+      # attempt with the highest `attempt_number` in the requested revision,
+      # using `attempt_id.to_s` ASCII as a defensive tie-break
+      # ({DAG::AttemptOrder}), or an explicit committed-result projection
+      # carried forward when a preserved node remains `:committed` across a
+      # revision append. Projections are not attempts and must not affect
+      # attempt counts.
+      #
+      # The default implementation composes `load_node_states` and
+      # `list_attempts`. It cannot see carry-forward projections, so when a
+      # predecessor's node state is `:committed` but no committed attempt
+      # exists in the revision it raises {DAG::StaleStateError} instead of
+      # silently dropping the predecessor's `context_patch` — adapters that
+      # materialize projections must override this method.
       #
       # @param workflow_id [String]
       # @param revision [Integer]
       # @param predecessors [Array<Symbol>]
       # @return [Hash{Symbol => DAG::Success}]
+      # @raise [DAG::StaleStateError] when a committed predecessor has no
+      #   committed attempt and no projection is reachable
       def list_committed_results_for_predecessors(workflow_id:, revision:, predecessors:)
-        raise PortNotImplementedError
+        states = load_node_states(workflow_id: workflow_id, revision: revision)
+        predecessors.filter_map { |pred|
+          node_id = pred.to_sym
+          best = list_attempts(workflow_id: workflow_id, revision: revision, node_id: node_id)
+            .select { |attempt| attempt[:state] == :committed }
+            .reduce(nil) { |current, attempt| DAG::AttemptOrder.better?(attempt, current) ? attempt : current }
+
+          if best
+            [node_id, best[:result]]
+          elsif states[node_id] == :committed
+            raise StaleStateError,
+              "node #{node_id} is :committed in revision #{revision} but has no committed attempt; " \
+              "the adapter must override list_committed_results_for_predecessors to expose its " \
+              "committed-result projection"
+          end
+        }.to_h
       end
 
       # Count attempts for a node within a revision, excluding `:aborted`.

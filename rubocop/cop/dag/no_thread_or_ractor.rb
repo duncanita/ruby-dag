@@ -7,7 +7,9 @@ module RuboCop
     module DAG
       class NoThreadOrRactor < Base
         MSG = "Do not use thread/ractor primitives or process spawning in ruby-dag kernel code."
-        FORBIDDEN_CONS = %w[Thread Ractor Mutex Monitor Queue SizedQueue ConditionVariable].freeze
+        # `Fiber` is banned everywhere, including the dispatcher carve-out
+        # (it is deliberately absent from DISPATCHER_RELAXED_CONS).
+        FORBIDDEN_CONS = %w[Thread Ractor Mutex Monitor Queue SizedQueue ConditionVariable Fiber].freeze
         DISPATCHER_RELAXED_CONS = %w[Thread Queue].freeze
         FORBIDDEN_THREAD_SENDS = %i[new start fork].freeze
         # The carve-out documented in Roadmap §2.4 / §9.1 is "Thread for the
@@ -17,6 +19,10 @@ module RuboCop
         # the gap between the documented exception and the cop allow-list.
         DISPATCHER_RELAXED_THREAD_SENDS = %i[new].freeze
         FORBIDDEN_PROCESS_SENDS = %i[fork spawn daemon].freeze
+        # `Kernel.system` / `Kernel.spawn` / `Kernel.fork` are equivalent to
+        # the bare and `Process.*` forms and must not slip through via the
+        # explicit `Kernel` receiver.
+        FORBIDDEN_KERNEL_SENDS = %i[system spawn fork].freeze
 
         def on_const(node)
           return unless FORBIDDEN_CONS.include?(node.const_name)
@@ -31,6 +37,11 @@ module RuboCop
 
           if receiver&.const_type? && receiver.const_name == "Process"
             add_offense(node) if runtime_file? && FORBIDDEN_PROCESS_SENDS.include?(method_name)
+            return
+          end
+
+          if receiver&.const_type? && receiver.const_name == "Kernel"
+            add_offense(node) if runtime_file? && FORBIDDEN_KERNEL_SENDS.include?(method_name)
             return
           end
 

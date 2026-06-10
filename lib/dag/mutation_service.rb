@@ -62,6 +62,10 @@ module DAG
       )
     end
 
+    # Pre-checks only: the authoritative, race-safe guards live inside
+    # `storage.append_revision_if_workflow_state`. These fail fast before
+    # `DefinitionEditor.plan` runs and must keep raising the same error
+    # classes and messages as the storage-layer guards.
     def guard_workflow_state!(workflow_id, state)
       case state
       when *MUTABLE_STATES then nil
@@ -96,9 +100,7 @@ module DAG
     end
 
     def publish_event(event)
-      @event_bus.publish(event)
-    rescue
-      nil
+      DAG::EventPublishing.publish_quietly(@event_bus, event)
     end
   end
 end

@@ -72,6 +72,20 @@ intents with execution coordinates and payload fingerprints, then storage
 reserves them atomically with the attempt commit. Dispatch and concrete
 handlers remain outside the runner.
 
+Every step outcome serializes with full fidelity: `Success#to_h`,
+`Failure#to_h`, and `Waiting#to_h` project every field (including
+`context_patch`, which replay requires, and `retriable`, which retry
+semantics require) as JSON-safe values, and `DAG::Result.from_h` is the
+single deserialization entry point, dispatching on `:status` and accepting
+Symbol or String keys. Durable adapters must persist results through this
+round-trip rather than inventing their own shapes.
+
+Retriable `Failure` retries are immediate: the node returns to `:pending`
+and the Runner re-executes it within the same `#call`, consuming the
+per-node attempt budget back-to-back. A step that needs to retry later
+returns `Waiting` (optionally with `not_before_ms` and a blocking effect)
+so the delay is owned by the scheduler/dispatcher boundary.
+
 ## Effects Value Layer
 
 An effect is described as an abstract, adapter-agnostic intent:
@@ -289,9 +303,14 @@ DAG::Effects::Dispatcher.new(
   clock:,
   owner_id:,
   lease_ms:,
-  unknown_handler_policy: :terminal_failure
+  unknown_handler_policy: :terminal_failure,
+  parallelism: 1
 )
 ```
+
+The dispatcher's storage dependency is the `DAG::Ports::EffectLedger`
+surface (claim + atomic completion) plus `append_event`; it never touches
+workflow rows, revisions, or attempts.
 
 `handlers` is a Hash keyed by effect type (`String` or `Symbol`). Each handler
 must implement:
@@ -300,14 +319,16 @@ must implement:
 #call(DAG::Effects::Record) -> DAG::Effects::HandlerResult
 ```
 
-`tick(limit:)` claims up to `limit` ready effects with
-`storage.claim_ready_effects`, dispatches each claimed record, and completes
-the effect through storage. When the adapter implements
-`complete_effect_succeeded` / `complete_effect_failed`, the terminal mark and
-waiting-node release happen in one storage boundary. Older adapters may still
-fall back to `mark_effect_succeeded` / `mark_effect_failed` followed by
-`release_nodes_satisfied_by_effect`. The return value is an immutable
-`DAG::Effects::DispatchReport`:
+`tick(limit:, only_workflow_id: nil)` claims up to `limit` ready effects with
+`storage.claim_ready_effects` (forwarding `only_workflow_id` for per-workflow
+dispatch), dispatches each claimed record, and completes the effect through
+`storage.complete_effect_succeeded` / `storage.complete_effect_failed` — the
+canonical completion path. Adapters that override those methods bind the
+terminal mark and the waiting-node release in one atomic storage boundary;
+adapters that only implement the `mark_effect_*` /
+`release_nodes_satisfied_by_effect` primitives inherit the composed (non
+crash-atomic) default from `DAG::Ports::EffectLedger`. The return value is an
+immutable `DAG::Effects::DispatchReport`:
 
 ```text
 claimed
@@ -328,7 +349,18 @@ remaining claimed records.
 Handler exceptions and invalid handler return values become retriable effect
 failures with JSON-safe error payloads. Unknown effect types default to terminal
 failure with `code: :unknown_handler`; alternatively,
-`unknown_handler_policy: :raise` raises `DAG::Effects::UnknownHandlerError`.
+`unknown_handler_policy: :raise` aborts the tick.
+
+When a dispatch worker raises an unexpected exception (a dispatcher-side
+storage failure, or an unknown effect type under
+`unknown_handler_policy: :raise`), `tick` raises
+`DAG::Effects::DispatchAbortedError` only after every worker has joined.
+The error carries `#report` — the `DispatchReport` of every outcome that
+durably completed before the abort — and the original exception as
+`#cause` (for `:raise` policy that is the `DAG::Effects::UnknownHandlerError`).
+Claimed records that were never marked stay `:dispatching` until their
+lease expires and a future tick re-claims them. Non-`StandardError`
+exceptions propagate unwrapped, still after all workers have joined.
 
 Every entry in `DispatchReport#errors` has the shared JSON-safe keys:
 
@@ -339,8 +371,10 @@ ref
 type
 ```
 
-Code-specific entries may add fields. `:handler_raised` adds `class` and
-`message`; `:handler_bad_return` adds `class`; `:stale_lease` adds `message`.
+Code-specific entries may add fields. `:handler_raised` adds `error_class`
+and `message`; `:handler_bad_return` adds `returned_class`; `:stale_lease`
+adds `message`. Rescued-exception payloads across the kernel share one
+vocabulary: the exception class always travels under `error_class`.
 
 ### Dispatcher Concurrency Contract
 
@@ -446,13 +480,34 @@ shape documented in `DAG::Ports::Storage`:
   `{id:, state:, reset:, workflow_retry_count:, event:}`.
 
 Storage adapters use the shared public error vocabulary for control flow:
-`DAG::UnknownWorkflowError`, `DAG::StaleStateError`,
+`DAG::UnknownWorkflowError`, `DAG::DuplicateWorkflowError`,
+`DAG::UnknownAttemptError`, `DAG::StaleStateError`,
 `DAG::StaleRevisionError`, `DAG::ConcurrentMutationError`,
 `DAG::WorkflowRetryExhaustedError`, `DAG::Effects::UnknownEffectError`,
 `DAG::Effects::IdempotencyConflictError`, and
-`DAG::Effects::StaleLeaseError`. Exception messages are diagnostics only;
-Runner and consumers must branch on classes and structured receipts rather than
-parsing adapter-specific text.
+`DAG::Effects::StaleLeaseError`. Every storage state error lives under
+`DAG::Error` so consumers can rescue the hierarchy uniformly. Exception
+messages are diagnostics only; Runner and consumers must branch on classes
+and structured receipts rather than parsing adapter-specific text.
+
+The storage port is split in two modules: `DAG::Ports::Storage` owns
+workflow rows, revisions, node states, attempts, and the event log;
+`DAG::Ports::EffectLedger` (included by `Ports::Storage`) owns the effect
+ledger surface. The Runner consumes the storage side;
+`DAG::Effects::Dispatcher` consumes only the ledger side plus
+`append_event`. Two methods ship safe port-level defaults:
+
+- `complete_effect_succeeded` / `complete_effect_failed` default to the
+  composed `mark_effect_*` + `release_nodes_satisfied_by_effect` sequence.
+  The composition is not crash-atomic; durable adapters must override them
+  with one transaction.
+- `list_committed_results_for_predecessors` defaults to a composition of
+  `load_node_states` + `list_attempts` using the canonical
+  `DAG::AttemptOrder` rule. The default cannot see carry-forward
+  committed-result projections, so it raises `DAG::StaleStateError` when a
+  predecessor is `:committed` with no committed attempt instead of
+  silently dropping its `context_patch`; adapters that materialize
+  projections (such as `Memory::Storage`) override it.
 
 ## Effect Storage Contract
 
@@ -838,6 +893,15 @@ Storage must persist the supplied `attempt_number`; it must not recalculate it.
 `commit_attempt` is one-shot: adapters must reject a second commit for the same
 attempt after it has left `:running`.
 
+Single-runner invariant: resuming a workflow whose row is already
+`:running` (crash recovery) performs no storage transition, so storage
+provides no mutual exclusion on that path — two hosts resuming the same
+workflow would both abort in-flight attempts and both execute nodes.
+Deployments must guarantee at most one runner drives a given workflow at a
+time. A workflow-level owner/lease claim (mirroring the effect-lease
+model) is a planned extension that must be designed before multi-host
+consumers resume concurrently.
+
 ## Proposed Mutations
 
 Consumers may propose mutations with:
@@ -926,10 +990,18 @@ EVENT_TYPES = %i[
   workflow_waiting
   workflow_completed
   workflow_failed
+  workflow_retrying
   mutation_applied
   effect_dispatch_stale_lease
 ].freeze
 ```
+
+`:workflow_retrying` is appended durably by
+`storage.prepare_workflow_retry(event:)` in the same atomic step as the
+retry transition, so the event log explains the
+`workflow_failed -> node_started` sequence that `Runner#retry_workflow`
+produces. `workflow_started` remains once-per-lifetime and is not
+re-emitted by a retry.
 
 Events are durably appended by storage operations, then published live through
 `EventBus#publish` after commit.

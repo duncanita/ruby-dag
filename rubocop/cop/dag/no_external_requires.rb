@@ -7,10 +7,11 @@ module RuboCop
     module DAG
       class NoExternalRequires < Base
         MSG = "Runtime requires in ruby-dag must stay within the Ruby standard library."
+        # The frozen-decision stdlib allowlist from Roadmap v3.4 §3.
+        # Anything else (including other stdlib gems such as etc, singleton,
+        # or yaml) needs a documented contract extension first.
         STDLIB = %w[
           digest
-          digest/sha2
-          etc
           fileutils
           forwardable
           json
@@ -18,9 +19,7 @@ module RuboCop
           pathname
           securerandom
           set
-          singleton
           time
-          yaml
         ].freeze
         RESTRICT_ON_SEND = %i[require].freeze
 
