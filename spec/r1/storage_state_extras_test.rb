@@ -13,7 +13,8 @@ class StorageStateExtrasTest < Minitest::Test
 
   def test_create_workflow_rejects_duplicate_id
     workflow_id = create_workflow(@storage, @definition)
-    assert_raises(ArgumentError) { create_workflow_with_id(workflow_id) }
+    error = assert_raises(DAG::DuplicateWorkflowError) { create_workflow_with_id(workflow_id) }
+    assert_kind_of DAG::Error, error
   end
 
   def test_create_workflow_rejects_non_definition
@@ -169,9 +170,10 @@ class StorageStateExtrasTest < Minitest::Test
   end
 
   def test_commit_attempt_unknown_attempt_raises
-    assert_raises(ArgumentError) do
+    error = assert_raises(DAG::UnknownAttemptError) do
       @storage.commit_attempt(attempt_id: "missing", result: DAG::Success[value: 1, context_patch: {}], node_state: :committed, event: build_event)
     end
+    assert_kind_of DAG::Error, error
   end
 
   def test_commit_attempt_unexpected_result_type_raises

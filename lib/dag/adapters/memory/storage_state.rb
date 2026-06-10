@@ -49,6 +49,47 @@ module DAG
           end
         end
 
+        # Internal: CAS guard shared by every state transition in this module.
+        # @api private
+        def assert_state!(label, current, expected)
+          return if current == expected
+
+          raise StaleStateError, "#{label} state is #{current.inspect}, expected #{expected.inspect}"
+        end
+
+        # Internal: validate an optional workflow-level event's coordinates
+        # before any mutation happens.
+        # @api private
+        def validate_optional_workflow_event!(event, workflow_id, revision)
+          return unless event
+
+          validate_event_coordinates!(
+            event,
+            workflow_id: workflow_id,
+            revision: revision,
+            node_id: nil,
+            attempt_id: nil
+          )
+        end
+
+        # Internal: append an optional event after the mutation succeeded.
+        # @api private
+        def append_optional_event(state, id, event, revision:)
+          event ? append_event_internal(state, id, event, revision: revision) : nil
+        end
+
+        # Internal: shared preamble for lease-guarded effect operations.
+        # Validates inputs, fetches the record, and enforces the lease CAS.
+        # @api private
+        def leased_effect!(state, effect_id, owner_id:, now_ms:)
+          ensure_effect_state!(state)
+          DAG::Validation.string!(owner_id, "owner_id")
+          DAG::Validation.integer!(now_ms, "now_ms")
+          record = fetch_effect!(state, effect_id)
+          validate_effect_lease!(record, owner_id: owner_id, now_ms: now_ms)
+          record
+        end
+
         # Internal: initialize effect-ledger keys for snapshots created before
         # the effect-aware storage extension existed.
         # @api private
@@ -73,7 +114,7 @@ module DAG
         # @api private
         def create_workflow(state, id:, initial_definition:, initial_context:, runtime_profile:)
           id = DAG.frozen_copy(id)
-          raise ArgumentError, "workflow #{id} already exists" if state[:workflows].key?(id)
+          raise DuplicateWorkflowError, "workflow #{id} already exists" if state[:workflows].key?(id)
           DAG::Validation.instance!(
             initial_definition,
             DAG::Workflow::Definition,
@@ -110,20 +151,10 @@ module DAG
         # @api private
         def transition_workflow_state(state, id:, from:, to:, event: nil)
           row = fetch_workflow!(state, id)
-          unless row[:state] == from
-            raise StaleStateError, "workflow #{id} state is #{row[:state].inspect}, expected #{from.inspect}"
-          end
-          if event
-            validate_event_coordinates!(
-              event,
-              workflow_id: row.fetch(:id),
-              revision: row[:current_revision],
-              node_id: nil,
-              attempt_id: nil
-            )
-          end
+          assert_state!("workflow #{id}", row[:state], from)
+          validate_optional_workflow_event!(event, row.fetch(:id), row[:current_revision])
           row[:state] = to
-          stamped = event ? append_event_internal(state, id, event, revision: row[:current_revision]) : nil
+          stamped = append_optional_event(state, id, event, revision: row[:current_revision])
           {id: id, state: to, event: stamped}
         end
 
@@ -140,15 +171,7 @@ module DAG
 
           new_revision = parent_revision + 1
           stored_definition = (definition.revision == new_revision) ? definition : definition.with_revision(new_revision)
-          if event
-            validate_event_coordinates!(
-              event,
-              workflow_id: id,
-              revision: [parent_revision, new_revision],
-              node_id: nil,
-              attempt_id: nil
-            )
-          end
+          validate_optional_workflow_event!(event, id, [parent_revision, new_revision])
           state[:definitions][[id, new_revision]] = stored_definition
 
           previous_states = state[:node_states][[id, parent_revision]] || {}
@@ -171,7 +194,7 @@ module DAG
           state[:node_states][[id, new_revision]] = new_states
           result_projections.each { |key, result| state[:committed_result_projections][key] = result }
           row[:current_revision] = new_revision
-          stamped = event ? append_event_internal(state, id, event, revision: [parent_revision, new_revision]) : nil
+          stamped = append_optional_event(state, id, event, revision: [parent_revision, new_revision])
           {id: id, revision: new_revision, event: stamped}
         end
 
@@ -215,10 +238,7 @@ module DAG
         # @api private
         def transition_node_state(state, workflow_id:, revision:, node_id:, from:, to:)
           states_for_rev = fetch_node_states!(state, workflow_id, revision)
-          current = states_for_rev[node_id]
-          unless current == from
-            raise StaleStateError, "node #{node_id} state is #{current.inspect}, expected #{from.inspect}"
-          end
+          assert_state!("node #{node_id}", states_for_rev[node_id], from)
           states_for_rev[node_id] = to
           {workflow_id: workflow_id, revision: revision, node_id: node_id, state: to}
         end
@@ -230,10 +250,7 @@ module DAG
           DAG::Validation.positive_integer!(attempt_number, "attempt_number")
 
           states_for_rev = fetch_node_states!(state, workflow_id, revision)
-          current = states_for_rev[node_id]
-          unless current == expected_node_state
-            raise StaleStateError, "node #{node_id} state is #{current.inspect}, expected #{expected_node_state.inspect}"
-          end
+          assert_state!("node #{node_id}", states_for_rev[node_id], expected_node_state)
 
           state[:attempt_seq][workflow_id] += 1
           attempt_id = "#{workflow_id}/#{state[:attempt_seq][workflow_id]}"
@@ -256,11 +273,9 @@ module DAG
         # @api private
         def commit_attempt(state, attempt_id:, result:, node_state:, event:, effects: [])
           attempt = state[:attempts].fetch(attempt_id) do
-            raise ArgumentError, "Unknown attempt: #{attempt_id}"
+            raise UnknownAttemptError, "Unknown attempt: #{attempt_id}"
           end
-          unless attempt[:state] == :running
-            raise StaleStateError, "attempt #{attempt_id} state is #{attempt[:state].inspect}, expected :running"
-          end
+          assert_state!("attempt #{attempt_id}", attempt[:state], :running)
           terminal_state = attempt_terminal_state_for(result)
           validate_node_state_for_result!(result, node_state)
           validate_event_coordinates!(
@@ -272,10 +287,7 @@ module DAG
           )
 
           rev_states = state[:node_states][[attempt[:workflow_id], attempt[:revision]]]
-          current_node_state = rev_states[attempt[:node_id]]
-          unless current_node_state == :running
-            raise StaleStateError, "node #{attempt[:node_id]} state is #{current_node_state.inspect}, expected :running"
-          end
+          assert_state!("node #{attempt[:node_id]}", rev_states[attempt[:node_id]], :running)
 
           reservations = prepare_effect_reservations(state, attempt, effects)
 
@@ -349,11 +361,7 @@ module DAG
         # Implements `Ports::Storage#mark_effect_succeeded`.
         # @api private
         def mark_effect_succeeded(state, effect_id:, owner_id:, result:, external_ref:, now_ms:)
-          ensure_effect_state!(state)
-          DAG::Validation.string!(owner_id, "owner_id")
-          DAG::Validation.integer!(now_ms, "now_ms")
-          record = fetch_effect!(state, effect_id)
-          validate_effect_lease!(record, owner_id: owner_id, now_ms: now_ms)
+          record = leased_effect!(state, effect_id, owner_id: owner_id, now_ms: now_ms)
 
           updated = record.with(
             status: :succeeded,
@@ -371,12 +379,8 @@ module DAG
         # Implements `Ports::Storage#mark_effect_failed`.
         # @api private
         def mark_effect_failed(state, effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)
-          ensure_effect_state!(state)
-          DAG::Validation.string!(owner_id, "owner_id")
-          DAG::Validation.integer!(now_ms, "now_ms")
           DAG::Validation.boolean!(retriable, "retriable")
-          record = fetch_effect!(state, effect_id)
-          validate_effect_lease!(record, owner_id: owner_id, now_ms: now_ms)
+          record = leased_effect!(state, effect_id, owner_id: owner_id, now_ms: now_ms)
 
           updated = record.with(
             status: DAG::Effects.failure_status(retriable),
@@ -394,16 +398,13 @@ module DAG
         # Implements `Ports::Storage#renew_effect_lease`.
         # @api private
         def renew_effect_lease(state, effect_id:, owner_id:, until_ms:, now_ms:)
-          ensure_effect_state!(state)
-          DAG::Validation.string!(owner_id, "owner_id")
           DAG::Validation.integer!(until_ms, "until_ms")
           DAG::Validation.integer!(now_ms, "now_ms")
           unless until_ms > now_ms
             raise ArgumentError, "until_ms (#{until_ms}) must be greater than now_ms (#{now_ms})"
           end
 
-          record = fetch_effect!(state, effect_id)
-          validate_effect_lease!(record, owner_id: owner_id, now_ms: now_ms)
+          record = leased_effect!(state, effect_id, owner_id: owner_id, now_ms: now_ms)
 
           current_until = record.lease_until_ms
           if until_ms < current_until
@@ -523,7 +524,7 @@ module DAG
             next unless predecessor_set.include?(attempt[:node_id])
 
             current = best_by_node[attempt[:node_id]]
-            best_by_node[attempt[:node_id]] = attempt if better_committed_attempt?(attempt, current)
+            best_by_node[attempt[:node_id]] = attempt if DAG::AttemptOrder.better?(attempt, current)
           end
 
           states_for_rev = state[:node_states].fetch([workflow_id, revision], {})
@@ -587,9 +588,7 @@ module DAG
         # @api private
         def prepare_workflow_retry(state, id:, from: :failed, to: :pending, event: nil)
           row = fetch_workflow!(state, id)
-          unless row[:state] == from
-            raise StaleStateError, "workflow #{id} state is #{row[:state].inspect}, expected #{from.inspect}"
-          end
+          assert_state!("workflow #{id}", row[:state], from)
 
           max_retries = row[:runtime_profile].max_workflow_retries
           if row[:workflow_retry_count] >= max_retries
@@ -600,15 +599,7 @@ module DAG
           revision = row[:current_revision]
           states_for_rev = fetch_node_states!(state, id, revision)
           failed_node_ids = states_for_rev.select { |_, s| s == :failed }.keys
-          if event
-            validate_event_coordinates!(
-              event,
-              workflow_id: row.fetch(:id),
-              revision: revision,
-              node_id: nil,
-              attempt_id: nil
-            )
-          end
+          validate_optional_workflow_event!(event, row.fetch(:id), revision)
 
           failed_set = failed_node_ids.to_set
           state[:attempts_index].fetch(id, []).each do |aid|
@@ -619,7 +610,7 @@ module DAG
           failed_node_ids.each { |node_id| states_for_rev[node_id] = :pending }
           row[:workflow_retry_count] += 1
           row[:state] = to
-          stamped = event ? append_event_internal(state, id, event, revision: revision) : nil
+          stamped = append_optional_event(state, id, event, revision: revision)
 
           {id: id, state: to, reset: failed_node_ids, workflow_retry_count: row[:workflow_retry_count], event: stamped}
         end
@@ -743,7 +734,7 @@ module DAG
           unless revision.nil? || Array(revision).include?(event.revision)
             raise ArgumentError, "event.revision does not match revision"
           end
-          DAG::Validation.node_id!(event.node_id) unless event.node_id.nil?
+          DAG::Validation.optional_node_id!(event.node_id)
           unless node_id.nil? || event.node_id.nil? || event.node_id.to_sym == node_id.to_sym
             raise ArgumentError, "event.node_id does not match node_id"
           end
@@ -845,24 +836,11 @@ module DAG
             next unless attempt[:node_id] == node_id
             next unless attempt[:state] == :committed
 
-            best = attempt if better_committed_attempt?(attempt, best)
+            best = attempt if DAG::AttemptOrder.better?(attempt, best)
           end
           return best[:result] if best
 
           state[:committed_result_projections][[workflow_id, revision, node_id]]
-        end
-
-        # Internal: canonical committed-attempt ordering.
-        # @api private
-        def better_committed_attempt?(candidate, current)
-          return true if current.nil?
-
-          candidate_number = candidate.fetch(:attempt_number)
-          current_number = current.fetch(:attempt_number)
-          return true if candidate_number > current_number
-          return false unless candidate_number == current_number
-
-          candidate.fetch(:attempt_id).to_s > current.fetch(:attempt_id).to_s
         end
 
         # Internal helper used by `count_attempts` and friends.

@@ -32,7 +32,7 @@ module DAG
       # @param effects [Array<DAG::Effects::Record>]
       # @return [DAG::NodeDiagnostic]
       def from_records(workflow_id:, revision:, node_id:, state:, attempts:, effects: [])
-        sorted_attempts = attempts.sort_by { |attempt| [attempt.fetch(:attempt_number), attempt.fetch(:attempt_id).to_s] }
+        sorted_attempts = attempts.sort_by { |attempt| DAG::AttemptOrder.key(attempt) }
         sorted_effects = effects.sort_by(&:ref)
         failure_attempt = sorted_attempts.reverse_each.find { |attempt| attempt.fetch(:result).is_a?(DAG::Failure) }
         waiting_attempt = sorted_attempts.reverse_each.find { |attempt| attempt.fetch(:result).is_a?(DAG::Waiting) }
@@ -128,8 +128,8 @@ module DAG
       DAG::Validation.symbol!(state, "state")
       DAG::Validation.boolean!(terminal, "terminal")
       DAG::Validation.nonnegative_integer!(attempt_count, "attempt_count")
-      DAG::Validation.string!(last_attempt_id, "last_attempt_id") unless last_attempt_id.nil?
-      DAG::Validation.string!(last_error_attempt_id, "last_error_attempt_id") unless last_error_attempt_id.nil?
+      DAG::Validation.optional_string!(last_attempt_id, "last_attempt_id")
+      DAG::Validation.optional_string!(last_error_attempt_id, "last_error_attempt_id")
       validate_error_code!(last_error_code)
       DAG::Validation.string_or_symbol!(waiting_reason, "waiting_reason") unless waiting_reason.nil?
       DAG::Validation.array!(effect_refs, "effect_refs")

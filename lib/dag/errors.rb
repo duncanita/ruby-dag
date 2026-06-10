@@ -54,6 +54,16 @@ module DAG
   # @api public
   class UnknownWorkflowError < Error; end
 
+  # Raised by `Storage#create_workflow` when the workflow id already exists.
+  # Duplicate creation is a routine consumer race (idempotent enqueue), so
+  # it lives under `DAG::Error` like every other storage state error.
+  # @api public
+  class DuplicateWorkflowError < Error; end
+
+  # Raised when an attempt id is referenced in storage but does not exist.
+  # @api public
+  class UnknownAttemptError < Error; end
+
   # Raised by `Runner#retry_workflow` when the workflow has already been
   # retried `runtime_profile.max_workflow_retries` times.
   # @api public

@@ -307,12 +307,8 @@ module DAG
     end
 
     def commit_idempotency_conflict(run, node_id, attempt_id, attempt_number, conflict)
-      error = {
-        code: :effect_idempotency_conflict,
-        class: conflict.class.name,
-        message: conflict.message
-      }
-      failure = DAG::Failure[error: error, retriable: false]
+      failure = DAG::Result.exception_failure(:effect_idempotency_conflict, conflict)
+      error = failure.error
       event = build_event(run,
         type: :node_failed,
         node_id: node_id,
@@ -544,9 +540,7 @@ module DAG
     end
 
     def publish_event(event)
-      @event_bus.publish(event)
-    rescue
-      nil
+      DAG::EventPublishing.publish_quietly(@event_bus, event)
     end
   end
 end

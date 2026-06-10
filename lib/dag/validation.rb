@@ -180,6 +180,14 @@ module DAG
     end
 
     # @param value [Object]
+    # @return [String, Symbol, nil]
+    def optional_node_id!(value)
+      return value if value.nil?
+
+      node_id!(value)
+    end
+
+    # @param value [Object]
     # @param method_name [Symbol]
     # @param label [String]
     # @return [Object]

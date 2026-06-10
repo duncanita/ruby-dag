@@ -32,7 +32,7 @@ module DAG
           DAG::Validation.optional_hash!(error, "error")
           DAG.json_safe!(error, "$root.error")
 
-          super(result: result, error: DAG::Effects.frozen_copy_or_nil(error))
+          super(result: result, error: DAG.frozen_copy(error))
         end
       end
       private_constant :HandlerOutcome
@@ -84,7 +84,7 @@ module DAG
             succeeded_record: succeeded_record,
             failed_record: failed_record,
             released: DAG.frozen_copy(released),
-            error: DAG::Effects.frozen_copy_or_nil(error)
+            error: DAG.frozen_copy(error)
           )
         end
 
@@ -281,7 +281,7 @@ module DAG
       end
 
       def bad_return_outcome(record, result)
-        error = effect_error(record, code: :handler_bad_return).merge(class: result.class.name)
+        error = effect_error(record, code: :handler_bad_return).merge(returned_class: result.class.name)
         HandlerOutcome[
           result: DAG::Effects::HandlerResult.failed(error: error, retriable: true),
           error: error
@@ -290,7 +290,7 @@ module DAG
 
       def raised_handler_outcome(record, caught)
         error = effect_error(record, code: :handler_raised)
-          .merge(class: caught.class.name, message: caught.message)
+          .merge(error_class: caught.class.name, message: caught.message)
         HandlerOutcome[
           result: DAG::Effects::HandlerResult.failed(error: error, retriable: true),
           error: error

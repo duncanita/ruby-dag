@@ -113,7 +113,7 @@ class EffectsDispatcherTest < Minitest::Test
     failed = report.failed.first
     assert_equal :failed_retriable, failed.status
     assert_equal :handler_raised, failed.error[:code]
-    assert_equal "RuntimeError", failed.error[:class]
+    assert_equal "RuntimeError", failed.error[:error_class]
     assert_equal "boom", failed.error[:message]
     assert_equal :handler_raised, report.errors.first[:code]
     assert_equal effect.id, report.errors.first[:effect_id]
@@ -130,7 +130,7 @@ class EffectsDispatcherTest < Minitest::Test
     failed = report.failed.first
     assert_equal :failed_retriable, failed.status
     assert_equal :handler_bad_return, failed.error[:code]
-    assert_equal "String", failed.error[:class]
+    assert_equal "String", failed.error[:returned_class]
     assert_equal :handler_bad_return, report.errors.first[:code]
     assert_equal effect.id, report.errors.first[:effect_id]
   end
