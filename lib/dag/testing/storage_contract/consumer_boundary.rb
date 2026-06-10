@@ -14,11 +14,9 @@ module DAG::Testing::StorageContract
     def test_contract_sources_do_not_encode_consumer_runtime_names
       contract_files = [File.expand_path("../storage_contract.rb", __dir__), *Dir[File.join(__dir__, "*.rb")]]
       forbidden_words = ["Del" + "phi", "Del" + "phic", "Run" + "Context", "SQL" + "ite", "Sql" + "ite"]
-      offenders = contract_files.filter_map do |path|
+      offenders = contract_files.select do |path|
         content = File.read(path)
-        next unless forbidden_words.any? { |word| content.include?(word) }
-
-        path
+        forbidden_words.any? { |word| content.include?(word) }
       end
 
       assert_empty offenders, "storage contract suite must stay adapter- and consumer-neutral"

@@ -74,7 +74,7 @@ module DAG
     when Hash
       seen = {}
       value.each do |key, nested|
-        unless JSON_KEY_CLASSES.any? { |klass| key.is_a?(klass) }
+        unless key.is_a?(String) || key.is_a?(Symbol)
           raise ArgumentError, "non JSON-safe key at #{format_json_path(path)}: #{key.class}"
         end
 

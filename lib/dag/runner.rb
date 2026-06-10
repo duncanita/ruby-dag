@@ -477,25 +477,27 @@ module DAG
     end
 
     def transition_and_emit_terminal(run, state, event_type, payload)
-      atomic_transition_with_event(run, from: :running, to: state, event_type: event_type, payload: payload)
-      build_run_result(run, state)
+      stamped = atomic_transition_with_event(run, from: :running, to: state, event_type: event_type, payload: payload)
+      build_run_result(run, state, last_event_seq: stamped&.seq)
     end
 
     # Atomic at the storage layer: the row transition and the event append
     # cannot diverge under crash. The event_bus publish happens after the
-    # storage call returns and is best-effort (non-durable).
+    # storage call returns and is best-effort (non-durable). Returns the
+    # stamped event (or nil for adapters that do not return it).
     def atomic_transition_with_event(run, from:, to:, event_type:, payload:)
       event = build_event(run, type: event_type, payload: payload)
       result = @storage.transition_workflow_state(id: run.workflow_id, from: from, to: to, event: event)
       stamped = result.is_a?(Hash) ? result[:event] : nil
       publish_event(stamped) if stamped
+      stamped
     end
 
-    def build_run_result(run, state)
-      events = @storage.read_events(workflow_id: run.workflow_id)
+    def build_run_result(run, state, last_event_seq: nil)
+      last_event_seq ||= @storage.read_events(workflow_id: run.workflow_id).last&.seq
       DAG::RunResult.new(
         state: state,
-        last_event_seq: events.last&.seq,
+        last_event_seq: last_event_seq,
         outcome: {workflow_id: run.workflow_id, revision: run.revision},
         metadata: {}
       )

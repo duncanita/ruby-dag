@@ -21,11 +21,13 @@ module DAG
             node_states: {}, # {[workflow_id, revision] => {node_id => state}}
             attempts: {},    # {attempt_id => attempt_record}
             attempts_index: {}, # {workflow_id => [attempt_id, ...]}
+            attempts_by_node: {}, # {[workflow_id, revision, node_id] => [attempt_id, ...]}
             committed_result_projections: {}, # {[workflow_id, revision, node_id] => DAG::Success}
             attempt_seq: {}, # {workflow_id => Integer} monotonic, never reset
             effects: {}, # {effect_id => DAG::Effects::Record}
             effects_by_ref: {}, # {ref => effect_id}
             effect_order: [], # [effect_id, ...] insertion order for deterministic claims
+            active_effect_order: [], # [effect_id, ...] non-terminal subset of effect_order
             effect_seq: 0, # global effect id sequence
             attempt_effect_links: {}, # {attempt_id => [effect_link, ...]}
             node_effect_links: {}, # {[workflow_id, revision, node_id] => [effect_link, ...]}
@@ -98,9 +100,27 @@ module DAG
           state[:effects_by_ref] ||= {}
           state[:effect_order] ||= state[:effects].keys
           state[:effect_seq] ||= state[:effects].size
+          state[:active_effect_order] ||= state[:effect_order].reject { |id| state[:effects].fetch(id).terminal? }
           state[:attempt_effect_links] ||= {}
           state[:node_effect_links] ||= {}
           state[:effect_attempt_links] ||= {}
+        end
+
+        # Internal: initialize the per-node attempt index for snapshots
+        # created before it existed.
+        # @api private
+        def ensure_attempt_node_index!(state)
+          state[:attempts_by_node] ||= state[:attempts].each_value.with_object({}) do |attempt, index|
+            key = [attempt[:workflow_id], attempt[:revision], attempt[:node_id]]
+            (index[key] ||= []) << attempt[:attempt_id]
+          end
+        end
+
+        # Internal: attempt ids for one node in one revision, in begin order.
+        # @api private
+        def attempt_ids_for_node(state, workflow_id, revision, node_id)
+          ensure_attempt_node_index!(state)
+          state[:attempts_by_node].fetch([workflow_id, revision, node_id], [])
         end
 
         # Internal: initialize committed-result projections for snapshots
@@ -266,6 +286,8 @@ module DAG
             result: nil
           }
           state[:attempts_index][workflow_id] << attempt_id
+          ensure_attempt_node_index!(state)
+          (state[:attempts_by_node][[workflow_id, revision, node_id]] ||= []) << attempt_id
           attempt_id
         end
 
@@ -332,7 +354,7 @@ module DAG
           DAG::Validation.optional_string!(only_workflow_id, "only_workflow_id")
 
           claimed = []
-          state[:effect_order].each do |effect_id|
+          state[:active_effect_order].each do |effect_id|
             break if claimed.size >= limit
 
             record = state[:effects].fetch(effect_id)
@@ -349,6 +371,15 @@ module DAG
             claimed << updated
           end
           claimed
+        end
+
+        # Internal: drop a now-terminal effect from the active claim scan.
+        # `effect_order` keeps full insertion history; only the claim path
+        # iterates this subset, so a long-lived poller does not pay
+        # O(total effects ever created) per tick.
+        # @api private
+        def retire_effect_from_active_order(state, effect_id)
+          state[:active_effect_order].delete(effect_id)
         end
 
         # @api private
@@ -373,6 +404,7 @@ module DAG
             lease_until_ms: nil,
             updated_at_ms: now_ms
           )
+          retire_effect_from_active_order(state, effect_id)
           state[:effects][effect_id] = updated
         end
 
@@ -392,6 +424,7 @@ module DAG
             lease_until_ms: nil,
             updated_at_ms: now_ms
           )
+          retire_effect_from_active_order(state, effect_id) unless retriable
           state[:effects][effect_id] = updated
         end
 
@@ -513,23 +546,10 @@ module DAG
         # @api private
         def list_committed_results_for_predecessors(state, workflow_id:, revision:, predecessors:)
           ensure_committed_result_projection_state!(state)
-          predecessor_ids = predecessors.map(&:to_sym)
-          predecessor_set = predecessor_ids.to_set
-          best_by_node = {}
-
-          state[:attempts_index].fetch(workflow_id, []).each do |attempt_id|
-            attempt = state[:attempts][attempt_id]
-            next unless attempt[:revision] == revision
-            next unless attempt[:state] == :committed
-            next unless predecessor_set.include?(attempt[:node_id])
-
-            current = best_by_node[attempt[:node_id]]
-            best_by_node[attempt[:node_id]] = attempt if DAG::AttemptOrder.better?(attempt, current)
-          end
-
           states_for_rev = state[:node_states].fetch([workflow_id, revision], {})
-          predecessor_ids.each_with_object({}) do |node_id, results|
-            attempt = best_by_node[node_id]
+
+          predecessors.map(&:to_sym).each_with_object({}) do |node_id, results|
+            attempt = best_committed_attempt_for_node(state, workflow_id, revision, node_id)
             if attempt
               results[node_id] = attempt[:result]
             elsif states_for_rev[node_id] == :committed
@@ -601,11 +621,11 @@ module DAG
           failed_node_ids = states_for_rev.select { |_, s| s == :failed }.keys
           validate_optional_workflow_event!(event, row.fetch(:id), revision)
 
-          failed_set = failed_node_ids.to_set
-          state[:attempts_index].fetch(id, []).each do |aid|
-            attempt = state[:attempts][aid]
-            next unless attempt[:revision] == revision && failed_set.include?(attempt[:node_id])
-            attempt[:state] = :aborted if attempt[:state] == :failed
+          failed_node_ids.each do |node_id|
+            attempt_ids_for_node(state, id, revision, node_id).each do |aid|
+              attempt = state[:attempts][aid]
+              attempt[:state] = :aborted if attempt[:state] == :failed
+            end
           end
           failed_node_ids.each { |node_id| states_for_rev[node_id] = :pending }
           row[:workflow_retry_count] += 1
@@ -664,6 +684,7 @@ module DAG
             state[:effects][record.id] = record
             state[:effects_by_ref][record.ref] = record.id
             state[:effect_order] << record.id
+            state[:active_effect_order] << record.id
             state[:effect_seq] += 1
           end
 
@@ -825,19 +846,24 @@ module DAG
           raise DAG::StaleStateError, "workflow #{id} cannot append revision from #{state.inspect}"
         end
 
-        # Internal: find the canonical committed result already scoped to a
-        # revision, either from a real attempt or from an explicit projection.
+        # Internal: canonical committed attempt for one node in one revision.
         # @api private
-        def canonical_committed_result_for_node(state, workflow_id, revision, node_id)
+        def best_committed_attempt_for_node(state, workflow_id, revision, node_id)
           best = nil
-          state[:attempts_index].fetch(workflow_id, []).each do |attempt_id|
+          attempt_ids_for_node(state, workflow_id, revision, node_id).each do |attempt_id|
             attempt = state[:attempts][attempt_id]
-            next unless attempt[:revision] == revision
-            next unless attempt[:node_id] == node_id
             next unless attempt[:state] == :committed
 
             best = attempt if DAG::AttemptOrder.better?(attempt, best)
           end
+          best
+        end
+
+        # Internal: find the canonical committed result already scoped to a
+        # revision, either from a real attempt or from an explicit projection.
+        # @api private
+        def canonical_committed_result_for_node(state, workflow_id, revision, node_id)
+          best = best_committed_attempt_for_node(state, workflow_id, revision, node_id)
           return best[:result] if best
 
           state[:committed_result_projections][[workflow_id, revision, node_id]]
@@ -846,9 +872,8 @@ module DAG
         # Internal helper used by `count_attempts` and friends.
         # @api private
         def count_attempts_internal(state, id, revision, node_id, exclude: [])
-          state[:attempts_index].fetch(id, []).count do |aid|
-            a = state[:attempts][aid]
-            a[:revision] == revision && a[:node_id] == node_id && !exclude.include?(a[:state])
+          attempt_ids_for_node(state, id, revision, node_id).count do |aid|
+            !exclude.include?(state[:attempts][aid][:state])
           end
         end
 

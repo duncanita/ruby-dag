@@ -118,6 +118,28 @@ class R0RuboCopCopsTest < Minitest::Test
     refute_empty offenses
   end
 
+  def test_no_thread_or_ractor_flags_kernel_receiver_process_sends
+    %w[system spawn fork].each do |method_name|
+      offenses = inspect_source(
+        RuboCop::Cop::DAG::NoThreadOrRactor,
+        "Kernel.#{method_name}('echo ok')\n",
+        path: runtime_path("kernel_#{method_name}_example.rb")
+      )
+
+      refute_empty offenses, "Kernel.#{method_name} must be flagged"
+    end
+  end
+
+  def test_no_thread_or_ractor_flags_fiber_even_in_dispatcher
+    offenses = inspect_source(
+      RuboCop::Cop::DAG::NoThreadOrRactor,
+      "Fiber.new { :work }\n",
+      path: runtime_path("effects/dispatcher.rb")
+    )
+
+    refute_empty offenses
+  end
+
   def test_no_thread_or_ractor_flags_backticks_in_runtime
     offenses = inspect_source(
       RuboCop::Cop::DAG::NoThreadOrRactor,
