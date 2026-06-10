@@ -6,7 +6,7 @@ class R0V15ReleaseGateTest < Minitest::Test
   ROOT = File.expand_path("../..", __dir__)
 
   def test_version_is_bumped_to_mutation_testing_release
-    assert_equal "1.5.0", DAG::VERSION
+    assert_operator Gem::Version.new(DAG::VERSION), :>=, Gem::Version.new("1.5.0")
   end
 
   def test_changelog_contains_v1_5_release_notes

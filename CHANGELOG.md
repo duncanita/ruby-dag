@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.6.0 — 2026-06-10
+
 Project-review hardening pass: design fixes at the storage-port seams,
 DRY consolidation, performance work, and CI/cop enforcement.
 
