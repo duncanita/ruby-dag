@@ -41,6 +41,30 @@ module DAG
       )
     end
 
+    # Full-fidelity JSON-safe projection; round-trips via
+    # {ReplacementGraph.from_h}.
+    # @return [Hash]
+    def to_h
+      {
+        graph: graph.to_h,
+        entry_node_ids: entry_node_ids,
+        exit_node_ids: exit_node_ids
+      }
+    end
+
+    # Rebuild a ReplacementGraph from a {#to_h} projection (Symbol or
+    # String keys).
+    # @param hash [Hash]
+    # @return [ReplacementGraph]
+    def self.from_h(hash)
+      DAG::Validation.hash!(hash, "replacement_graph hash")
+      new(
+        graph: DAG::Graph.from_h(DAG::Snapshot.fetch!(hash, :graph)),
+        entry_node_ids: DAG::Snapshot.fetch!(hash, :entry_node_ids),
+        exit_node_ids: DAG::Snapshot.fetch!(hash, :exit_node_ids)
+      )
+    end
+
     private
 
     def validate_node_ids_shape!(ids, label)

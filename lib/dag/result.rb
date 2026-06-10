@@ -12,7 +12,7 @@ module DAG
   #   map { |v| ... }        -- transform value on success; passes through on failure
   #   recover { |e| ... }    -- failure → result (lets you turn failure back into success)
   #   unwrap!                -- value on success, raises on failure
-  #   to_h                   -- {status:, value:|error:}
+  #   to_h                   -- full-fidelity JSON-safe projection (see Result.from_h)
   #
   # `and_then` and `recover` MUST return a Result. The block result is checked
   # and a clean error is raised if not — this catches the most common monad
@@ -54,6 +54,28 @@ module DAG
     def self.assert_result!(value, source)
       return value if value.is_a?(Result)
       raise TypeError, "#{source} block must return a DAG::Result, got #{value.class}"
+    end
+
+    # Deserialization entry point for every step-outcome `to_h` projection.
+    # Dispatches on `:status` and returns `Success`, `Failure`, or `Waiting`
+    # (Waiting is a valid step outcome even though it does not include the
+    # monadic `Result` API). Accepts Symbol or String keys/status, so a
+    # round-trip through a JSON serializer reconstructs the original value.
+    #
+    # @param hash [Hash] a `Success#to_h`, `Failure#to_h`, or `Waiting#to_h`
+    # @return [DAG::Success, DAG::Failure, DAG::Waiting]
+    # @raise [ArgumentError] when `:status` is missing or unknown
+    def self.from_h(hash)
+      DAG::Validation.hash!(hash, "result hash")
+      status = DAG::Snapshot.fetch(hash, :status)
+
+      case status&.to_sym
+      when :success then Success.from_h(hash)
+      when :failure then Failure.from_h(hash)
+      when :waiting then Waiting.from_h(hash)
+      else
+        raise ArgumentError, "unknown result status: #{status.inspect}"
+      end
     end
   end
 end

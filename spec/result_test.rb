@@ -39,7 +39,10 @@ class ResultTest < Minitest::Test
   end
 
   def test_success_to_h
-    assert_equal({status: :success, value: 42}, DAG::Success.new(value: 42).to_h)
+    assert_equal(
+      {status: :success, value: 42, context_patch: {}, proposed_mutations: [], proposed_effects: [], metadata: {}},
+      DAG::Success.new(value: 42).to_h
+    )
   end
 
   def test_success_inspect
@@ -84,7 +87,10 @@ class ResultTest < Minitest::Test
   end
 
   def test_failure_to_h
-    assert_equal({status: :failure, error: "boom"}, DAG::Failure.new(error: "boom").to_h)
+    assert_equal(
+      {status: :failure, error: "boom", retriable: false, metadata: {}},
+      DAG::Failure.new(error: "boom").to_h
+    )
   end
 
   def test_failure_inspect

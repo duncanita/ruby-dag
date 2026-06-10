@@ -36,6 +36,23 @@ module DAG
 
       # @return [String] deterministic effect reference
       def ref = @ref
+
+      # Full-fidelity JSON-safe projection; round-trips via {Intent.from_h}.
+      # @return [Hash]
+      def to_h = {type: type, key: key, payload: payload, metadata: metadata}
+
+      # Rebuild an Intent from a {#to_h} projection (Symbol or String keys).
+      # @param hash [Hash]
+      # @return [Intent]
+      def self.from_h(hash)
+        DAG::Validation.hash!(hash, "intent hash")
+        new(
+          type: DAG::Snapshot.fetch!(hash, :type),
+          key: DAG::Snapshot.fetch!(hash, :key),
+          payload: DAG::Snapshot.fetch(hash, :payload, {}),
+          metadata: DAG::Snapshot.fetch(hash, :metadata, {})
+        )
+      end
     end
   end
 end

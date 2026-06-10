@@ -65,5 +65,32 @@ module DAG
         metadata: DAG.frozen_copy(metadata)
       )
     end
+
+    # Full-fidelity JSON-safe projection; round-trips via {Result.from_h}.
+    # @return [Hash]
+    def to_h
+      {
+        status: :waiting,
+        reason: reason,
+        resume_token: resume_token,
+        not_before_ms: not_before_ms,
+        proposed_effects: proposed_effects.map(&:to_h),
+        metadata: metadata
+      }
+    end
+
+    # Rebuild a Waiting from a {#to_h} projection (Symbol or String keys).
+    # @param hash [Hash]
+    # @return [Waiting]
+    def self.from_h(hash)
+      DAG::Validation.hash!(hash, "waiting hash")
+      new(
+        reason: DAG::Snapshot.fetch!(hash, :reason).to_sym,
+        resume_token: DAG::Snapshot.fetch(hash, :resume_token),
+        not_before_ms: DAG::Snapshot.fetch(hash, :not_before_ms),
+        proposed_effects: DAG::Snapshot.fetch(hash, :proposed_effects, []).map { |i| DAG::Effects::Intent.from_h(i) },
+        metadata: DAG::Snapshot.fetch(hash, :metadata, {})
+      )
+    end
   end
 end

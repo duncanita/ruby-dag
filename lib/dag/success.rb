@@ -81,8 +81,34 @@ module DAG
     # @return [Object] `value`
     def unwrap! = value
 
-    # @return [Hash] {status: :success, value:}
-    def to_h = {status: :success, value: value}
+    # Full-fidelity JSON-safe projection; round-trips via {Result.from_h}.
+    # Durable adapters persisting committed results must use this shape —
+    # `context_patch` in particular is load-bearing for replay.
+    # @return [Hash]
+    def to_h
+      {
+        status: :success,
+        value: value,
+        context_patch: context_patch,
+        proposed_mutations: proposed_mutations.map(&:to_h),
+        proposed_effects: proposed_effects.map(&:to_h),
+        metadata: metadata
+      }
+    end
+
+    # Rebuild a Success from a {#to_h} projection (Symbol or String keys).
+    # @param hash [Hash]
+    # @return [Success]
+    def self.from_h(hash)
+      DAG::Validation.hash!(hash, "success hash")
+      new(
+        value: DAG::Snapshot.fetch(hash, :value),
+        context_patch: DAG::Snapshot.fetch(hash, :context_patch, {}),
+        proposed_mutations: DAG::Snapshot.fetch(hash, :proposed_mutations, []).map { |m| DAG::ProposedMutation.from_h(m) },
+        proposed_effects: DAG::Snapshot.fetch(hash, :proposed_effects, []).map { |i| DAG::Effects::Intent.from_h(i) },
+        metadata: DAG::Snapshot.fetch(hash, :metadata, {})
+      )
+    end
 
     # @return [String]
     def inspect = "Success(#{value.inspect})"
