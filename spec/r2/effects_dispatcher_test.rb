@@ -410,6 +410,8 @@ class EffectsDispatcherTest < Minitest::Test
   end
 
   class StaleSuccessStorage
+    include DAG::Ports::EffectLedger
+
     attr_writer :claimed
 
     def initialize
@@ -417,7 +419,7 @@ class EffectsDispatcherTest < Minitest::Test
       @succeeded = false
     end
 
-    def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:)
+    def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)
       @claimed.first(limit)
     end
 

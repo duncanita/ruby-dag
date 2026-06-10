@@ -318,39 +318,17 @@ module DAG
       end
 
       def complete_effect_succeeded(record, result, now_ms)
-        if DAG::Ports::Storage.method_overridden?(@storage, :complete_effect_succeeded)
-          return @storage.complete_effect_succeeded(
-            effect_id: record.id,
-            owner_id: @owner_id,
-            result: result.result,
-            external_ref: result.external_ref,
-            now_ms: now_ms
-          )
-        end
-
-        updated = @storage.mark_effect_succeeded(
+        @storage.complete_effect_succeeded(
           effect_id: record.id,
           owner_id: @owner_id,
           result: result.result,
           external_ref: result.external_ref,
           now_ms: now_ms
         )
-        {record: updated, released: release_if_terminal(updated, now_ms)}
       end
 
       def complete_effect_failed(record, result, now_ms)
-        if DAG::Ports::Storage.method_overridden?(@storage, :complete_effect_failed)
-          return @storage.complete_effect_failed(
-            effect_id: record.id,
-            owner_id: @owner_id,
-            error: result.error,
-            retriable: result.retriable?,
-            not_before_ms: result.not_before_ms,
-            now_ms: now_ms
-          )
-        end
-
-        updated = @storage.mark_effect_failed(
+        @storage.complete_effect_failed(
           effect_id: record.id,
           owner_id: @owner_id,
           error: result.error,
@@ -358,13 +336,6 @@ module DAG
           not_before_ms: result.not_before_ms,
           now_ms: now_ms
         )
-        {record: updated, released: release_if_terminal(updated, now_ms)}
-      end
-
-      def release_if_terminal(updated, now_ms)
-        return [] unless updated.terminal?
-
-        @storage.release_nodes_satisfied_by_effect(effect_id: updated.id, now_ms: now_ms)
       end
 
       def stale_lease_error(record, error)
@@ -395,12 +366,15 @@ module DAG
         handlers.to_h { |type, handler| [type.to_s, handler] }.freeze
       end
 
+      # The dispatcher's storage dependency is the `Ports::EffectLedger`
+      # completion surface plus the durable event log. Adapters that only
+      # implement the mark/release primitives get `complete_effect_*` for
+      # free by including `Ports::EffectLedger`.
       def validate_storage!(value)
         %i[
           claim_ready_effects
-          mark_effect_succeeded
-          mark_effect_failed
-          release_nodes_satisfied_by_effect
+          complete_effect_succeeded
+          complete_effect_failed
           append_event
         ].each do |method_name|
           DAG::Validation.dependency!(value, method_name, "storage")

@@ -19,8 +19,20 @@ module RuboCop
         # code. `immutability.rb` is intentionally NOT in this list — it is
         # the implementation of `deep_dup` / `deep_freeze` / `json_safe!` and
         # necessarily mutates the local hashes it is constructing.
+        #
+        # Roadmap-pure files intentionally NOT in this list (the cop flags
+        # every mutating send, with no receiver analysis, so local-variable
+        # builder mutation would be a false positive):
+        # - `runner.rb` — builds local frozen lookup tables in place before
+        #   freezing them (`preds << p`, `predecessors_by_node[id] = ...`,
+        #   `snapshots[pred] = ...`, `results[pred] = ...`).
+        # - `definition_editor.rb` — builds a local `step_types` hash in
+        #   place while assembling the replacement definition.
+        # - `graph.rb` — mutable-until-frozen builder by design; mutation
+        #   before `freeze` is its documented contract.
         PURE_KERNEL_FILES = %w[
           event.rb
+          mutation_service.rb
           proposed_mutation.rb
           replacement_graph.rb
           run_result.rb

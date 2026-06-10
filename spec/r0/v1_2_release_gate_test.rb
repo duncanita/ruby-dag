@@ -23,10 +23,10 @@ class R0V12ReleaseGateTest < Minitest::Test
   end
 
   def test_storage_port_documents_renew_effect_lease
-    port = File.read(File.join(ROOT, "lib/dag/ports/storage.rb"))
+    port = File.read(File.join(ROOT, "lib/dag/ports/effect_ledger.rb"))
 
     assert_includes port, "def renew_effect_lease(effect_id:, owner_id:, until_ms:, now_ms:)"
-    assert_includes port, "cooperatively extend the lease"
+    assert_includes port, "Cooperatively extend the lease"
   end
 
   def test_contract_documents_renew_effect_lease

@@ -23,6 +23,7 @@ require_relative "dag/graph/builder"
 require_relative "dag/graph/validator"
 
 # Boundary ports
+require_relative "dag/ports/effect_ledger"
 require_relative "dag/ports/storage"
 require_relative "dag/ports/event_bus"
 require_relative "dag/ports/fingerprint"

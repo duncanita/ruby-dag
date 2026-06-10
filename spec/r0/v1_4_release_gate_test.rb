@@ -26,7 +26,7 @@ class R0V14ReleaseGateTest < Minitest::Test
   end
 
   def test_port_exposes_only_workflow_id_kwarg
-    port = File.read(File.join(ROOT, "lib/dag/ports/storage.rb"))
+    port = File.read(File.join(ROOT, "lib/dag/ports/effect_ledger.rb"))
 
     assert_includes port, "def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)"
     assert_includes port, "only_workflow_id [String, nil]"
