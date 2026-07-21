@@ -1,11 +1,19 @@
 name: CI
 
+# push is limited to main so PR branches run once (via pull_request)
+# instead of twice; tags still build so releases get a fresh gate.
 on:
   push:
+    branches: [main]
+    tags: ["v*"]
   pull_request:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
