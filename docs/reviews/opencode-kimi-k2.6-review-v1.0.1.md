@@ -117,7 +117,7 @@ class Adapters::Memory::Backend
     @workflows = {}
     @attempts = {}
   end
-  
+
   def create_workflow(...)
     # opera su @workflows
   end

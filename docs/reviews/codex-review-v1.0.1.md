@@ -451,4 +451,3 @@ The next danger is not that the code becomes messy. The next danger is that the
 contract becomes too large to implement comfortably. Keep the kernel small,
 make every new atomic boundary justify itself, and push concrete infrastructure
 outside the gem.
-

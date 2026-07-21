@@ -6,7 +6,7 @@
 
 ## 1. La Vision: Validazione Onesta
 
-1. **Zero dipendenze esterne:** **Vero.** 
+1. **Zero dipendenze esterne:** **Vero.**
    Il gemspec è pulito. L'uso esclusivo della stdlib (JSON, SecureRandom) è un'ottima scelta per un kernel che deve durare 10 anni. Promosso a pieni voti.
 
 2. **Monadi:** **Parzialmente falso (o per lo meno, incompleto).**
@@ -16,7 +16,7 @@
    I tipi sono immutabili (tramite `Data.define` e `frozen_copy`), ma il "CoW" implementato via `deep_dup` + `deep_freeze` in `ExecutionContext` è, di fatto, una copia ricorsiva totale dell'intero albero di oggetti in Ruby. Per piccoli DAG va bene, ma per payload grandi, il GC di Ruby collasserà sotto le allocazioni. Non è "Copy-on-Write", è "Copy-Every-Time". Cambia la terminologia e documenta il trade-off.
 
 4. **Bilanciamento OOP / FP:** **Retorica, non bilanciamento.**
-   In realtà, hai sovrapposto due approcci: 
+   In realtà, hai sovrapposto due approcci:
    - Valori/Eventi: puri (FP).
    - Logica di orchestrazione/costruzione: OOP classico (mutazione + freeze finale in `Graph`).
    - `StorageState`: puramente procedurale.
@@ -55,13 +55,13 @@ La classe `DAG::Graph` fa tutto:
 
 ### B. `Runner` è un monolito (~500 linee)
 Un solo orchestratore gestisce l'acquisizione, la costruzione del contesto, il loop di execution, l'handling degli outcomes, il commit degli eventi e il fallback dello storage locale.
-*Diagnosi:* Difficile da testare isolando la logica (`handle_outcome` fa 10 cose insieme, tra cui calcolo stato ed emissione I/O). 
+*Diagnosi:* Difficile da testare isolando la logica (`handle_outcome` fa 10 cose insieme, tra cui calcolo stato ed emissione I/O).
 *Proposta:* Spezzare in tre componenti coordinate: `Eligibility`, `OutcomeHandler/Executor` e `Finalizer`. Il Runner deve solo chiamarli nel suo loop stateless.
 
 ### C. `Memory::StorageState` è un abominio procedurale (~760 linee)
 Un enorme file C-style in Ruby. Usa `module_function` per operazioni che modificano uno hash di stato esterno.
 *Diagnosi:* Il fatto che il linter permetta qui mutazioni in-place non giustifica l'assenza di OOP per incapsulare i concetti (Workflow, Attempts, Effects, Events).
-*Proposta:* Spezzare in backend incapsulati in classi. 
+*Proposta:* Spezzare in backend incapsulati in classi.
 
 ---
 
@@ -76,6 +76,6 @@ Un enorme file C-style in Ruby. Usa `module_function` per operazioni che modific
 
 ## 5. Verdetto Finale
 
-Stai costruendo una cosa molto difficile (un runtime workflow robusto, deterministico e senza deps), e il codice dimostra che hai la disciplina mentale per farlo: sai dove mettere le transazioni, sai evitare le race conditions e non cedi alla tentazione di usare gemme esterne. 
+Stai costruendo una cosa molto difficile (un runtime workflow robusto, deterministico e senza deps), e il codice dimostra che hai la disciplina mentale per farlo: sai dove mettere le transazioni, sai evitare le race conditions e non cedi alla tentazione di usare gemme esterne.
 
 Il progetto è una solida Alpha production-ready. Ma prima di scalare, devi risolvere la densità delle classi primarie. Al momento hai messo troppa logica nelle fondamenta. Pulisci la casa prima di aggiungere nuovi piani.

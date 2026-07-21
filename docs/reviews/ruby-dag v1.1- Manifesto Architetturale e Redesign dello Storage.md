@@ -2,7 +2,7 @@
 
 > *L'architettura non è come vendi il codice nei README, è come il codice fallisce in produzione alle tre di notte.*
 
-Incrociando l'analisi statica e leggendo i byte, emerge una verità innegabile: le fondamenta di `ruby-dag` sono ottime. Aver isolato lo stato mutabile e aver garantito il determinismo bit-a-bit con test di fuzzing dimostra che il kernel è stato pensato per sopravvivere ai crash. 
+Incrociando l'analisi statica e leggendo i byte, emerge una verità innegabile: le fondamenta di `ruby-dag` sono ottime. Aver isolato lo stato mutabile e aver garantito il determinismo bit-a-bit con test di fuzzing dimostra che il kernel è stato pensato per sopravvivere ai crash.
 
 Tuttavia, per scalare verso veri database relazionali (fase S0 - SQLite/PostgreSQL), il progetto deve affrontare due problemi strutturali:
 1. **Un lessico interno fuorviante:** nomi (Monadi, CoW) usati in modo impreciso che confondono il modello mentale.
@@ -42,7 +42,7 @@ Per implementare l'adapter durevole S0 (SQLite/PostgreSQL) pretenderemo 3 garanz
 3. **Unit of Work (ACID):** Transazioni esplicite. Commit di attempts, effetti ed eventi avvengono tutti in una singola transazione database. Tutto o niente.
 
 ### 2.2 Le Violazioni come Valori Monadici (Il DB restituisce lo stato del mondo)
-Basta lanciare eccezioni (`raise StaleStateError`). Le eccezioni sono `GOTO` mascherati che rompono il design funzionale. 
+Basta lanciare eccezioni (`raise StaleStateError`). Le eccezioni sono `GOTO` mascherati che rompono il design funzionale.
 
 Il driver dell'adapter intercetterà gli errori nativi SQL (es. `SQLite3::ConstraintException`) e restituirà la nostra monade `Failure` modellando la violazione in modo semantico e **allegando lo stato effettivo del mondo in quel momento**.
 
@@ -51,7 +51,7 @@ module DAG::Ports::Storage::Violations
   # Il DB segnala: "Optimistic lock fallito. Un altro worker ci ha battuto sul tempo.
   # Lo stato attuale a terra adesso è actual_state."
   StaleState = Data.define(:entity, :expected_rev, :actual_rev, :actual_state)
-  
+
   # Il DB segnala: "Violazione di constraint UNIQUE. L'effetto esiste già."
   IdempotencyConflict = Data.define(:key, :existing_fingerprint)
 end
@@ -68,7 +68,7 @@ result.recover do |violation|
   when DAG::Ports::Storage::Violations::IdempotencyConflict
     # Il DB ci ha avvertiti dell'idempotenza violata. Transizione a terminal failure.
     transition_to_terminal_failure!(diagnostic: :idempotency_breach, details: violation)
-    
+
   when DAG::Ports::Storage::Violations::StaleState
     # Ci adattiamo alla verità del DB SENZA fare ulteriori query di lettura
     if violation.actual_state == :paused
@@ -102,7 +102,7 @@ intent = DAG::Storage::CommitIntent.new(
 
 ### 2.4 Deframmentare il Memory Adapter (Pre-SQL)
 Prima di scrivere una sola riga di SQL, il file `Memory::StorageState` (oggi 760 righe monolitiche) andrà preparato:
-*   Spezzare logicamente il modulo interno in file separati: `workflows.rb`, `attempts.rb`, `events.rb`, `effects.rb`. 
+*   Spezzare logicamente il modulo interno in file separati: `workflows.rb`, `attempts.rb`, `events.rb`, `effects.rb`.
 *   Questi file saranno la **blueprint mentale esatta 1:1** per la creazione del DDL (schema tabelle e foreign keys) del futuro adapter SQLite.
 *   Modificare l'adapter in memoria affinché **restituisca le Monadi di Violazione invece di lanciare eccezioni**. Questo permetterà di validare e testare il nuovo `Runner` funzionale immediatamente senza spaccare il comportamento legacy in questa fase.
 
@@ -110,8 +110,8 @@ Prima di scrivere una sola riga di SQL, il file `Memory::StorageState` (oggi 760
 
 ## Il Mandato
 
-Questa è l'ingegneria che trasforma un bel prototipo in un motore da produzione. 
+Questa è l'ingegneria che trasforma un bel prototipo in un motore da produzione.
 
-Eseguite questa roadmap nell'ordine esatto: pulite il codice e le API (Fase 1), poi aggredite il port dello Storage (Fase 2). Una volta che il Runner comincerà a consumare "Violazioni monadiche" invece di gestire "Eccezioni procedurali di lock", avrete un Kernel antiproiettile. 
+Eseguite questa roadmap nell'ordine esatto: pulite il codice e le API (Fase 1), poi aggredite il port dello Storage (Fase 2). Una volta che il Runner comincerà a consumare "Violazioni monadiche" invece di gestire "Eccezioni procedurali di lock", avrete un Kernel antiproiettile.
 
 A quel punto, scrivere l'adapter SQL sarà un banale esercizio di mappatura transazionale. Sarete pronti per il mondo reale.
