@@ -663,12 +663,16 @@ module ProductionReadiness
       @metrics[:retries_exhausted] += 1
     end
 
-    # Memory::EventBus#publish appends to the internal buffer first, then
-    # iterates subscribers. A subscriber that raises propagates out through
-    # the runner. The contract verified here:
-    # - the storage event log already contains the event (publish-after-append),
-    # - the runner surfaces the subscriber's exception (no swallowing),
-    # - subsequent subscribers do not see the event (each-loop short-circuits).
+    # The event bus is a non-durable observer: every kernel publish goes
+    # through EventPublishing.publish_quietly, which swallows StandardError
+    # so a failing subscriber can never fail the storage transaction it
+    # follows. Memory::EventBus#publish appends to the internal buffer
+    # first, then iterates subscribers, and a raise short-circuits that
+    # event's fan-out. The contract verified here:
+    # - the runner completes despite a subscriber raising on every event,
+    # - the raising subscriber sees each published event exactly once,
+    # - subsequent subscribers never see a short-circuited event,
+    # - the bus buffer and storage event log both remain whole.
     def subscriber_failure_scenario
       storage = DAG::Adapters::Memory::Storage.new
       event_bus = DAG::Adapters::Memory::EventBus.new
@@ -684,15 +688,20 @@ module ProductionReadiness
       definition = chain_definition(%i[a b], type: :probe)
       workflow_id = create_workflow(storage, definition)
 
-      assert_raises(RuntimeError) { runner(storage, event_bus: event_bus).call(workflow_id) }
+      result = runner(storage, event_bus: event_bus).call(workflow_id)
+      assert_equal(:completed, result.state,
+        "a raising subscriber must not fail the run (publish is best-effort)")
 
-      assert_equal(1, raised_event_types.size, "raising subscriber received more than one event")
+      stored = storage.read_events(workflow_id: workflow_id)
+      assert_equal(stored.map(&:type), raised_event_types,
+        "raising subscriber did not see every published event exactly once, in order")
       assert_equal(:workflow_started, raised_event_types.first,
         "raising subscriber did not see the first published event")
       assert(tail_subscriber_seen.empty?, "downstream subscriber received an event after a prior raise")
-      stored = storage.read_events(workflow_id: workflow_id)
-      assert(stored.any? { |e| e.type == :workflow_started },
-        "storage event log lost the event whose publish raised")
+      assert_equal(stored.map(&:seq), event_bus.events.map(&:seq),
+        "bus buffer lost events whose subscriber fan-out raised")
+      assert(stored.any? { |e| e.type == :workflow_completed },
+        "storage event log is missing the terminal event")
 
       @metrics[:subscriber_failures] += 1
     end
