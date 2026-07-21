@@ -1,0 +1,46 @@
+# Pre-commit hooks for ruby-dag
+#
+# Install:  just pre-commit-install
+# Run all:  just pre-commit-run
+# Update:   pre-commit autoupdate
+
+default_install_hook_types:
+  - pre-commit
+  - commit-msg
+
+repos:
+  # Conventional Commits validation
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+
+  # General file hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  # Ruby: Standard style + custom DAG cops, via the project bundle
+  - repo: local
+    hooks:
+      - id: standardrb
+        name: standardrb (auto-fix)
+        entry: bundle exec standardrb --fix
+        language: system
+        types: [ruby]
+        require_serial: true
+      - id: rubocop-dag-cops
+        name: rubocop (custom DAG cops)
+        entry: bundle exec rubocop --display-cop-names --force-exclusion
+        language: system
+        types: [ruby]
+        require_serial: true
