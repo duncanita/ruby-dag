@@ -195,8 +195,9 @@ module DAG
 
     # Emitted once per workflow lifetime; survives Runner#retry_workflow.
     def append_workflow_started_once(run)
-      first_event = @storage.read_events(workflow_id: run.workflow_id, limit: 1).first
-      return if first_event&.type == :workflow_started
+      already_emitted = @storage.read_events(workflow_id: run.workflow_id)
+        .any? { |event| event.type == :workflow_started }
+      return if already_emitted
 
       append_event(run,
         type: :workflow_started,

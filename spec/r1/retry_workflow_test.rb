@@ -114,6 +114,41 @@ class RetryWorkflowTest < Minitest::Test
       "workflow_started stays once-per-lifetime; retry must not re-emit it"
   end
 
+  def test_workflow_started_emitted_once_despite_pre_run_event
+    storage = DAG::Adapters::Memory::Storage.new
+    runner = build_runner(storage: storage)
+
+    workflow_id = create_workflow(storage, simple_definition)
+    storage.append_event(workflow_id: workflow_id,
+      event: build_event(:mutation_applied, workflow_id: workflow_id))
+
+    assert_equal :completed, runner.call(workflow_id).state
+
+    events = storage.read_events(workflow_id: workflow_id)
+    assert_equal :mutation_applied, events.first.type
+    assert_equal 1, events.count { |e| e.type == :workflow_started },
+      "pre-run events must not cause a duplicate workflow_started"
+  end
+
+  def test_retry_does_not_re_emit_workflow_started_after_pre_run_event
+    storage = DAG::Adapters::Memory::Storage.new
+    registry, _counter = registry_with_failing_step(failures_before_success: 1)
+    runner = build_runner(storage: storage, registry: registry)
+
+    definition = DAG::Workflow::Definition.new.add_node(:flaky, type: :flaky)
+    workflow_id = create_workflow(storage, definition,
+      runtime_profile: profile(max_attempts_per_node: 1, max_workflow_retries: 1))
+    storage.append_event(workflow_id: workflow_id,
+      event: build_event(:mutation_applied, workflow_id: workflow_id))
+
+    assert_equal :failed, runner.call(workflow_id).state
+    assert_equal :completed, runner.retry_workflow(workflow_id).state
+
+    events = storage.read_events(workflow_id: workflow_id)
+    assert_equal 1, events.count { |e| e.type == :workflow_started },
+      "retry after a pre-run event must not re-emit workflow_started"
+  end
+
   def test_retry_does_not_overwrite_aborted_attempt_records
     storage = DAG::Adapters::Memory::Storage.new
     registry, _counter = registry_with_failing_step(failures_before_success: 4)
