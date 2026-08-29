@@ -10,6 +10,7 @@ GEM
     date (3.5.1)
     diff-lcs (2.0.0)
     docile (1.4.1)
+    drb (2.2.3)
     erb (6.0.4)
     io-console (0.8.2)
     irb (1.18.0)
@@ -21,7 +22,9 @@ GEM
     language_server-protocol (3.17.0.5)
     lint_roller (1.1.0)
     logger (1.7.0)
-    minitest (5.27.0)
+    minitest (6.0.6)
+      drb (~> 2.0)
+      prism (~> 1.5)
     mutant (0.16.3)
       diff-lcs (>= 1.6, < 3)
       irb (~> 1.15)
@@ -119,7 +122,7 @@ PLATFORMS
   ruby
 
 DEPENDENCIES
-  minitest (~> 5.0)
+  minitest (~> 6.0)
   mutant-minitest (~> 0.16)
   rake (~> 13.0)
   ruby-dag!
