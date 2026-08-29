@@ -112,7 +112,7 @@ GEM
       diff-lcs (>= 1.6, < 3)
       parser (>= 3.3.0)
       prism (>= 1.5.1)
-    yard (0.9.43)
+    yard (0.9.44)
 
 PLATFORMS
   arm64-darwin-24
