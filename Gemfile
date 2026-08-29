@@ -8,6 +8,6 @@ gem "rake", "~> 13.0"
 gem "minitest", "~> 5.0"
 gem "mutant-minitest", "~> 0.16", require: false
 gem "standard", "~> 1.0"
-gem "simplecov", "~> 0.22", require: false
+gem "simplecov", "~> 1.0", require: false
 gem "ruby-lsp", require: false
 gem "yard", "~> 0.9", require: false
