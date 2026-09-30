@@ -7,6 +7,7 @@ class R3MalformedMutationTest < Minitest::Test
     plan = DAG::DefinitionEditor.new.plan(simple_definition, Object.new)
 
     refute plan.valid?
+    assert_equal :unsupported_mutation, plan.code
     assert_match(/mutation must be a DAG::ProposedMutation/, plan.reason)
   end
 
