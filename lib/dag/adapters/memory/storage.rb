@@ -252,6 +252,16 @@ module DAG
           frozen StorageState.read_events(@state, workflow_id: workflow_id, after_seq: after_seq, limit: limit)
         end
 
+        # (see Ports::Storage#event_type_seen?)
+        def event_type_seen?(workflow_id:, type:)
+          frozen StorageState.event_type_seen?(@state, workflow_id: workflow_id, type: type)
+        end
+
+        # (see Ports::Storage#last_event_seq)
+        def last_event_seq(workflow_id:)
+          frozen StorageState.last_event_seq(@state, workflow_id: workflow_id)
+        end
+
         # (see Ports::Storage#prepare_workflow_retry)
         def prepare_workflow_retry(id:, from: :failed, to: :pending, event: nil, claim: nil)
           frozen StorageState.prepare_workflow_retry(@state, id: id, from: from, to: to, event: event, claim: claim, now_ms: @clock.now_ms)

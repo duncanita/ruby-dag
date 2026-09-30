@@ -298,6 +298,22 @@ module DAG
         raise PortNotImplementedError
       end
 
+      # Report whether an event type has ever been appended for a workflow,
+      # without materializing or scanning its event log on the hot path.
+      # @param workflow_id [String]
+      # @param type [Symbol] event type
+      # @return [Boolean]
+      def event_type_seen?(workflow_id:, type:)
+        raise PortNotImplementedError
+      end
+
+      # Return the latest durable event sequence without loading event rows.
+      # @param workflow_id [String]
+      # @return [Integer, nil] nil when the log is empty
+      def last_event_seq(workflow_id:)
+        raise PortNotImplementedError
+      end
+
       # Port extension: with a CAS guard on workflow state and on the retry
       # budget, atomically:
       # (a) find :failed nodes for the workflow's current revision,

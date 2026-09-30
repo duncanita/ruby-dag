@@ -34,7 +34,8 @@ module DAG
             node_effect_links: {}, # {[workflow_id, revision, node_id] => [effect_link, ...]}
             effect_attempt_links: {}, # {effect_id => [effect_link, ...]} reverse index
             events: {},      # {workflow_id => [event, ...]}
-            seq: {}          # {workflow_id => Integer} event seq
+            seq: {},         # {workflow_id => Integer} event seq
+            event_types_seen: {} # {workflow_id => {type => true}}
           }
         end
 
@@ -216,6 +217,8 @@ module DAG
           state[:attempt_seq][id] = 0
           state[:events][id] = []
           state[:seq][id] = 0
+          state[:event_types_seen] ||= {}
+          state[:event_types_seen][id] = {}
           {id: id, current_revision: revision}
         end
 
@@ -726,12 +729,37 @@ module DAG
             node_id: node_id,
             attempt_id: attempt_id
           )
+          types_seen = event_type_index_for(state, stored_workflow_id)
           state[:seq][stored_workflow_id] ||= 0
           state[:seq][stored_workflow_id] += 1
           stamped = event.with(seq: state[:seq][stored_workflow_id])
           state[:events][stored_workflow_id] ||= []
           state[:events][stored_workflow_id] << stamped
+          types_seen[stamped.type] = true
           stamped
+        end
+
+        # Upgrade older snapshots lazily, once per workflow, before an
+        # existence query or append relies on the event-type index.
+        # @api private
+        def event_type_index_for(state, workflow_id)
+          state[:event_types_seen] ||= {}
+          state[:event_types_seen][workflow_id] ||= state[:events].fetch(workflow_id, []).each_with_object({}) do |event, index|
+            index[event.type] = true
+          end
+        end
+
+        # Implements `Ports::Storage#event_type_seen?`.
+        # @api private
+        def event_type_seen?(state, workflow_id:, type:)
+          !!event_type_index_for(state, workflow_id)[type]
+        end
+
+        # Implements `Ports::Storage#last_event_seq`.
+        # @api private
+        def last_event_seq(state, workflow_id:)
+          seq = state[:seq].fetch(workflow_id, 0)
+          (seq > 0) ? seq : nil
         end
 
         # Implements `Ports::Storage#read_events`.

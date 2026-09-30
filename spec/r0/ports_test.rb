@@ -32,6 +32,8 @@ class R0PortsTest < Minitest::Test
     count_attempts: {workflow_id: "x", revision: 1, node_id: :a},
     append_event: {workflow_id: "x", event: nil},
     read_events: {workflow_id: "x"},
+    event_type_seen?: {workflow_id: "x", type: :workflow_started},
+    last_event_seq: {workflow_id: "x"},
     prepare_workflow_retry: {id: "x"}
   }.freeze
 
@@ -65,7 +67,7 @@ class R0PortsTest < Minitest::Test
 
     {STORAGE_OWN_METHODS => storage_source, EFFECT_LEDGER_METHODS => ledger_source}.each do |methods, source|
       methods.each_key do |method_name|
-        method_documentation = source.match(/((?:\s*#.*\n)+)\s*def #{method_name}\(/)
+        method_documentation = source.match(/((?:\s*#.*\n)+)\s*def #{Regexp.escape(method_name.to_s)}\(/)
         refute_nil method_documentation, "#{method_name} should have a documentation block"
         assert_includes method_documentation[1], "@return", "#{method_name} should document its return shape"
       end

@@ -5,7 +5,7 @@ module DAG::Testing::StorageContract
     include Helpers
 
     def test_contract_declares_all_behavior_groups
-      assert_equal (1..16).map { |index| :"G#{index}" }, DAG::Testing::StorageContract::BEHAVIOR_GROUPS.keys
+      assert_equal (1..17).map { |index| :"G#{index}" }, DAG::Testing::StorageContract::BEHAVIOR_GROUPS.keys
       DAG::Testing::StorageContract::BEHAVIOR_GROUPS.each_value do |description|
         refute_empty description
       end
