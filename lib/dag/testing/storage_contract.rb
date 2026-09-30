@@ -25,7 +25,8 @@ module DAG::Testing::StorageContract
     G12: "standard receipt and error/failure vocabulary",
     G13: "no consumer-specific semantics in storage contract",
     G14: "workflow run claims and fenced writes",
-    G15: "durable effect dispatch history"
+    G15: "durable effect dispatch history",
+    G16: "atomic workflow fork with committed projections"
   }.freeze
 
   module Helpers
@@ -135,6 +136,7 @@ require_relative "storage_contract/error_vocabulary"
 require_relative "storage_contract/consumer_boundary"
 require_relative "storage_contract/workflow_run_claims"
 require_relative "storage_contract/dispatch_history"
+require_relative "storage_contract/workflow_fork"
 
 module DAG::Testing::StorageContract
   module All
@@ -149,5 +151,6 @@ module DAG::Testing::StorageContract
     include ConsumerBoundary
     include WorkflowRunClaims
     include DispatchHistory
+    include WorkflowFork
   end
 end

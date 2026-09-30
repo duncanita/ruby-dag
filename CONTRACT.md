@@ -455,11 +455,31 @@ on both success and failure paths.
 
 ## Storage Receipts And Failure Vocabulary
 
+`fork_workflow(source_id:, source_revision:, new_id:, inherit: :committed)`
+creates a separate workflow from one existing source revision in one storage
+transaction. The target starts in `:pending` at revision 1 with the selected
+definition, source initial context, and runtime profile. Its row records
+`forked_from: {workflow_id:, revision:}`. The source may have newer revisions;
+the selected revision alone determines the fork snapshot. Later source
+mutations cannot change the target.
+
+The default `inherit: :committed` projects a node's canonical committed
+`DAG::Success` into target revision 1 only when that node and all its
+predecessors in the selected definition are inherited. Every other target
+node starts `:pending`. `inherit: :none` starts every node pending. The fork
+does not copy attempts, effects, leases, events, or run claims, and it does
+not synthesize attempts. The receipt lists inherited node ids in topological
+order. Missing source workflows raise `UnknownWorkflowError`, unavailable
+revisions raise `StaleRevisionError`, and an occupied target id raises
+`DuplicateWorkflowError`; errors leave no target row. Adapters must make the
+source snapshot and target creation atomic for concurrent writers.
+
 Public storage methods must not require consumers to infer success from `nil`
 or adapter-specific side effects. Every mutating operation returns the
 shape documented in `DAG::Ports::Storage`:
 
 - `create_workflow` -> `{id:, current_revision:}`.
+- `fork_workflow` -> `{id:, revision: 1, forked_from:, inherited_node_ids:}`.
 - `transition_workflow_state` -> `{id:, state:, event:}` where `event` is the
   stamped event or `nil`.
 - `transition_node_state` -> `{workflow_id:, revision:, node_id:, state:}`.
@@ -668,6 +688,8 @@ covers these groups:
 - **G12** standard receipt and error/failure vocabulary.
 - **G13** no consumer-specific semantics in the storage contract.
 - **G14** workflow run claim expiry, takeover, fenced writes, and two-runner recovery.
+- **G15** durable effect dispatch history and snapshot migration.
+- **G16** atomic workflow fork with committed result projections.
 
 `DAG::Adapters::Memory::Storage` runs the suite in this repository. Consumer or
 production adapters can reuse the same module to prove conformance without
