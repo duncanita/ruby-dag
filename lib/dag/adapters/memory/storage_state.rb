@@ -25,6 +25,7 @@ module DAG
             committed_result_projections: {}, # {[workflow_id, revision, node_id] => DAG::Success}
             attempt_seq: {}, # {workflow_id => Integer} monotonic, never reset
             effects: {}, # {effect_id => DAG::Effects::Record}
+            effect_history_migrated: true,
             effects_by_ref: {}, # {ref => effect_id}
             effect_order: [], # [effect_id, ...] insertion order for deterministic claims
             active_effect_order: [], # [effect_id, ...] non-terminal subset of effect_order
@@ -148,6 +149,12 @@ module DAG
         # @api private
         def ensure_effect_state!(state)
           state[:effects] ||= {}
+          unless state[:effect_history_migrated]
+            state[:effects].transform_values! do |record|
+              record.is_a?(Hash) ? DAG::Effects::Record.from_h(record) : record
+            end
+            state[:effect_history_migrated] = true
+          end
           state[:effects_by_ref] ||= {}
           state[:effect_order] ||= state[:effects].keys
           state[:effect_seq] ||= state[:effects].size
@@ -435,6 +442,9 @@ module DAG
               status: :dispatching,
               lease_owner: owner_id,
               lease_until_ms: now_ms + lease_ms,
+              dispatch_count: record.dispatch_count + 1,
+              claimed_at_ms: now_ms,
+              active_dispatch_ms: record.active_dispatch_ms + expired_dispatch_elapsed(record),
               updated_at_ms: now_ms
             )
             state[:effects][effect_id] = updated
@@ -472,6 +482,8 @@ module DAG
             not_before_ms: nil,
             lease_owner: nil,
             lease_until_ms: nil,
+            claimed_at_ms: nil,
+            active_dispatch_ms: record.active_dispatch_ms + effect_dispatch_elapsed(record, now_ms),
             updated_at_ms: now_ms
           )
           retire_effect_from_active_order(state, effect_id)
@@ -492,6 +504,8 @@ module DAG
             not_before_ms: retriable ? not_before_ms : nil,
             lease_owner: nil,
             lease_until_ms: nil,
+            claimed_at_ms: nil,
+            active_dispatch_ms: record.active_dispatch_ms + effect_dispatch_elapsed(record, now_ms),
             updated_at_ms: now_ms
           )
           retire_effect_from_active_order(state, effect_id) unless retriable
@@ -898,6 +912,23 @@ module DAG
           else
             false
           end
+        end
+
+        # A live dispatch contributes only time before its lease deadline.
+        # Pre-upgrade records without a claim start contribute no guessed time.
+        # @api private
+        def effect_dispatch_elapsed(record, until_ms)
+          return 0 unless record.claimed_at_ms
+
+          deadline = record.lease_until_ms ? [until_ms, record.lease_until_ms].min : until_ms
+          [deadline - record.claimed_at_ms, 0].max
+        end
+
+        # @api private
+        def expired_dispatch_elapsed(record)
+          return 0 unless record.status == :dispatching && record.lease_until_ms
+
+          effect_dispatch_elapsed(record, record.lease_until_ms)
         end
 
         # Internal: lease CAS guard.

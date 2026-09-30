@@ -69,6 +69,8 @@ module DAG
       #   workflows (V1.3 behaviour). A workflow with no linked effects yields an
       #   empty array (no raise). V1.4.
       # @return [Array<DAG::Effects::Record>] claimed records
+      #   with incremented dispatch_count and a new claimed_at_ms; reclaim
+      #   adds only the expired prior lease interval to active_dispatch_ms
       def claim_ready_effects(limit:, owner_id:, lease_ms:, now_ms:, only_workflow_id: nil)
         raise PortNotImplementedError
       end
@@ -81,6 +83,7 @@ module DAG
       # @param external_ref [Object, nil] JSON-safe external reference
       # @param now_ms [Integer]
       # @return [DAG::Effects::Record] updated terminal record
+      #   with the current owned interval added to active_dispatch_ms
       # @raise [DAG::Effects::UnknownEffectError] when `effect_id` is unknown
       # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
       def mark_effect_succeeded(effect_id:, owner_id:, result:, external_ref:, now_ms:)
@@ -96,6 +99,7 @@ module DAG
       # @param not_before_ms [Integer, nil] retry delay hint for retriable failures
       # @param now_ms [Integer]
       # @return [DAG::Effects::Record] updated failed record
+      #   with the current owned interval added to active_dispatch_ms
       # @raise [DAG::Effects::UnknownEffectError] when `effect_id` is unknown
       # @raise [DAG::Effects::StaleLeaseError] when the lease is missing, expired, or owned by another dispatcher
       def mark_effect_failed(effect_id:, owner_id:, error:, retriable:, not_before_ms:, now_ms:)

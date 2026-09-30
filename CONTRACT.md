@@ -574,6 +574,33 @@ behaviour is identical to V1.3 — a global claim across all workflows. The
 CAS guards on `:reserved` / `:dispatching` / lease ownership inside the
 claim loop are unchanged.
 
+Each effect record also exposes `dispatch_count`, `claimed_at_ms`, and
+`active_dispatch_ms`. New reservations start at `0`, `nil`, and `0`.
+Every successful claim or reclaim increments `dispatch_count` once and sets
+`claimed_at_ms` to that claim's start. A failed concurrent claim changes
+neither field. `active_dispatch_ms` stores completed owned intervals only;
+while a lease is live, consumers may combine it with `claimed_at_ms` and the
+current time to estimate the in-progress interval. Renewing a lease preserves
+the count, claim start, and accumulated duration. On success or failure,
+storage adds `max(0, min(now_ms, lease_until_ms) - claimed_at_ms)` and clears
+`claimed_at_ms`. A retriable failure may be claimed again without adding idle
+time. On reclaim of an expired `:dispatching` lease, storage first adds only
+the old interval through `lease_until_ms`, then starts the new interval at
+`now_ms`; the gap between those times is never counted. The lease remains
+valid at its exact expiry millisecond, as with the existing effect CAS rule.
+All count and duration changes occur in the same transaction as the status or
+lease change.
+
+`Record#to_snapshot` exposes the count and finalized active duration to steps,
+without the current claim timestamp, lease owner, or deadline.
+`Record.from_h` restores a full record from a JSON-parsed
+`Record#to_h` hash. Pre-upgrade serialized rows without history fields load
+with `dispatch_count: 0`, `claimed_at_ms: nil`, and `active_dispatch_ms: 0`;
+these are a post-migration baseline, not a reconstruction of earlier claims.
+Durable adapters must backfill the fields or apply these defaults when reading
+old rows. `Memory::Storage` converts legacy JSON Hash records on first effect
+access. Durations are nonnegative integer milliseconds.
+
 `mark_effect_succeeded` and `mark_effect_failed` require the current lease
 owner and a non-expired lease; otherwise they raise
 `DAG::Effects::StaleLeaseError`. Success sets `status: :succeeded` and stores

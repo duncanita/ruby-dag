@@ -15,11 +15,15 @@ module DAG
       error
       external_ref
       not_before_ms
+      dispatch_count
+      active_dispatch_ms
       metadata
     ].freeze
     private_constant :RECORD_SNAPSHOT_FIELDS
 
     # Durable effect snapshot returned by effect-aware storage adapters.
+    # Dispatch history counts completed lease intervals; an in-progress
+    # interval begins at claimed_at_ms and is finalized on mark or reclaim.
     # @api public
     Record = Data.define(
       :id,
@@ -40,6 +44,9 @@ module DAG
       :not_before_ms,
       :lease_owner,
       :lease_until_ms,
+      :dispatch_count,
+      :claimed_at_ms,
+      :active_dispatch_ms,
       :created_at_ms,
       :updated_at_ms,
       :metadata
@@ -69,6 +76,9 @@ module DAG
           not_before_ms: nil,
           lease_owner: nil,
           lease_until_ms: nil,
+          dispatch_count: 0,
+          claimed_at_ms: nil,
+          active_dispatch_ms: 0,
           metadata: {}
         )
           new(
@@ -89,6 +99,9 @@ module DAG
             not_before_ms: not_before_ms,
             lease_owner: lease_owner,
             lease_until_ms: lease_until_ms,
+            dispatch_count: dispatch_count,
+            claimed_at_ms: claimed_at_ms,
+            active_dispatch_ms: active_dispatch_ms,
             created_at_ms: created_at_ms,
             updated_at_ms: updated_at_ms,
             metadata: metadata
@@ -110,6 +123,9 @@ module DAG
           not_before_ms: nil,
           lease_owner: nil,
           lease_until_ms: nil,
+          dispatch_count: 0,
+          claimed_at_ms: nil,
+          active_dispatch_ms: 0,
           metadata: nil
         )
           DAG::Validation.instance!(
@@ -138,8 +154,44 @@ module DAG
             not_before_ms: not_before_ms,
             lease_owner: lease_owner,
             lease_until_ms: lease_until_ms,
+            dispatch_count: dispatch_count,
+            claimed_at_ms: claimed_at_ms,
+            active_dispatch_ms: active_dispatch_ms,
             metadata: metadata.nil? ? prepared_intent.metadata : metadata
           )
+        end
+
+        # Rebuild a record from a JSON-safe hash. Missing history fields in
+        # pre-upgrade rows use the same defaults as a never-claimed effect.
+        # @param hash [Hash]
+        # @return [Record]
+        def from_h(hash)
+          snapshot = DAG::Snapshot
+          self[
+            id: snapshot.fetch!(hash, :id),
+            workflow_id: snapshot.fetch!(hash, :workflow_id),
+            revision: snapshot.fetch!(hash, :revision),
+            node_id: snapshot.fetch!(hash, :node_id).to_sym,
+            attempt_id: snapshot.fetch!(hash, :attempt_id),
+            type: snapshot.fetch!(hash, :type),
+            key: snapshot.fetch!(hash, :key),
+            payload: snapshot.fetch!(hash, :payload),
+            payload_fingerprint: snapshot.fetch!(hash, :payload_fingerprint),
+            blocking: snapshot.fetch!(hash, :blocking),
+            status: snapshot.fetch!(hash, :status).to_sym,
+            created_at_ms: snapshot.fetch!(hash, :created_at_ms),
+            updated_at_ms: snapshot.fetch!(hash, :updated_at_ms),
+            result: snapshot.fetch(hash, :result),
+            error: snapshot.fetch(hash, :error),
+            external_ref: snapshot.fetch(hash, :external_ref),
+            not_before_ms: snapshot.fetch(hash, :not_before_ms),
+            lease_owner: snapshot.fetch(hash, :lease_owner),
+            lease_until_ms: snapshot.fetch(hash, :lease_until_ms),
+            dispatch_count: snapshot.fetch(hash, :dispatch_count, 0),
+            claimed_at_ms: snapshot.fetch(hash, :claimed_at_ms),
+            active_dispatch_ms: snapshot.fetch(hash, :active_dispatch_ms, 0),
+            metadata: snapshot.fetch(hash, :metadata, {})
+          ]
         end
       end
 
@@ -163,6 +215,9 @@ module DAG
         not_before_ms: nil,
         lease_owner: nil,
         lease_until_ms: nil,
+        dispatch_count: 0,
+        claimed_at_ms: nil,
+        active_dispatch_ms: 0,
         metadata: {},
         ref: nil
       )
@@ -181,6 +236,9 @@ module DAG
         validate_status!(status)
         DAG::Validation.optional_integer!(not_before_ms, "not_before_ms")
         DAG::Validation.optional_integer!(lease_until_ms, "lease_until_ms")
+        DAG::Validation.nonnegative_integer!(dispatch_count, "dispatch_count")
+        DAG::Validation.optional_integer!(claimed_at_ms, "claimed_at_ms")
+        DAG::Validation.nonnegative_integer!(active_dispatch_ms, "active_dispatch_ms")
         DAG::Validation.integer!(created_at_ms, "created_at_ms")
         DAG::Validation.integer!(updated_at_ms, "updated_at_ms")
         DAG.json_safe!(payload, "$root.payload")
@@ -209,6 +267,9 @@ module DAG
           not_before_ms: not_before_ms,
           lease_owner: DAG.frozen_copy(lease_owner),
           lease_until_ms: lease_until_ms,
+          dispatch_count: dispatch_count,
+          claimed_at_ms: claimed_at_ms,
+          active_dispatch_ms: active_dispatch_ms,
           created_at_ms: created_at_ms,
           updated_at_ms: updated_at_ms,
           metadata: DAG.frozen_copy(metadata)
