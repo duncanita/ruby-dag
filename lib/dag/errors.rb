@@ -20,6 +20,10 @@ module DAG
   # @api public
   class StaleStateError < Error; end
 
+  # Raised when a workflow run claim is missing, expired, or superseded.
+  # @api public
+  class StaleRunClaimError < Error; end
+
   # Raised by `Graph#add_edge` when adding an edge would introduce a cycle.
   # The message names the offending edge.
   # @api public

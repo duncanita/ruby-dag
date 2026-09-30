@@ -6,6 +6,9 @@ class R0PortsTest < Minitest::Test
   STORAGE_OWN_METHODS = {
     create_workflow: {id: "x", initial_definition: nil, initial_context: {}, runtime_profile: nil},
     load_workflow: {id: "x"},
+    claim_workflow_run: {id: "x", owner_id: "worker", lease_ms: 100},
+    renew_workflow_run: {claim: nil, until_ms: 100},
+    release_workflow_run: {claim: nil},
     transition_workflow_state: {id: "x", from: :pending, to: :running},
     append_revision: {id: "x", parent_revision: 1, definition: nil, invalidated_node_ids: [], event: nil},
     append_revision_if_workflow_state: {
@@ -32,6 +35,7 @@ class R0PortsTest < Minitest::Test
   }.freeze
 
   EFFECT_LEDGER_METHODS = {
+    append_effect_stale_lease_event: {effect_id: "x", event: nil},
     list_effects_for_node: {workflow_id: "x", revision: 1, node_id: :a},
     list_effects_for_attempt: {attempt_id: "x"},
     claim_ready_effects: {limit: 1, owner_id: "worker", lease_ms: 1, now_ms: 1},

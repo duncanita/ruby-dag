@@ -43,6 +43,57 @@ module DAG
           state[:workflows].fetch(id) { raise UnknownWorkflowError, "Unknown workflow: #{id}" }
         end
 
+        # A claim is checked before any write, including event append and
+        # recovery of an already-running workflow.
+        # @api private
+        def assert_run_claim!(state, id, claim, now_ms)
+          row = fetch_workflow!(state, id)
+          return if !row[:run_claim_mode] && claim.nil?
+
+          active = row[:run_claim]
+          valid = claim.is_a?(DAG::WorkflowRunClaim) && active &&
+            claim.workflow_id == id && claim.owner_id == active.owner_id &&
+            claim.fencing_token == active.fencing_token && now_ms < active.lease_until_ms
+          raise StaleRunClaimError, "stale workflow run claim for #{id}" unless valid
+        end
+
+        # @api private
+        def claim_workflow_run(state, id:, owner_id:, lease_ms:, now_ms:)
+          row = fetch_workflow!(state, id)
+          DAG::Validation.string!(owner_id, "owner_id")
+          DAG::Validation.positive_integer!(lease_ms, "lease_ms")
+          active = row[:run_claim]
+          if active && now_ms < active.lease_until_ms
+            raise StaleRunClaimError, "stale workflow run claim for #{id}"
+          end
+
+          token = row.fetch(:run_claim_token, 0) + 1
+          claim = DAG::WorkflowRunClaim[workflow_id: id, owner_id: owner_id,
+            fencing_token: token, lease_until_ms: now_ms + lease_ms]
+          row[:run_claim_mode] = true
+          row[:run_claim_token] = token
+          row[:run_claim] = claim
+        end
+
+        # @api private
+        def renew_workflow_run(state, claim:, until_ms:, now_ms:)
+          DAG::Validation.instance!(claim, DAG::WorkflowRunClaim, "claim")
+          assert_run_claim!(state, claim.workflow_id, claim, now_ms)
+          row = fetch_workflow!(state, claim.workflow_id)
+          raise ArgumentError, "until_ms must be after now_ms" unless until_ms.is_a?(Integer) && until_ms > now_ms
+          raise ArgumentError, "until_ms cannot shrink lease" if until_ms < row[:run_claim].lease_until_ms
+
+          row[:run_claim] = row[:run_claim].with(lease_until_ms: until_ms)
+        end
+
+        # @api private
+        def release_workflow_run(state, claim:, now_ms:)
+          DAG::Validation.instance!(claim, DAG::WorkflowRunClaim, "claim")
+          assert_run_claim!(state, claim.workflow_id, claim, now_ms)
+          fetch_workflow!(state, claim.workflow_id)[:run_claim] = nil
+          true
+        end
+
         # Internal: lookup-or-raise for a revision's node-state map.
         # @api private
         def fetch_node_states!(state, id, revision)
@@ -169,7 +220,8 @@ module DAG
 
         # Implements `Ports::Storage#transition_workflow_state`.
         # @api private
-        def transition_workflow_state(state, id:, from:, to:, event: nil)
+        def transition_workflow_state(state, id:, from:, to:, event: nil, claim: nil, now_ms: nil)
+          assert_run_claim!(state, id, claim, now_ms)
           row = fetch_workflow!(state, id)
           assert_state!("workflow #{id}", row[:state], from)
           validate_optional_workflow_event!(event, row.fetch(:id), row[:current_revision])
@@ -180,7 +232,8 @@ module DAG
 
         # Implements `Ports::Storage#append_revision`.
         # @api private
-        def append_revision(state, id:, parent_revision:, definition:, invalidated_node_ids:, event:)
+        def append_revision(state, id:, parent_revision:, definition:, invalidated_node_ids:, event:, claim: nil, now_ms: nil)
+          assert_run_claim!(state, id, claim, now_ms)
           id = DAG.frozen_copy(id)
           row = fetch_workflow!(state, id)
           unless row[:current_revision] == parent_revision
@@ -231,7 +284,8 @@ module DAG
 
         # Implements `Ports::Storage#append_revision_if_workflow_state`.
         # @api private
-        def append_revision_if_workflow_state(state, id:, allowed_states:, parent_revision:, definition:, invalidated_node_ids:, event:)
+        def append_revision_if_workflow_state(state, id:, allowed_states:, parent_revision:, definition:, invalidated_node_ids:, event:, claim: nil, now_ms: nil)
+          assert_run_claim!(state, id, claim, now_ms)
           row = fetch_workflow!(state, id)
           validate_workflow_state_for_revision_append!(id, row.fetch(:state), allowed_states)
           append_revision(
@@ -240,7 +294,9 @@ module DAG
             parent_revision: parent_revision,
             definition: definition,
             invalidated_node_ids: invalidated_node_ids,
-            event: event
+            event: event,
+            claim: claim,
+            now_ms: now_ms
           )
         end
 
@@ -267,7 +323,8 @@ module DAG
 
         # Implements `Ports::Storage#transition_node_state`.
         # @api private
-        def transition_node_state(state, workflow_id:, revision:, node_id:, from:, to:)
+        def transition_node_state(state, workflow_id:, revision:, node_id:, from:, to:, claim: nil, now_ms: nil)
+          assert_run_claim!(state, workflow_id, claim, now_ms)
           states_for_rev = fetch_node_states!(state, workflow_id, revision)
           assert_state!("node #{node_id}", states_for_rev[node_id], from)
           states_for_rev[node_id] = to
@@ -276,7 +333,8 @@ module DAG
 
         # Implements `Ports::Storage#begin_attempt`.
         # @api private
-        def begin_attempt(state, workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:)
+        def begin_attempt(state, workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:, claim: nil, now_ms: nil)
+          assert_run_claim!(state, workflow_id, claim, now_ms)
           workflow_id = DAG.frozen_copy(workflow_id)
           DAG::Validation.positive_integer!(attempt_number, "attempt_number")
 
@@ -304,10 +362,11 @@ module DAG
 
         # Implements `Ports::Storage#commit_attempt`.
         # @api private
-        def commit_attempt(state, attempt_id:, result:, node_state:, event:, effects: [])
+        def commit_attempt(state, attempt_id:, result:, node_state:, event:, effects: [], claim: nil, now_ms: nil)
           attempt = state[:attempts].fetch(attempt_id) do
             raise UnknownAttemptError, "Unknown attempt: #{attempt_id}"
           end
+          assert_run_claim!(state, attempt[:workflow_id], claim, now_ms)
           assert_state!("attempt #{attempt_id}", attempt[:state], :running)
           terminal_state = attempt_terminal_state_for(result)
           validate_node_state_for_result!(result, node_state)
@@ -522,7 +581,8 @@ module DAG
 
         # Implements `Ports::Storage#abort_running_attempts`.
         # @api private
-        def abort_running_attempts(state, workflow_id:)
+        def abort_running_attempts(state, workflow_id:, claim: nil, now_ms: nil)
+          assert_run_claim!(state, workflow_id, claim, now_ms)
           row = fetch_workflow!(state, workflow_id)
           current_revision = row[:current_revision]
           current_states = fetch_node_states!(state, workflow_id, current_revision)
@@ -579,8 +639,21 @@ module DAG
 
         # Implements `Ports::Storage#append_event`.
         # @api private
-        def append_event(state, workflow_id:, event:)
+        def append_event(state, workflow_id:, event:, claim: nil, now_ms: nil)
+          assert_run_claim!(state, workflow_id, claim, now_ms)
           append_event_internal(state, workflow_id, event)
+        end
+
+        # @api private
+        def append_effect_stale_lease_event(state, effect_id:, event:)
+          ensure_effect_state!(state)
+          record = fetch_effect!(state, effect_id)
+          unless event.type == :effect_dispatch_stale_lease && event.payload[:effect_id] == effect_id
+            raise ArgumentError, "invalid effect stale-lease event"
+          end
+
+          append_event_internal(state, record.workflow_id, event,
+            revision: record.revision, node_id: record.node_id, attempt_id: record.attempt_id)
         end
 
         # Internal: stamp seq + push to event log.
@@ -618,7 +691,8 @@ module DAG
         # `workflow_retry_count`, transition the workflow, and optionally
         # append a durable event.
         # @api private
-        def prepare_workflow_retry(state, id:, from: :failed, to: :pending, event: nil)
+        def prepare_workflow_retry(state, id:, from: :failed, to: :pending, event: nil, claim: nil, now_ms: nil)
+          assert_run_claim!(state, id, claim, now_ms)
           row = fetch_workflow!(state, id)
           assert_state!("workflow #{id}", row[:state], from)
 

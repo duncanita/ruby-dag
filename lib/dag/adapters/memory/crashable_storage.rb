@@ -15,14 +15,14 @@ module DAG
       class CrashableStorage < Storage
         # @param crash_on [Hash] crash trigger spec (`:method`, `:before`/`:after`, plus optional context filters)
         # @param initial_state [Hash, nil]
-        def initialize(crash_on:, initial_state: nil)
-          super(initial_state: initial_state)
+        def initialize(crash_on:, initial_state: nil, clock: nil)
+          super(initial_state: initial_state, clock: clock)
           @crash_on = normalize_crash_on(crash_on)
           @crashed = false
         end
 
         # (see Ports::Storage#begin_attempt)
-        def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:)
+        def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:, claim: nil)
           context = {
             workflow_id: workflow_id,
             revision: revision,
@@ -36,7 +36,7 @@ module DAG
         end
 
         # (see Ports::Storage#commit_attempt)
-        def commit_attempt(attempt_id:, result:, node_state:, event:, effects: [])
+        def commit_attempt(attempt_id:, result:, node_state:, event:, effects: [], claim: nil)
           context = attempt_context(attempt_id).merge(node_state: node_state)
           crash_if_any!(%i[before_commit before], :commit_attempt, context)
           stamped = super
@@ -45,7 +45,7 @@ module DAG
         end
 
         # (see Ports::Storage#append_event)
-        def append_event(workflow_id:, event:)
+        def append_event(workflow_id:, event:, claim: nil)
           context = {workflow_id: workflow_id, event_type: event.type}
           crash_if!(:before, :append_event, context)
           stamped = super
@@ -54,7 +54,7 @@ module DAG
         end
 
         # (see Ports::Storage#transition_workflow_state)
-        def transition_workflow_state(id:, from:, to:, event: nil)
+        def transition_workflow_state(id:, from:, to:, event: nil, claim: nil)
           context = {workflow_id: id, from: from, to: to}
           crash_if!(:before, :transition_workflow_state, context)
           row = super
@@ -63,7 +63,7 @@ module DAG
         end
 
         # (see Ports::Storage#prepare_workflow_retry)
-        def prepare_workflow_retry(id:, from: :failed, to: :pending, event: nil)
+        def prepare_workflow_retry(id:, from: :failed, to: :pending, event: nil, claim: nil)
           context = {workflow_id: id, from: from, to: to}
           crash_if!(:before, :prepare_workflow_retry, context)
           row = super
@@ -76,7 +76,7 @@ module DAG
         # simulated crash has been observed.
         # @return [Storage]
         def snapshot_to_healthy
-          Storage.new(initial_state: DAG.deep_dup(@state))
+          Storage.new(initial_state: DAG.deep_dup(@state), clock: @clock)
         end
 
         private

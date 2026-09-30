@@ -19,7 +19,7 @@ module DAG
       freeze
     end
 
-    def apply(workflow_id:, mutation:, expected_revision:)
+    def apply(workflow_id:, mutation:, expected_revision:, claim: nil)
       workflow = @storage.load_workflow(id: workflow_id)
       guard_workflow_state!(workflow_id, workflow.fetch(:state))
       definition = @storage.load_current_definition(id: workflow_id)
@@ -35,7 +35,8 @@ module DAG
         parent_revision: expected_revision,
         definition: plan.new_definition,
         invalidated_node_ids: plan.invalidated_node_ids,
-        event: mutation_event(workflow_id, mutation, expected_revision, new_revision, plan)
+        event: mutation_event(workflow_id, mutation, expected_revision, new_revision, plan),
+        claim: claim
       )
       event = result[:event]
       publish_event(event) if event
@@ -51,15 +52,17 @@ module DAG
 
     private
 
-    def append_revision_with_state_guard(id:, allowed_states:, parent_revision:, definition:, invalidated_node_ids:, event:)
-      @storage.append_revision_if_workflow_state(
+    def append_revision_with_state_guard(id:, allowed_states:, parent_revision:, definition:, invalidated_node_ids:, event:, claim:)
+      kwargs = {
         id: id,
         allowed_states: allowed_states,
         parent_revision: parent_revision,
         definition: definition,
         invalidated_node_ids: invalidated_node_ids,
         event: event
-      )
+      }
+      kwargs = kwargs.merge(claim: claim) if claim
+      @storage.append_revision_if_workflow_state(**kwargs)
     end
 
     # Pre-checks only: the authoritative, race-safe guards live inside

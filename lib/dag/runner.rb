@@ -24,7 +24,8 @@ module DAG
       :runtime_profile,
       :base_context,
       :predecessors_by_node,
-      :step_instances
+      :step_instances,
+      :claim
     ) do
       # @return [String] workflow identifier for this run context.
       # @api private
@@ -76,22 +77,24 @@ module DAG
 
     # Run a `:pending` workflow to a terminal state.
     # @param workflow_id [String]
+    # @param claim [DAG::WorkflowRunClaim, nil] live claim for an opted-in workflow
     # @return [DAG::RunResult]
     # @raise [DAG::StaleStateError] when the workflow is not in `:pending`
-    def call(workflow_id)
-      workflow = acquire_running(workflow_id, allowed_from: CALL_FROM_STATES)
-      run_workflow(workflow_id, workflow)
+    def call(workflow_id, claim: nil)
+      workflow = acquire_running(workflow_id, allowed_from: CALL_FROM_STATES, claim: claim)
+      run_workflow(workflow_id, workflow, claim)
     end
 
     # Resume a `:running` (crashed), `:waiting`, or `:paused` workflow.
     # Aborts in-flight attempts before recomputing eligibility.
     # @param workflow_id [String]
+    # @param claim [DAG::WorkflowRunClaim, nil] live claim for an opted-in workflow
     # @return [DAG::RunResult]
     # @raise [DAG::StaleStateError] when the workflow is not resumable
-    def resume(workflow_id)
-      workflow = acquire_running(workflow_id, allowed_from: RESUME_FROM_STATES)
-      @storage.abort_running_attempts(workflow_id: workflow_id)
-      run_workflow(workflow_id, workflow)
+    def resume(workflow_id, claim: nil)
+      workflow = acquire_running(workflow_id, allowed_from: RESUME_FROM_STATES, claim: claim)
+      storage_write(:abort_running_attempts, claim: claim, workflow_id: workflow_id)
+      run_workflow(workflow_id, workflow, claim)
     end
 
     # Reset `:failed` nodes for the workflow's current revision and run
@@ -100,10 +103,11 @@ module DAG
     # as the retry transition, so the event log explains the
     # `workflow_failed -> node_started` sequence a retry produces.
     # @param workflow_id [String]
+    # @param claim [DAG::WorkflowRunClaim, nil] live claim for an opted-in workflow
     # @return [DAG::RunResult]
     # @raise [DAG::StaleStateError] when the workflow is not `:failed`
     # @raise [DAG::WorkflowRetryExhaustedError] when the budget is spent
-    def retry_workflow(workflow_id)
+    def retry_workflow(workflow_id, claim: nil)
       workflow = @storage.load_workflow(id: workflow_id)
       event = DAG::Event[
         type: :workflow_retrying,
@@ -112,16 +116,16 @@ module DAG
         at_ms: @clock.now_ms,
         payload: {}
       ]
-      result = @storage.prepare_workflow_retry(id: workflow_id, from: :failed, to: :pending, event: event)
+      result = storage_write(:prepare_workflow_retry, claim: claim, id: workflow_id, from: :failed, to: :pending, event: event)
       stamped = result.is_a?(Hash) ? result[:event] : nil
       publish_event(stamped) if stamped
-      call(workflow_id)
+      call(workflow_id, claim: claim)
     end
 
     private
 
-    def run_workflow(workflow_id, workflow)
-      run = build_run_context(workflow_id, workflow)
+    def run_workflow(workflow_id, workflow, claim)
+      run = build_run_context(workflow_id, workflow, claim)
       append_workflow_started_once(run)
 
       paused = false
@@ -147,7 +151,7 @@ module DAG
       finalize(run, paused: paused, failed: failed)
     end
 
-    def acquire_running(workflow_id, allowed_from:)
+    def acquire_running(workflow_id, allowed_from:, claim:)
       workflow = @storage.load_workflow(id: workflow_id)
       from = workflow[:state]
       unless allowed_from.include?(from)
@@ -156,11 +160,11 @@ module DAG
       end
       return workflow if from == :running
 
-      @storage.transition_workflow_state(id: workflow_id, from: from, to: :running)
+      storage_write(:transition_workflow_state, claim: claim, id: workflow_id, from: from, to: :running)
       workflow
     end
 
-    def build_run_context(workflow_id, workflow)
+    def build_run_context(workflow_id, workflow, claim)
       definition = @storage.load_current_definition(id: workflow_id)
       predecessors_by_node = {}
       definition.each_node do |node_id|
@@ -176,7 +180,8 @@ module DAG
         runtime_profile: workflow[:runtime_profile],
         base_context: DAG::ExecutionContext.from(workflow[:initial_context]),
         predecessors_by_node: predecessors_by_node,
-        step_instances: build_step_instances(definition)
+        step_instances: build_step_instances(definition),
+        claim: claim
       )
     end
 
@@ -225,13 +230,13 @@ module DAG
         node_id: node_id
       ) + 1
 
-      attempt_id = @storage.begin_attempt(
+      attempt_id = storage_write(:begin_attempt,
         workflow_id: run.workflow_id,
         revision: run.revision,
         node_id: node_id,
         expected_node_state: current_state,
-        attempt_number: attempt_number
-      )
+        attempt_number: attempt_number,
+        claim: run.claim)
 
       append_event(run,
         type: :node_started,
@@ -306,13 +311,13 @@ module DAG
         attempt_id: attempt_id,
         at_ms: now_ms,
         payload: payload)
-      stamped = @storage.commit_attempt(
+      stamped = storage_write(:commit_attempt,
         attempt_id: attempt_id,
         result: result,
         node_state: node_state,
         event: event,
-        effects: prepared_effects
-      )
+        effects: prepared_effects,
+        claim: run.claim)
       publish_event(stamped)
       :committed
     rescue DAG::Effects::IdempotencyConflictError => conflict
@@ -328,13 +333,13 @@ module DAG
         node_id: node_id,
         attempt_id: attempt_id,
         payload: {attempt_number: attempt_number, retriable: false, error: error})
-      stamped = @storage.commit_attempt(
+      stamped = storage_write(:commit_attempt,
         attempt_id: attempt_id,
         result: failure,
         node_state: :failed,
         event: event,
-        effects: []
-      )
+        effects: [],
+        claim: run.claim)
       publish_event(stamped)
       atomic_transition_with_event(
         run,
@@ -488,7 +493,7 @@ module DAG
     # stamped event (or nil for adapters that do not return it).
     def atomic_transition_with_event(run, from:, to:, event_type:, payload:)
       event = build_event(run, type: event_type, payload: payload)
-      result = @storage.transition_workflow_state(id: run.workflow_id, from: from, to: to, event: event)
+      result = storage_write(:transition_workflow_state, claim: run.claim, id: run.workflow_id, from: from, to: to, event: event)
       stamped = result.is_a?(Hash) ? result[:event] : nil
       publish_event(stamped) if stamped
       stamped
@@ -517,8 +522,14 @@ module DAG
     end
 
     def append_event(run, **kwargs)
-      stamped = @storage.append_event(workflow_id: run.workflow_id, event: build_event(run, **kwargs))
+      stamped = storage_write(:append_event, claim: run.claim, workflow_id: run.workflow_id, event: build_event(run, **kwargs))
       publish_event(stamped)
+    end
+
+    def storage_write(method, claim:, **kwargs)
+      return @storage.public_send(method, **kwargs) unless claim
+
+      @storage.public_send(method, **kwargs, claim: claim)
     end
 
     def publish_event(event)
