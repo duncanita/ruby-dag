@@ -745,6 +745,16 @@ result for downstream context assembly, but it is not an attempt, does not
 increment attempt counts, and does not cause the preserved node to rerun.
 Invalidated nodes and newly introduced nodes have no carry-forward projection.
 
+When a preserved node remains `:waiting`, storage carries the blocking effect
+links of its active waiting attempt into the new revision without creating an
+attempt or effect record. Effect snapshots for that node are available through
+`list_effects_for_node` at the new revision. Completing the last blocking
+effect releases the node in the workflow's current revision only; historical
+revision node states are not used for current scheduling. If all linked
+blocking effects are already terminal when the revision is appended, the new
+node state starts as `:pending`. A waiting node with no blocking effect links
+retains its `:waiting` state.
+
 ## State Model
 
 Workflow states:
@@ -956,6 +966,8 @@ CAS, marks invalidated preserved nodes `:invalidated`, initializes newly
 introduced nodes as `:pending`, materializes committed-result projections for
 preserved committed nodes, durably appends `mutation_applied`, and only then
 publishes that event through `EventBus#publish`.
+Preserved waiting nodes follow the effect-link carry-forward rule above in the
+same atomic revision append.
 
 Durable adapters should implement:
 

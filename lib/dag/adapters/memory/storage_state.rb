@@ -197,6 +197,7 @@ module DAG
           previous_states = state[:node_states][[id, parent_revision]] || {}
           invalidated = invalidated_node_ids.map(&:to_sym).to_set
           result_projections = {}
+          waiting_link_projections = []
           new_states = stored_definition.nodes.each_with_object({}) do |node_id, acc|
             acc[node_id] = if invalidated.include?(node_id)
               :invalidated
@@ -207,12 +208,22 @@ module DAG
               if previous_state == :committed
                 result = canonical_committed_result_for_node(state, id, parent_revision, node_id)
                 result_projections[[id, new_revision, node_id]] = result if result
+              elsif previous_state == :waiting
+                links = project_waiting_effect_links(state, id, parent_revision, new_revision, node_id)
+                waiting_link_projections.concat(links)
+                previous_state = :pending if links.any? { |link| link[:blocking] } &&
+                  links.select { |link| link[:blocking] }.all? { |link| state[:effects].fetch(link[:effect_id]).terminal? }
               end
               previous_state
             end
           end
           state[:node_states][[id, new_revision]] = new_states
           result_projections.each { |key, result| state[:committed_result_projections][key] = result }
+          waiting_link_projections.each do |link|
+            node_key = [id, new_revision, link[:node_id]]
+            (state[:node_effect_links][node_key] ||= []) << link
+            (state[:effect_attempt_links][link[:effect_id]] ||= []) << link
+          end
           row[:current_revision] = new_revision
           stamped = append_optional_event(state, id, event, revision: [parent_revision, new_revision])
           {id: id, revision: new_revision, event: stamped}
@@ -490,6 +501,7 @@ module DAG
           released = []
           state[:effect_attempt_links].fetch(effect_id, []).each do |link|
             next unless link[:blocking]
+            next unless state[:workflows].fetch(link[:workflow_id])[:current_revision] == link[:revision]
 
             revision_key = [link[:workflow_id], link[:revision]]
             states_for_rev = state[:node_states].fetch(revision_key, nil)
@@ -831,6 +843,22 @@ module DAG
           state[:attempt_effect_links].fetch(attempt_id, []).all? do |link|
             !link[:blocking] || state[:effects].fetch(link[:effect_id]).terminal?
           end
+        end
+
+        # A carried waiting node still belongs to its last waiting attempt.
+        # Project its links, not a synthetic attempt, so release and step input
+        # follow the current revision while historical attempts stay intact.
+        # @api private
+        def project_waiting_effect_links(state, workflow_id, parent_revision, new_revision, node_id)
+          ensure_effect_state!(state)
+          latest_attempt_id = state[:attempts_index].fetch(workflow_id, []).reverse_each.find do |attempt_id|
+            state[:attempts].fetch(attempt_id)[:node_id] == node_id
+          end
+          return [] unless latest_attempt_id && state[:attempts].fetch(latest_attempt_id)[:state] == :waiting
+
+          state[:node_effect_links].fetch([workflow_id, parent_revision, node_id], [])
+            .select { |link| link[:attempt_id] == latest_attempt_id }
+            .map { |link| link.merge(revision: new_revision) }
         end
 
         # Internal validations.

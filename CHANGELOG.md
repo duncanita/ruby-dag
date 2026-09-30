@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- Preserved waiting nodes retain their blocking effect links across definition
+  revisions, so terminal effects release the current revision and resumed
+  workflows can continue after an unrelated mutation.
+
 ## 1.6.0 — 2026-06-10
 
 Project-review hardening pass: design fixes at the storage-port seams,
