@@ -565,6 +565,112 @@ module DAG::Testing::StorageContract
       assert_equal :pending, storage.load_node_states(workflow_id: workflow_id, revision: 1)[:a]
     end
 
+    def test_contract_preserved_waiting_node_releases_in_current_revision
+      storage = build_contract_storage
+      definition = DAG::Workflow::Definition.new
+        .add_node(:a, type: :passthrough)
+        .add_node(:b, type: :passthrough)
+      workflow_id = contract_create_workflow(storage, definition: definition)
+      effect = contract_commit_waiting_effect(storage, workflow_id, :a)
+
+      storage.append_revision(
+        id: workflow_id,
+        parent_revision: 1,
+        definition: definition,
+        invalidated_node_ids: [:b],
+        event: contract_event(type: :mutation_applied, workflow_id: workflow_id)
+      )
+
+      assert_equal :waiting, storage.load_node_states(workflow_id: workflow_id, revision: 2)[:a]
+      assert_equal [effect.id], storage.list_effects_for_node(workflow_id: workflow_id, revision: 2, node_id: :a).map(&:id)
+      assert_empty storage.list_attempts(workflow_id: workflow_id, revision: 2, node_id: :a)
+
+      mark_effect_success(storage, effect.id)
+      released = storage.release_nodes_satisfied_by_effect(effect_id: effect.id, now_ms: 1_200)
+
+      assert_equal [{workflow_id: workflow_id, revision: 2, node_id: :a, attempt_id: effect.attempt_id, released_at_ms: 1_200}], released
+      assert_equal :pending, storage.load_node_states(workflow_id: workflow_id, revision: 2)[:a]
+    end
+
+    def test_contract_revision_append_releases_waiting_node_when_effect_already_terminal
+      storage = build_contract_storage
+      definition = DAG::Workflow::Definition.new.add_node(:a, type: :passthrough)
+      workflow_id = contract_create_workflow(storage, definition: definition)
+      effect = contract_commit_waiting_effect(storage, workflow_id, :a)
+      mark_effect_success(storage, effect.id)
+
+      storage.append_revision(
+        id: workflow_id,
+        parent_revision: 1,
+        definition: definition,
+        invalidated_node_ids: [],
+        event: contract_event(type: :mutation_applied, workflow_id: workflow_id)
+      )
+
+      assert_equal :pending, storage.load_node_states(workflow_id: workflow_id, revision: 2)[:a]
+      assert_equal [effect.id], storage.list_effects_for_node(workflow_id: workflow_id, revision: 2, node_id: :a).map(&:id)
+      assert_empty storage.list_attempts(workflow_id: workflow_id, revision: 2, node_id: :a)
+    end
+
+    def test_contract_waiting_effect_survives_consecutive_revision_appends
+      storage = build_contract_storage
+      definition = DAG::Workflow::Definition.new.add_node(:a, type: :passthrough)
+      workflow_id = contract_create_workflow(storage, definition: definition)
+      effect = contract_commit_waiting_effect(storage, workflow_id, :a)
+
+      [1, 2].each do |parent_revision|
+        storage.append_revision(
+          id: workflow_id,
+          parent_revision: parent_revision,
+          definition: definition,
+          invalidated_node_ids: [],
+          event: contract_event(type: :mutation_applied, workflow_id: workflow_id, revision: parent_revision + 1)
+        )
+      end
+
+      assert_equal [effect.id], storage.list_effects_for_node(workflow_id: workflow_id, revision: 3, node_id: :a).map(&:id)
+      mark_effect_success(storage, effect.id)
+      released = storage.release_nodes_satisfied_by_effect(effect_id: effect.id, now_ms: 1_200)
+      assert_equal [3], released.map { |entry| entry[:revision] }
+      assert_equal :pending, storage.load_node_states(workflow_id: workflow_id, revision: 3)[:a]
+    end
+
+    def test_contract_preserved_waiting_node_requires_all_blocking_effects
+      storage = build_contract_storage
+      definition = DAG::Workflow::Definition.new.add_node(:a, type: :passthrough)
+      workflow_id = contract_create_workflow(storage, definition: definition)
+      attempt_id = contract_begin_attempt(storage, workflow_id, :a)
+      effects = %w[first second].map do |key|
+        contract_prepared_effect(workflow_id: workflow_id, attempt_id: attempt_id, effect_key: key)
+      end
+      storage.commit_attempt(
+        attempt_id: attempt_id,
+        result: DAG::Waiting[reason: :effect_pending],
+        node_state: :waiting,
+        event: contract_event(type: :node_waiting, workflow_id: workflow_id, node_id: :a, attempt_id: attempt_id),
+        effects: effects
+      )
+      records = storage.list_effects_for_attempt(attempt_id: attempt_id)
+      first = records.find { |record| record.key == "first" }
+      second = records.find { |record| record.key == "second" }
+
+      mark_effect_success(storage, first.id)
+      storage.append_revision(
+        id: workflow_id,
+        parent_revision: 1,
+        definition: definition,
+        invalidated_node_ids: [],
+        event: contract_event(type: :mutation_applied, workflow_id: workflow_id)
+      )
+
+      assert_equal :waiting, storage.load_node_states(workflow_id: workflow_id, revision: 2)[:a]
+      assert_empty storage.release_nodes_satisfied_by_effect(effect_id: first.id, now_ms: 1_200)
+      mark_effect_success(storage, second.id)
+      released = storage.release_nodes_satisfied_by_effect(effect_id: second.id, now_ms: 1_300)
+      assert_equal [2], released.map { |entry| entry[:revision] }
+      assert_equal :pending, storage.load_node_states(workflow_id: workflow_id, revision: 2)[:a]
+    end
+
     def test_contract_release_ignores_detached_effects_for_waiting_gate
       storage = build_contract_storage
       workflow_id = contract_create_workflow(storage)

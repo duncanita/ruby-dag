@@ -66,7 +66,11 @@ module DAG
 
       # Atomically appends a definition revision, resets invalidated/new nodes
       # to :pending for the new revision, and appends the supplied durable
-      # event when present.
+      # event when present. Preserved :waiting nodes carry their active
+      # waiting-attempt effect links into the new revision without creating
+      # attempts or effects. If all blocking links are terminal, the new node
+      # state is :pending; later terminal completion releases only the current
+      # revision's waiting node.
       #
       # @param id [String]
       # @param parent_revision [Integer] expected current revision (CAS guard)
