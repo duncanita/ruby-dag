@@ -120,6 +120,9 @@ module DAG
 
         @storage = storage
         @handlers = normalize_handlers(handlers)
+        if @handlers.values.any? { |handler| handler.is_a?(CooperativeHandler) }
+          DAG::Validation.dependency!(storage, :renew_effect_lease, "storage")
+        end
         @clock = clock
         @owner_id = owner_id
         @lease_ms = lease_ms
@@ -253,11 +256,33 @@ module DAG
       end
 
       def dispatch_record(record)
-        outcome = handler_outcome_for(record)
+        handler = @handlers[record.type]
+        signal = lease_signal_for(record) if handler.is_a?(CooperativeHandler)
+        outcome = signal ? invoke_handler(record, handler, signal) : handler_outcome_for(record)
+        raise DAG::Effects::StaleLeaseError, "lease lost during cooperative handler" if signal&.lost?
+
         apply_handler_result(record, outcome.result, @clock.now_ms, outcome.error)
       rescue DAG::Effects::StaleLeaseError => stale
         emit_stale_lease_event(record, stale)
         DispatchOutcome.claimed_not_marked(error: stale_lease_error(record, stale))
+      end
+
+      def lease_signal_for(record)
+        lost = false
+        LeaseSignal.new(
+          renew: ->(until_ms) {
+            begin
+              raise DAG::Effects::StaleLeaseError, "lease already lost" if lost
+
+              @storage.renew_effect_lease(effect_id: record.id, owner_id: @owner_id,
+                until_ms: until_ms, now_ms: @clock.now_ms)
+            rescue DAG::Effects::StaleLeaseError
+              lost = true
+              raise
+            end
+          },
+          lost: -> { lost }
+        )
       end
 
       def emit_stale_lease_event(record, stale)
@@ -288,11 +313,14 @@ module DAG
         invoke_handler(record, handler)
       end
 
-      def invoke_handler(record, handler)
-        result = handler.call(record)
+      def invoke_handler(record, handler, signal = nil)
+        result = signal ? handler.call(record, signal) : handler.call(record)
         return HandlerOutcome[result: result, error: nil] if result.is_a?(DAG::Effects::HandlerResult)
 
         bad_return_outcome(record, result)
+      rescue DAG::Effects::StaleLeaseError => caught
+        raise if signal&.lost?
+        raised_handler_outcome(record, caught)
       rescue => caught
         raised_handler_outcome(record, caught)
       end

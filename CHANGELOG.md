@@ -4,6 +4,9 @@
 
 ### Added
 
+- Explicit cooperative effect-handler opt-in with a frozen lease signal for
+  renewal and loss observation; known stale handlers skip ledger completion
+  and emit the existing durable diagnostic.
 - `PlanResult#code` classifies rejected structural mutations with a stable
   five-code vocabulary while preserving readable reasons and legacy
   `PlanResult.invalid(reason)` calls.

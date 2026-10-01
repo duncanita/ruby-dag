@@ -346,6 +346,21 @@ recorded in `errors`, durably appended to the workflow event log as a
 `:effect_dispatch_stale_lease` event, and the tick continues with the
 remaining claimed records.
 
+Handlers that need cooperative lease-loss observation explicitly opt in by
+registering `DAG::Effects::CooperativeHandler.new(handler)`. The wrapped
+handler receives `(record, signal)`; existing handlers continue to receive
+only `record`. `signal.renew!(until_ms:)` uses the ledger's lease CAS with
+the dispatcher's owner and clock. A stale renewal raises
+`DAG::Effects::StaleLeaseError` and makes `signal.lost?` permanently true.
+The handler can stop before further external work. Whether it catches or
+propagates the exception, the dispatcher skips completion when the signal
+has observed loss and records the same `:stale_lease` report error and durable
+`:effect_dispatch_stale_lease` event used for stale completion. A successful
+renewal leaves `lost?` false. The signal cannot cancel external I/O already
+accepted by another system; handlers must choose safe checkpoints before
+subsequent operations. The storage lease CAS remains the final guard against
+a late mark.
+
 Handler exceptions and invalid handler return values become retriable effect
 failures with JSON-safe error payloads. Unknown effect types default to terminal
 failure with `code: :unknown_handler`; alternatively,
