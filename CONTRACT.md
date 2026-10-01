@@ -1034,7 +1034,16 @@ valid?
 new_definition
 invalidated_node_ids
 reason
+code
 ```
+
+For valid plans, `code` and `reason` are `nil`. Invalid plans keep a
+human-readable `reason` and expose one of these stable codes:
+`unknown_target`, `node_id_collision`, `would_create_cycle`,
+`unsupported_mutation`, or `invalid_replacement`. Callers should branch on
+`code`, not message text. `PlanResult.invalid(reason)` remains supported
+and produces `code: nil` for existing callers; new editor rejections always
+set a code. Unknown codes raise `ArgumentError`.
 
 For `:invalidate`, `invalidated_node_ids` is the target node plus all of its
 descendants. For `:replace_subtree`, the editor removes only the target's

@@ -22,28 +22,29 @@ module DAG
         "definition",
         message: "definition must be a DAG::Workflow::Definition"
       )
-      DAG::Validation.instance!(
-        mutation,
-        DAG::ProposedMutation,
-        "mutation",
-        message: "mutation must be a DAG::ProposedMutation"
-      )
+      unless mutation.is_a?(DAG::ProposedMutation)
+        return DAG::PlanResult.invalid("mutation must be a DAG::ProposedMutation", code: :unsupported_mutation)
+      end
 
       case mutation.kind
       when :invalidate then plan_invalidate(definition, mutation)
       when :replace_subtree then plan_replace_subtree(definition, mutation)
       else
-        DAG::PlanResult.invalid("unsupported mutation kind: #{mutation.kind.inspect}")
+        DAG::PlanResult.invalid("unsupported mutation kind: #{mutation.kind.inspect}", code: :unsupported_mutation)
       end
-    rescue DAG::CycleError, DAG::DuplicateNodeError, DAG::UnknownNodeError, ArgumentError => e
-      DAG::PlanResult.invalid(e.message)
+    rescue DAG::CycleError => e
+      DAG::PlanResult.invalid(e.message, code: :would_create_cycle)
+    rescue DAG::DuplicateNodeError => e
+      DAG::PlanResult.invalid(e.message, code: :node_id_collision)
+    rescue DAG::UnknownNodeError, ArgumentError => e
+      DAG::PlanResult.invalid(e.message, code: :invalid_replacement)
     end
 
     private
 
     def plan_invalidate(definition, mutation)
       target = mutation.target_node_id.to_sym
-      return DAG::PlanResult.invalid("unknown target node: #{target}") unless definition.has_node?(target)
+      return DAG::PlanResult.invalid("unknown target node: #{target}", code: :unknown_target) unless definition.has_node?(target)
 
       DAG::PlanResult.valid(
         new_definition: definition,
@@ -53,7 +54,7 @@ module DAG
 
     def plan_replace_subtree(definition, mutation)
       target = mutation.target_node_id.to_sym
-      return DAG::PlanResult.invalid("unknown target node: #{target}") unless definition.has_node?(target)
+      return DAG::PlanResult.invalid("unknown target node: #{target}", code: :unknown_target) unless definition.has_node?(target)
 
       replacement = mutation.replacement_graph
       removed = definition.exclusive_descendants_of(target, include_self: true)
@@ -61,7 +62,9 @@ module DAG
       kept_nodes = definition.nodes - removed
       replacement_nodes = replacement.graph.nodes
       conflicts = kept_nodes & replacement_nodes
-      raise ArgumentError, "replacement nodes collide with preserved nodes: #{sorted(conflicts).inspect}" unless conflicts.empty?
+      unless conflicts.empty?
+        return DAG::PlanResult.invalid("replacement nodes collide with preserved nodes: #{sorted(conflicts).inspect}", code: :node_id_collision)
+      end
 
       new_graph = build_replaced_graph(definition, target, removed, kept_nodes, replacement, replacement_nodes)
       step_types = build_step_types(definition, kept_nodes, replacement_nodes)
