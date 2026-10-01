@@ -18,6 +18,8 @@
 
 ### Fixed
 
+- Runner workflow-start and last-sequence checks use indexed storage queries,
+  avoiding full event-log copies as histories grow.
 - Preserved waiting nodes retain their blocking effect links across definition
   revisions, so terminal effects release the current revision and resumed
   workflows can continue after an unrelated mutation.
