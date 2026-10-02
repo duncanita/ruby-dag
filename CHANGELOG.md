@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.6.1 — 2026-10-02
+
 ### Fixed
 
 - Preserved waiting nodes retain their blocking effect links across definition
