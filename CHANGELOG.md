@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 1.6.1 — 2026-10-02
+## 1.6.1 — pending release
 
 ### Fixed
 
