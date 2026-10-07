@@ -19,6 +19,8 @@
   MutationService accept claims; storage rejects stale or unfenced writes
   after a workflow enters claimed mode.
 
+## 1.6.1 — pending release
+
 ### Fixed
 
 - Runner workflow-start and last-sequence checks use indexed storage queries,
