@@ -8,6 +8,8 @@
   MutationService accept claims; storage rejects stale or unfenced writes
   after a workflow enters claimed mode.
 
+## 1.6.1 — pending release
+
 ### Fixed
 
 - Preserved waiting nodes retain their blocking effect links across definition
