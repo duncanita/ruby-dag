@@ -15,6 +15,11 @@
   pending, and no attempts, effects, or leases are copied.
 - Effect records expose durable dispatch count, current claim start, and
   accumulated active dispatch time; JSON record loading defaults older rows.
+
+## 1.7.0 — pending release
+
+### Added
+
 - Opt-in workflow run claims with monotonic fencing tokens. Runner and
   MutationService accept claims; storage rejects stale or unfenced writes
   after a workflow enters claimed mode.
