@@ -9,7 +9,7 @@ class R0V18ReleaseGateTest < Minitest::Test
     assert_operator Gem::Version.new(DAG::VERSION), :>=, Gem::Version.new("1.8.0")
 
     changelog = normalized("CHANGELOG.md")
-    assert_includes changelog, "## 1.8.0 — pending release"
+    assert_includes changelog, "## 1.8.0 —"
     assert_includes changelog, "cooperative effect-handler opt-in"
     assert_includes changelog, "PlanResult#code"
     assert_includes changelog, "Atomic workflow fork"
