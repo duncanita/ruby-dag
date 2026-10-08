@@ -4,6 +4,9 @@
 
 ### Added
 
+- `PlanResult#code` classifies rejected structural mutations with a stable
+  five-code vocabulary while preserving readable reasons and legacy
+  `PlanResult.invalid(reason)` calls.
 - Atomic workflow fork from a selected definition revision. Committed results
   are inherited through explicit revision-1 projections; other nodes start
   pending, and no attempts, effects, or leases are copied.
