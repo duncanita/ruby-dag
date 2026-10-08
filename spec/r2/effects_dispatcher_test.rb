@@ -17,6 +17,98 @@ class EffectsDispatcherTest < Minitest::Test
     end
   end
 
+  class AdjustableClock
+    attr_accessor :now_ms
+
+    def initialize(now_ms) = @now_ms = now_ms
+  end
+
+  def test_cooperative_handler_observes_lease_loss_before_follow_up_work
+    storage = DAG::Adapters::Memory::Storage.new
+    effect = commit_waiting_effect(storage, node_id: :a, effect_type: "cooperative")
+    clock = AdjustableClock.new(1_000)
+    actions = []
+    winner = DAG::Effects::Dispatcher.new(storage: storage,
+      handlers: {"cooperative" => ->(_record) { DAG::Effects::HandlerResult.succeeded(result: {winner: true}) }},
+      clock: clock, owner_id: "owner-b", lease_ms: 500)
+    handler = DAG::Effects::CooperativeHandler.new(->(_record, signal) {
+      actions << :external_io_already_sent
+      clock.now_ms = 1_501
+      assert_equal [effect.id], winner.tick(limit: 1).succeeded.map(&:id)
+      assert_raises(DAG::Effects::StaleLeaseError) { signal.renew!(until_ms: 2_000) }
+      assert_raises(DAG::Effects::StaleLeaseError) { signal.renew!(until_ms: 2_500) }
+      actions << :lost if signal.lost?
+      actions << :follow_up_external_io unless signal.lost?
+      DAG::Effects::HandlerResult.succeeded(result: {winner: false})
+    })
+    loser = DAG::Effects::Dispatcher.new(storage: storage,
+      handlers: {"cooperative" => handler}, clock: clock,
+      owner_id: "owner-a", lease_ms: 500)
+
+    report = loser.tick(limit: 1)
+
+    assert_equal [:external_io_already_sent, :lost], actions
+    assert_empty report.succeeded
+    assert_empty report.failed
+    assert_equal effect.id, report.errors.first[:effect_id]
+    assert_equal :stale_lease, report.errors.first[:code]
+    record = storage.list_effects_for_attempt(attempt_id: effect.attempt_id).first
+    assert_equal :succeeded, record.status
+    assert_equal({winner: true}, record.result)
+    assert_equal 1, storage.read_events(workflow_id: effect.workflow_id)
+      .count { |event| event.type == :effect_dispatch_stale_lease }
+  end
+
+  def test_cooperative_renewal_does_not_signal_false_loss
+    storage = DAG::Adapters::Memory::Storage.new
+    effect = commit_waiting_effect(storage, node_id: :a, effect_type: "cooperative")
+    clock = AdjustableClock.new(1_000)
+    handler = DAG::Effects::CooperativeHandler.new(->(_record, signal) {
+      renewed = signal.renew!(until_ms: 2_000)
+      assert_equal 2_000, renewed.lease_until_ms
+      refute signal.lost?
+      clock.now_ms = 1_600
+      DAG::Effects::HandlerResult.succeeded(result: {ok: true})
+    })
+    dispatcher = DAG::Effects::Dispatcher.new(storage: storage,
+      handlers: {"cooperative" => handler}, clock: clock,
+      owner_id: "owner-a", lease_ms: 500)
+
+    report = dispatcher.tick(limit: 1)
+    assert_equal [effect.id], report.succeeded.map(&:id)
+    assert_empty report.errors
+  end
+
+  def test_propagated_lease_loss_skips_completion
+    storage = DAG::Adapters::Memory::Storage.new
+    effect = commit_waiting_effect(storage, node_id: :a, effect_type: "cooperative")
+    clock = AdjustableClock.new(1_000)
+    handler = DAG::Effects::CooperativeHandler.new(->(_record, signal) {
+      clock.now_ms = 1_501
+      signal.renew!(until_ms: 2_000)
+    })
+    dispatcher = DAG::Effects::Dispatcher.new(storage: storage,
+      handlers: {"cooperative" => handler}, clock: clock,
+      owner_id: "owner-a", lease_ms: 500)
+
+    report = dispatcher.tick(limit: 1)
+    assert_equal :stale_lease, report.errors.first[:code]
+    assert_empty report.succeeded
+    assert_empty report.failed
+    assert_equal :dispatching, storage.list_effects_for_attempt(attempt_id: effect.attempt_id).first.status
+  end
+
+  def test_legacy_handler_stale_lease_exception_remains_retriable_failure
+    storage = DAG::Adapters::Memory::Storage.new
+    effect = commit_waiting_effect(storage, node_id: :a, effect_type: "legacy")
+    dispatcher = build_dispatcher(storage,
+      handlers: {"legacy" => ->(_record) { raise DAG::Effects::StaleLeaseError, "handler error" }})
+
+    report = dispatcher.tick(limit: 1)
+    assert_equal :handler_raised, report.errors.first[:code]
+    assert_equal :failed_retriable, storage.list_effects_for_attempt(attempt_id: effect.attempt_id).first.status
+  end
+
   def test_tick_claims_at_most_limit_and_marks_success
     storage = DAG::Adapters::Memory::Storage.new
     first = commit_waiting_effect(storage, node_id: :a, effect_key: "first", effect_type: "success")
