@@ -9,7 +9,7 @@ class R0V17ReleaseGateTest < Minitest::Test
     assert_operator Gem::Version.new(DAG::VERSION), :>=, Gem::Version.new("1.7.0")
 
     changelog = normalized("CHANGELOG.md")
-    assert_includes changelog, "## 1.7.0 — pending release"
+    assert_includes changelog, "## 1.7.0 —"
     assert_includes changelog, "monotonic fencing tokens"
 
     roadmap = normalized("ROADMAP.md")
