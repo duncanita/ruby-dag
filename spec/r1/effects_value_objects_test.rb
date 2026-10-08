@@ -150,10 +150,13 @@ class EffectsValueObjectsTest < Minitest::Test
       error
       external_ref
       not_before_ms
+      dispatch_count
+      active_dispatch_ms
       metadata
     ], snapshot.keys
     assert_equal :succeeded, snapshot[:status]
     assert_equal({ok: true}, snapshot[:result])
+    refute snapshot.key?(:claimed_at_ms)
   end
 
   def test_record_with_recomputes_ref_when_identity_changes
@@ -162,6 +165,31 @@ class EffectsValueObjectsTest < Minitest::Test
     rebuilt = record.with(type: "other")
 
     assert_equal "other:k", rebuilt.ref
+  end
+
+  def test_record_dispatch_history_defaults_and_rejects_negative_counters
+    record = effect_record
+
+    assert_equal 0, record.dispatch_count
+    assert_nil record.claimed_at_ms
+    assert_equal 0, record.active_dispatch_ms
+    assert_raises(ArgumentError) { record.with(dispatch_count: -1) }
+    assert_raises(ArgumentError) { record.with(active_dispatch_ms: -1) }
+  end
+
+  def test_record_dispatch_history_json_round_trip_and_old_snapshot_defaults
+    record = effect_record.with(status: :dispatching, lease_owner: "worker",
+      lease_until_ms: 200, dispatch_count: 2, claimed_at_ms: 125,
+      active_dispatch_ms: 50)
+    restored = DAG::Effects::Record.from_h(JSON.parse(JSON.generate(record.to_h)))
+    assert_equal JSON.parse(JSON.generate(record.to_h)), JSON.parse(JSON.generate(restored.to_h))
+    assert restored.frozen?
+
+    old = record.to_h.except(:dispatch_count, :claimed_at_ms, :active_dispatch_ms)
+    migrated = DAG::Effects::Record.from_h(JSON.parse(JSON.generate(old)))
+    assert_equal 0, migrated.dispatch_count
+    assert_nil migrated.claimed_at_ms
+    assert_equal 0, migrated.active_dispatch_ms
   end
 
   def test_record_can_be_built_from_prepared_intent

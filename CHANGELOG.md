@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+
+- Effect records expose durable dispatch count, current claim start, and
+  accumulated active dispatch time; JSON record loading defaults older rows.
+
 ## 1.7.0 — pending release
 
 ### Added
