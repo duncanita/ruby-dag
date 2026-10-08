@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.8.0 — pending release
+
 ### Added
 
 - Explicit cooperative effect-handler opt-in with a frozen lease signal for

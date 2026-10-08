@@ -2,5 +2,5 @@
 
 module DAG
   # Library version. Bumped per release; see `CHANGELOG.md`.
-  VERSION = "1.7.0"
+  VERSION = "1.8.0"
 end
