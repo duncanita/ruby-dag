@@ -54,6 +54,8 @@ Tracked phases:
 | Release v1.6                   | #192 | Done |
 | Waiting revision fix           | #204 | In Progress (#227) |
 | Release v1.6.1                 | #220 | Pending |
+| Workflow run claims            | #221 | In Progress (#228) |
+| Release v1.7.0                 | #220 | Pending |
 | S0 (SQLite adapter, in Delphi)   | TBD  | Next |
 | Release v1.0                     | #74  | Done (#126, #156) |
 
