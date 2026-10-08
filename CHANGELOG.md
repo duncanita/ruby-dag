@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- Opt-in workflow run claims with monotonic fencing tokens. Runner and
+  MutationService accept claims; storage rejects stale or unfenced writes
+  after a workflow enters claimed mode.
+
 ## 1.6.1 — pending release
 
 ### Fixed

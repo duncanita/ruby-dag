@@ -278,7 +278,7 @@ module DAG
             message: stale.message
           }
         ]
-        @storage.append_event(workflow_id: record.workflow_id, event: event)
+        @storage.append_effect_stale_lease_event(effect_id: record.id, event: event)
       end
 
       def handler_outcome_for(record)
@@ -404,7 +404,7 @@ module DAG
           claim_ready_effects
           complete_effect_succeeded
           complete_effect_failed
-          append_event
+          append_effect_stale_lease_event
         ].each do |method_name|
           DAG::Validation.dependency!(value, method_name, "storage")
         end

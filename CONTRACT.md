@@ -614,10 +614,14 @@ requiring `dag/testing/storage_contract`, including
 implementing:
 
 ```ruby
-def build_contract_storage
-  MyAdapter::Storage.new
+def build_contract_storage(clock: nil)
+  MyAdapter::Storage.new(clock: clock)
 end
 ```
+
+The suite supplies a controllable clock to claim tests. Durable adapters may
+map that fixture to a test database clock while production claim operations
+continue to read authoritative time inside their transactions.
 
 The shared suite is behavior-oriented: failures describe the public storage
 contract instead of depending on `DAG::Adapters::Memory::Storage` internals. It
@@ -636,6 +640,7 @@ covers these groups:
 - **G11** immutable/fresh returned values.
 - **G12** standard receipt and error/failure vocabulary.
 - **G13** no consumer-specific semantics in the storage contract.
+- **G14** workflow run claim expiry, takeover, fenced writes, and two-runner recovery.
 
 `DAG::Adapters::Memory::Storage` runs the suite in this repository. Consumer or
 production adapters can reuse the same module to prove conformance without
@@ -903,14 +908,52 @@ Storage must persist the supplied `attempt_number`; it must not recalculate it.
 `commit_attempt` is one-shot: adapters must reject a second commit for the same
 attempt after it has left `:running`.
 
-Single-runner invariant: resuming a workflow whose row is already
-`:running` (crash recovery) performs no storage transition, so storage
-provides no mutual exclusion on that path — two hosts resuming the same
-workflow would both abort in-flight attempts and both execute nodes.
-Deployments must guarantee at most one runner drives a given workflow at a
-time. A workflow-level owner/lease claim (mirroring the effect-lease
-model) is a planned extension that must be designed before multi-host
-consumers resume concurrently.
+### Workflow run claims
+
+Legacy workflows remain single-runner until their first run claim. A caller
+that needs concurrent crash recovery claims a workflow before calling
+`Runner#call`, `#resume`, or `#retry_workflow`:
+
+```ruby
+claim = storage.claim_workflow_run(id: workflow_id, owner_id: owner_id, lease_ms: 30_000)
+runner.resume(workflow_id, claim: claim)
+storage.renew_workflow_run(claim: claim, until_ms: new_deadline_ms)
+storage.release_workflow_run(claim: claim)
+```
+
+`DAG::WorkflowRunClaim` is immutable and contains `workflow_id`, `owner_id`,
+`fencing_token`, and `lease_until_ms`. Claiming a workflow with a live claim
+raises `DAG::StaleRunClaimError`, including when the same owner tries to claim
+again. After expiry or release, the next claim receives a strictly higher
+token. Renewal requires the current, unexpired token, a deadline after the
+adapter's current time, and a deadline no shorter than the stored deadline.
+Release requires the same live token. Expiry and release never revert the
+workflow to legacy mode.
+
+The storage adapter reads authoritative time inside each atomic claim, renew,
+release, or fenced write. Durable adapters must use their transaction's clock
+for this comparison; `Memory::Storage` accepts an optional injected `clock:`
+for deterministic tests. A caller-supplied timestamp cannot extend a stale
+claim. The adapter checks token, owner, and lease before any mutation, even
+when `Runner#resume` sees an already `:running` row. Missing, expired, or
+superseded claims raise the same `StaleRunClaimError` without a partial row,
+attempt, effect reservation, or event write.
+
+Fenced writes are `transition_workflow_state`, `transition_node_state`,
+`begin_attempt`, `commit_attempt`, `abort_running_attempts`,
+`prepare_workflow_retry`, `append_revision`,
+`append_revision_if_workflow_state`, and runner event `append_event`. Each has
+an optional `claim:` keyword. `MutationService#apply` also accepts `claim:`.
+The Runner omits the keyword for unclaimed legacy workflows, preserving
+existing adapters. Once claim mode begins, all these writes require a claim.
+Effect claim, mark, completion, and release use their independent effect
+leases. The dispatcher appends `:effect_dispatch_stale_lease` through the
+separate `append_effect_stale_lease_event(effect_id:, event:)` ledger method,
+which validates the effect and event coordinates without a workflow run
+claim. The default composes `append_event` for legacy adapters; durable
+adapters with workflow claims override it atomically. A run claim does not renew itself
+while step code is executing; the host must renew it if a step may exceed the
+lease duration.
 
 ## Proposed Mutations
 

@@ -23,7 +23,8 @@ module DAG::Testing::StorageContract
     G10: "durable event ordering and filtering",
     G11: "immutable/fresh returned values",
     G12: "standard receipt and error/failure vocabulary",
-    G13: "no consumer-specific semantics in storage contract"
+    G13: "no consumer-specific semantics in storage contract",
+    G14: "workflow run claims and fenced writes"
   }.freeze
 
   module Helpers
@@ -131,6 +132,7 @@ require_relative "storage_contract/retry"
 require_relative "storage_contract/receipts"
 require_relative "storage_contract/error_vocabulary"
 require_relative "storage_contract/consumer_boundary"
+require_relative "storage_contract/workflow_run_claims"
 
 module DAG::Testing::StorageContract
   module All
@@ -143,5 +145,6 @@ module DAG::Testing::StorageContract
     include Receipts
     include ErrorVocabulary
     include ConsumerBoundary
+    include WorkflowRunClaims
   end
 end

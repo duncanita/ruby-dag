@@ -15,8 +15,24 @@ module DAG
 
         # @param initial_state [Hash, nil] internal storage state, for
         #   testing/recovery only
-        def initialize(initial_state: nil)
+        def initialize(initial_state: nil, clock: nil)
           @state = initial_state || StorageState.fresh_state
+          @clock = clock || DAG::Adapters::Stdlib::Clock.new
+        end
+
+        # (see Ports::Storage#claim_workflow_run)
+        def claim_workflow_run(id:, owner_id:, lease_ms:)
+          frozen StorageState.claim_workflow_run(@state, id: id, owner_id: owner_id, lease_ms: lease_ms, now_ms: @clock.now_ms)
+        end
+
+        # (see Ports::Storage#renew_workflow_run)
+        def renew_workflow_run(claim:, until_ms:)
+          frozen StorageState.renew_workflow_run(@state, claim: claim, until_ms: until_ms, now_ms: @clock.now_ms)
+        end
+
+        # (see Ports::Storage#release_workflow_run)
+        def release_workflow_run(claim:)
+          frozen StorageState.release_workflow_run(@state, claim: claim, now_ms: @clock.now_ms)
         end
 
         # (see Ports::Storage#create_workflow)
@@ -30,17 +46,17 @@ module DAG
         end
 
         # (see Ports::Storage#transition_workflow_state)
-        def transition_workflow_state(id:, from:, to:, event: nil)
-          frozen StorageState.transition_workflow_state(@state, id: id, from: from, to: to, event: event)
+        def transition_workflow_state(id:, from:, to:, event: nil, claim: nil)
+          frozen StorageState.transition_workflow_state(@state, id: id, from: from, to: to, event: event, claim: claim, now_ms: @clock.now_ms)
         end
 
         # (see Ports::Storage#append_revision)
-        def append_revision(id:, parent_revision:, definition:, invalidated_node_ids:, event:)
-          frozen StorageState.append_revision(@state, id: id, parent_revision: parent_revision, definition: definition, invalidated_node_ids: invalidated_node_ids, event: event)
+        def append_revision(id:, parent_revision:, definition:, invalidated_node_ids:, event:, claim: nil)
+          frozen StorageState.append_revision(@state, id: id, parent_revision: parent_revision, definition: definition, invalidated_node_ids: invalidated_node_ids, event: event, claim: claim, now_ms: @clock.now_ms)
         end
 
         # (see Ports::Storage#append_revision_if_workflow_state)
-        def append_revision_if_workflow_state(id:, allowed_states:, parent_revision:, definition:, invalidated_node_ids:, event:)
+        def append_revision_if_workflow_state(id:, allowed_states:, parent_revision:, definition:, invalidated_node_ids:, event:, claim: nil)
           frozen StorageState.append_revision_if_workflow_state(
             @state,
             id: id,
@@ -48,7 +64,9 @@ module DAG
             parent_revision: parent_revision,
             definition: definition,
             invalidated_node_ids: invalidated_node_ids,
-            event: event
+            event: event,
+            claim: claim,
+            now_ms: @clock.now_ms
           )
         end
 
@@ -68,31 +86,35 @@ module DAG
         end
 
         # (see Ports::Storage#transition_node_state)
-        def transition_node_state(workflow_id:, revision:, node_id:, from:, to:)
-          frozen StorageState.transition_node_state(@state, workflow_id: workflow_id, revision: revision, node_id: node_id, from: from, to: to)
+        def transition_node_state(workflow_id:, revision:, node_id:, from:, to:, claim: nil)
+          frozen StorageState.transition_node_state(@state, workflow_id: workflow_id, revision: revision, node_id: node_id, from: from, to: to, claim: claim, now_ms: @clock.now_ms)
         end
 
         # (see Ports::Storage#begin_attempt)
-        def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:)
+        def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:, claim: nil)
           frozen StorageState.begin_attempt(
             @state,
             workflow_id: workflow_id,
             revision: revision,
             node_id: node_id,
             expected_node_state: expected_node_state,
-            attempt_number: attempt_number
+            attempt_number: attempt_number,
+            claim: claim,
+            now_ms: @clock.now_ms
           )
         end
 
         # (see Ports::Storage#commit_attempt)
-        def commit_attempt(attempt_id:, result:, node_state:, event:, effects: [])
+        def commit_attempt(attempt_id:, result:, node_state:, event:, effects: [], claim: nil)
           frozen StorageState.commit_attempt(
             @state,
             attempt_id: attempt_id,
             result: result,
             node_state: node_state,
             event: event,
-            effects: effects
+            effects: effects,
+            claim: claim,
+            now_ms: @clock.now_ms
           )
         end
 
@@ -185,8 +207,8 @@ module DAG
         end
 
         # (see Ports::Storage#abort_running_attempts)
-        def abort_running_attempts(workflow_id:)
-          frozen StorageState.abort_running_attempts(@state, workflow_id: workflow_id)
+        def abort_running_attempts(workflow_id:, claim: nil)
+          frozen StorageState.abort_running_attempts(@state, workflow_id: workflow_id, claim: claim, now_ms: @clock.now_ms)
         end
 
         # (see Ports::Storage#list_attempts)
@@ -210,8 +232,13 @@ module DAG
         end
 
         # (see Ports::Storage#append_event)
-        def append_event(workflow_id:, event:)
-          frozen StorageState.append_event(@state, workflow_id: workflow_id, event: event)
+        def append_event(workflow_id:, event:, claim: nil)
+          frozen StorageState.append_event(@state, workflow_id: workflow_id, event: event, claim: claim, now_ms: @clock.now_ms)
+        end
+
+        # (see Ports::EffectLedger#append_effect_stale_lease_event)
+        def append_effect_stale_lease_event(effect_id:, event:)
+          frozen StorageState.append_effect_stale_lease_event(@state, effect_id: effect_id, event: event)
         end
 
         # (see Ports::Storage#read_events)
@@ -220,8 +247,8 @@ module DAG
         end
 
         # (see Ports::Storage#prepare_workflow_retry)
-        def prepare_workflow_retry(id:, from: :failed, to: :pending, event: nil)
-          frozen StorageState.prepare_workflow_retry(@state, id: id, from: from, to: to, event: event)
+        def prepare_workflow_retry(id:, from: :failed, to: :pending, event: nil, claim: nil)
+          frozen StorageState.prepare_workflow_retry(@state, id: id, from: from, to: to, event: event, claim: claim, now_ms: @clock.now_ms)
         end
 
         private

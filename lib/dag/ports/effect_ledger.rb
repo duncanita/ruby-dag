@@ -5,8 +5,8 @@ module DAG
     # Durable abstract effect ledger port. Split out of `Ports::Storage`
     # so the two disjoint consumers stay honest: the Runner never touches
     # the ledger beyond `commit_attempt(effects:)` and the listing reads,
-    # and `DAG::Effects::Dispatcher` needs only this module's surface plus
-    # `append_event`. Adapters that persist effects include this module
+    # and `DAG::Effects::Dispatcher` needs only this module's surface.
+    # Adapters that persist effects include this module
     # (directly or via `Ports::Storage`, which includes it).
     #
     # Adapters implement the primitives (`claim_ready_effects`,
@@ -19,6 +19,15 @@ module DAG
     #
     # @api public
     module EffectLedger
+      # Append the dispatcher's stale-lease diagnostic for an effect. This
+      # event belongs to the effect ledger, not to a workflow runner claim.
+      # The default composes `append_event`; durable adapters that fence
+      # runner event writes must override it with a validated atomic append.
+      # @return [DAG::Event] stamped event
+      def append_effect_stale_lease_event(effect_id:, event:)
+        append_event(workflow_id: event&.workflow_id, event: event)
+      end
+
       # Whether the adapter may be driven by `Dispatcher` worker threads
       # (`parallelism > 1`). Defaults to `false`; single-process adapters
       # such as `Memory::Storage` must keep it `false`.

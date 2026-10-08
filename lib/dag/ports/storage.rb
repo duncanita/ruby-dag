@@ -15,17 +15,37 @@ module DAG
     # persisting them so caller-owned buffers cannot mutate storage-owned
     # identity fields after the call returns.
     #
-    # Single-runner invariant: `Runner#resume` of a workflow whose row is
-    # already `:running` (crash recovery) performs no storage transition, so
-    # storage provides no mutual exclusion on that path — two hosts resuming
-    # the same workflow would both proceed. Deployments must ensure at most
-    # one runner drives a given workflow at a time; a workflow-level
-    # owner/lease claim is a planned extension and must be designed before
-    # multi-host consumers resume concurrently.
+    # A workflow remains in legacy single-runner mode until its first run
+    # claim. After that, mutating runner and revision writes require a live
+    # claim. Adapters validate the stored fencing token and their own clock
+    # before every write, including crash recovery of a :running row.
+    # Effect dispatch retains its independent effect lease.
     #
     # @api public
     module Storage
       include EffectLedger
+
+      # Claim a workflow for exclusive runner writes. The adapter reads its
+      # authoritative clock within the claim transaction; a live claim cannot
+      # be replaced even by the same owner. Reclaim after expiry increments
+      # the fencing token. The first claim permanently enables claim mode for
+      # this workflow, so later legacy writes without a claim fail.
+      # @return [DAG::WorkflowRunClaim]
+      def claim_workflow_run(id:, owner_id:, lease_ms:)
+        raise PortNotImplementedError
+      end
+
+      # Extend a live claim without shrinking its deadline.
+      # @return [DAG::WorkflowRunClaim]
+      def renew_workflow_run(claim:, until_ms:)
+        raise PortNotImplementedError
+      end
+
+      # Release a live claim. Claim mode and fencing sequence remain durable.
+      # @return [true]
+      def release_workflow_run(claim:)
+        raise PortNotImplementedError
+      end
 
       # Persist a fresh workflow in `:pending` with the supplied initial
       # definition (revision 1) and runtime profile.
@@ -60,7 +80,7 @@ module DAG
       # @param event [DAG::Event, nil] optional event to append in the same atomic step
       # @return [Hash] {id:, state:, event: stamped_event_or_nil}
       # @raise [DAG::StaleStateError] when the workflow is not in `from`
-      def transition_workflow_state(id:, from:, to:, event: nil)
+      def transition_workflow_state(id:, from:, to:, event: nil, claim: nil)
         raise PortNotImplementedError
       end
 
@@ -80,7 +100,7 @@ module DAG
       # @param event [DAG::Event, nil] optional `mutation_applied` event
       # @return [Hash] {id:, revision:, event: stamped_event_or_nil}
       # @raise [DAG::StaleRevisionError] when `parent_revision` no longer matches
-      def append_revision(id:, parent_revision:, definition:, invalidated_node_ids:, event:)
+      def append_revision(id:, parent_revision:, definition:, invalidated_node_ids:, event:, claim: nil)
         raise PortNotImplementedError
       end
 
@@ -98,7 +118,7 @@ module DAG
       # @raise [DAG::ConcurrentMutationError] when current state is :running
       # @raise [DAG::StaleStateError] when current state is not allowed
       # @raise [DAG::StaleRevisionError] when `parent_revision` no longer matches
-      def append_revision_if_workflow_state(id:, allowed_states:, parent_revision:, definition:, invalidated_node_ids:, event:)
+      def append_revision_if_workflow_state(id:, allowed_states:, parent_revision:, definition:, invalidated_node_ids:, event:, claim: nil)
         raise PortNotImplementedError
       end
 
@@ -137,7 +157,7 @@ module DAG
       # @param to [Symbol] target state
       # @return [Hash] {workflow_id:, revision:, node_id:, state:}
       # @raise [DAG::StaleStateError] when the node is not in `from`
-      def transition_node_state(workflow_id:, revision:, node_id:, from:, to:)
+      def transition_node_state(workflow_id:, revision:, node_id:, from:, to:, claim: nil)
         raise PortNotImplementedError
       end
 
@@ -151,7 +171,7 @@ module DAG
       # @param attempt_number [Integer] supplied by the Runner
       # @return [String] attempt id
       # @raise [DAG::StaleStateError] when the node row no longer matches
-      def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:)
+      def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:, claim: nil)
         raise PortNotImplementedError
       end
 
@@ -166,7 +186,7 @@ module DAG
       # @param effects [Array<DAG::Effects::PreparedIntent>] prepared effect intents to reserve/link
       # @return [DAG::Event] stamped event
       # @raise [DAG::UnknownAttemptError] when `attempt_id` is unknown
-      def commit_attempt(attempt_id:, result:, node_state:, event:, effects: [])
+      def commit_attempt(attempt_id:, result:, node_state:, event:, effects: [], claim: nil)
         raise PortNotImplementedError
       end
 
@@ -176,7 +196,7 @@ module DAG
       #
       # @param workflow_id [String]
       # @return [Array<String>] aborted attempt ids
-      def abort_running_attempts(workflow_id:)
+      def abort_running_attempts(workflow_id:, claim: nil)
         raise PortNotImplementedError
       end
 
@@ -247,7 +267,7 @@ module DAG
       # @param workflow_id [String]
       # @param event [DAG::Event] event without a `seq`
       # @return [DAG::Event] event with a monotonic `seq` assigned
-      def append_event(workflow_id:, event:)
+      def append_event(workflow_id:, event:, claim: nil)
         raise PortNotImplementedError
       end
 
@@ -281,7 +301,7 @@ module DAG
       # @raise [DAG::StaleStateError] when current state is not `from`
       # @raise [DAG::WorkflowRetryExhaustedError] when the retry budget is spent
       # @return [Hash] {id:, state:, reset:, workflow_retry_count:, event: stamped_event_or_nil}
-      def prepare_workflow_retry(id:, from: :failed, to: :pending, event: nil)
+      def prepare_workflow_retry(id:, from: :failed, to: :pending, event: nil, claim: nil)
         raise PortNotImplementedError
       end
     end
