@@ -16,6 +16,11 @@
 - Effect records expose durable dispatch count, current claim start, and
   accumulated active dispatch time; JSON record loading defaults older rows.
 
+### Fixed
+
+- Runner workflow-start and last-sequence checks use indexed storage queries,
+  avoiding full event-log copies as histories grow.
+
 ## 1.7.0 — pending release
 
 ### Added
@@ -28,8 +33,6 @@
 
 ### Fixed
 
-- Runner workflow-start and last-sequence checks use indexed storage queries,
-  avoiding full event-log copies as histories grow.
 - Preserved waiting nodes retain their blocking effect links across definition
   revisions, so terminal effects release the current revision and resumed
   workflows can continue after an unrelated mutation.
