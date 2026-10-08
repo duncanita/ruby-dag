@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.7.0 — pending release
+
 ### Added
 
 - Opt-in workflow run claims with monotonic fencing tokens. Runner and
