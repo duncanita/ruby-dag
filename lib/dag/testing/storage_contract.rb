@@ -26,7 +26,8 @@ module DAG::Testing::StorageContract
     G13: "no consumer-specific semantics in storage contract",
     G14: "workflow run claims and fenced writes",
     G15: "durable effect dispatch history",
-    G16: "atomic workflow fork with committed projections"
+    G16: "atomic workflow fork with committed projections",
+    G17: "constant-work event-log presence and last-sequence queries"
   }.freeze
 
   module Helpers

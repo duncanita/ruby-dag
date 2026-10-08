@@ -496,6 +496,10 @@ shape documented in `DAG::Ports::Storage`:
   `{workflow_id:, revision:, node_id:, attempt_id:, released_at_ms:}`.
 - `abort_running_attempts` -> aborted attempt ids.
 - `append_event` -> stamped `DAG::Event` with monotonic `seq`.
+- `event_type_seen?` -> Boolean existence query for a workflow event type,
+  without loading historical event payloads.
+- `last_event_seq` -> latest durable event sequence or `nil` for an empty log,
+  without loading historical event payloads.
 - `prepare_workflow_retry` ->
   `{id:, state:, reset:, workflow_retry_count:, event:}`.
 
@@ -690,6 +694,7 @@ covers these groups:
 - **G14** workflow run claim expiry, takeover, fenced writes, and two-runner recovery.
 - **G15** durable effect dispatch history and snapshot migration.
 - **G16** atomic workflow fork with committed result projections.
+- **G17** event-type presence and latest sequence without log materialization.
 
 `DAG::Adapters::Memory::Storage` runs the suite in this repository. Consumer or
 production adapters can reuse the same module to prove conformance without
