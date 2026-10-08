@@ -219,6 +219,50 @@ module DAG
           {id: id, current_revision: revision}
         end
 
+        # Stage a source-revision snapshot before writing the target. This
+        # keeps validation and projection lookup on one side of the boundary.
+        # @api private
+        def fork_workflow(state, source_id:, source_revision:, new_id:, inherit: :committed)
+          DAG::Validation.revision!(source_revision)
+          DAG::Validation.member!(inherit, [:committed, :none], "inherit")
+          source = fetch_workflow!(state, source_id)
+          raise DuplicateWorkflowError, "workflow #{new_id} already exists" if state[:workflows].key?(new_id)
+
+          definition = state[:definitions].fetch([source_id, source_revision]) do
+            raise StaleRevisionError, "no definition for #{source_id} revision #{source_revision}"
+          end
+          node_states = fetch_node_states!(state, source_id, source_revision)
+          projections = fork_result_projections(state, source_id, source_revision, definition, node_states, inherit)
+          target_definition = definition.with_revision(1)
+          origin = {workflow_id: DAG.frozen_copy(source_id), revision: source_revision}
+          create_workflow(state, id: new_id, initial_definition: target_definition,
+            initial_context: source[:initial_context], runtime_profile: source[:runtime_profile])
+          target_states = state[:node_states].fetch([new_id, 1])
+          ensure_committed_result_projection_state!(state)
+          projections.each do |node_id, result|
+            target_states[node_id] = :committed
+            state[:committed_result_projections][[new_id, 1, node_id]] = result
+          end
+          state[:workflows].fetch(new_id)[:forked_from] = DAG.frozen_copy(origin)
+          {id: new_id, revision: 1, forked_from: origin, inherited_node_ids: projections.keys}
+        end
+
+        # Collect canonical results in topological order, discarding a
+        # committed node when its source predecessors cannot be inherited.
+        # @api private
+        def fork_result_projections(state, source_id, source_revision, definition, node_states, inherit)
+          return {} if inherit == :none
+
+          definition.topological_order.each_with_object({}) do |node_id, projections|
+            next unless node_states[node_id] == :committed
+            next unless definition.predecessors(node_id).all? { |predecessor| projections.key?(predecessor) }
+
+            result = canonical_committed_result_for_node(state, source_id, source_revision, node_id)
+            raise StaleStateError, "committed node #{node_id} has no result" unless result.is_a?(DAG::Success)
+            projections[node_id] = result
+          end
+        end
+
         # Implements `Ports::Storage#load_workflow`.
         # @api private
         def load_workflow(state, id:)

@@ -60,6 +60,23 @@ module DAG
         raise PortNotImplementedError
       end
 
+      # Atomically create a new revision-1 workflow from one source revision.
+      # With `inherit: :committed`, copy only committed results whose
+      # predecessors are also inherited. Other nodes start :pending. No
+      # attempts, effects, leases, or event history are copied. The target
+      # records its source coordinate as `forked_from`.
+      #
+      # @param source_id [String] existing workflow
+      # @param source_revision [Integer] existing source revision
+      # @param new_id [String] unused workflow id
+      # @param inherit [Symbol] :committed or :none
+      # @return [Hash] {id:, revision: 1, forked_from:, inherited_node_ids:}
+      # @raise [DAG::StaleRevisionError] when source revision is absent
+      # @raise [DAG::DuplicateWorkflowError] when new_id already exists
+      def fork_workflow(source_id:, source_revision:, new_id:, inherit: :committed)
+        raise PortNotImplementedError
+      end
+
       # Load the workflow row keyed by `id`.
       #
       # @param id [String]

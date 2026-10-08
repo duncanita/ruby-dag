@@ -21,6 +21,15 @@ module DAG
           @crashed = false
         end
 
+        # (see Ports::Storage#fork_workflow)
+        def fork_workflow(source_id:, source_revision:, new_id:, inherit: :committed)
+          context = {workflow_id: source_id, revision: source_revision}
+          crash_if!(:before, :fork_workflow, context)
+          receipt = super
+          crash_if!(:after, :fork_workflow, context)
+          receipt
+        end
+
         # (see Ports::Storage#begin_attempt)
         def begin_attempt(workflow_id:, revision:, node_id:, expected_node_state:, attempt_number:, claim: nil)
           context = {

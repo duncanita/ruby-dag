@@ -40,6 +40,12 @@ module DAG
           frozen StorageState.create_workflow(@state, id: id, initial_definition: initial_definition, initial_context: initial_context, runtime_profile: runtime_profile)
         end
 
+        # (see Ports::Storage#fork_workflow)
+        def fork_workflow(source_id:, source_revision:, new_id:, inherit: :committed)
+          frozen StorageState.fork_workflow(@state, source_id: source_id, source_revision: source_revision,
+            new_id: new_id, inherit: inherit)
+        end
+
         # (see Ports::Storage#load_workflow)
         def load_workflow(id:)
           frozen StorageState.load_workflow(@state, id: id)

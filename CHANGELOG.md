@@ -4,6 +4,9 @@
 
 ### Added
 
+- Atomic workflow fork from a selected definition revision. Committed results
+  are inherited through explicit revision-1 projections; other nodes start
+  pending, and no attempts, effects, or leases are copied.
 - Effect records expose durable dispatch count, current claim start, and
   accumulated active dispatch time; JSON record loading defaults older rows.
 

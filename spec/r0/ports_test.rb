@@ -5,6 +5,7 @@ require_relative "../test_helper"
 class R0PortsTest < Minitest::Test
   STORAGE_OWN_METHODS = {
     create_workflow: {id: "x", initial_definition: nil, initial_context: {}, runtime_profile: nil},
+    fork_workflow: {source_id: "x", source_revision: 1, new_id: "y"},
     load_workflow: {id: "x"},
     claim_workflow_run: {id: "x", owner_id: "worker", lease_ms: 100},
     renew_workflow_run: {claim: nil, until_ms: 100},
